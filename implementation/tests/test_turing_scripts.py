@@ -20,7 +20,7 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("${HF_CACHE_DIR:?HF_CACHE_DIR is required}", text)
         self.assertIn("#SBATCH -p u22", text)
         self.assertIn("#SBATCH --gres=gpu:1", text)
-        self.assertIn("#SBATCH --time=00:20:00", text)
+        self.assertIn("#SBATCH --time=01:00:00", text)
         self.assertIn('export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}src"', text)
         self.assertIn("nvidia-smi --query-gpu", text)
         self.assertIn("generate-pipeline", text)

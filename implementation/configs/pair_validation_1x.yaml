@@ -7,14 +7,14 @@ output_dir: runs/qwen35-pair-validation-1x-r2
 allow_missing_slurm_account_for_local: true
 
 generation:
-  max_new_tokens: 32
+  max_new_tokens: 2048
   temperature: 1.0
   top_p: 0.95
   top_k: 20
   presence_penalty: 1.5
 
 teacher_generation:
-  max_new_tokens: 256
+  max_new_tokens: 4096
   temperature: 1.0
   top_p: 0.95
   top_k: 20

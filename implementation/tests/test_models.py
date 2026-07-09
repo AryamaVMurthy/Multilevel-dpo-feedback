@@ -20,7 +20,14 @@ class FakeEncoded(dict):
 
 
 class FakeTokenizer:
+    def __init__(self):
+        self.chat_template_calls = []
+
     def __call__(self, _prompt, return_tensors):
+        return FakeEncoded({"input_ids": FakeTensor()})
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.chat_template_calls.append((messages, kwargs))
         return FakeEncoded({"input_ids": FakeTensor()})
 
     def decode(self, _tokens, skip_special_tokens):
@@ -92,6 +99,24 @@ class ModelProviderTest(unittest.TestCase):
         self.assertEqual(len(processors), 1)
         self.assertIsInstance(processors[0], PresencePenaltyLogitsProcessor)
         self.assertEqual(processors[0].penalty, 1.5)
+
+    def test_transformers_provider_uses_a_chat_generation_turn(self):
+        provider = TransformersModelProvider(
+            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        tokenizer = FakeTokenizer()
+        provider._loaded["student"] = (tokenizer, FakeModel())
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            provider.generate("student", "Solve 2 + 2.", max_new_tokens=1)
+
+        self.assertEqual(tokenizer.chat_template_calls[0][0], [{"role": "user", "content": "Solve 2 + 2."}])
+        self.assertTrue(tokenizer.chat_template_calls[0][1]["add_generation_prompt"])
+        self.assertTrue(tokenizer.chat_template_calls[0][1]["tokenize"])
+        self.assertTrue(tokenizer.chat_template_calls[0][1]["return_dict"])
 
     def test_cached_model_load_does_not_import_torch(self):
         provider = TransformersModelProvider(

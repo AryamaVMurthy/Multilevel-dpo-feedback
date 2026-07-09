@@ -86,7 +86,18 @@ class TransformersModelProvider(ModelProvider):
         except ImportError as exc:
             raise ImportError("transformers is required for TransformersModelProvider") from exc
 
-        encoded = tokenizer(prompt, return_tensors="pt")
+        if not hasattr(tokenizer, "apply_chat_template"):
+            raise RuntimeError(
+                "model tokenizer does not support apply_chat_template; refusing raw-text generation "
+                "because Qwen3.5 requires an explicit chat generation turn"
+            )
+        encoded = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
         if hasattr(model, "device"):
             encoded = {key: value.to(model.device) for key, value in encoded.items()}
         temperature = float(generation_kwargs.get("temperature", 0.0))
