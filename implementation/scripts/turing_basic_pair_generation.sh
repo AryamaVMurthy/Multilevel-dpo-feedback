@@ -3,7 +3,7 @@
 #SBATCH -n 16
 #SBATCH --gres=gpu:1
 #SBATCH --mem-per-cpu=4096
-#SBATCH --time=01:00:00
+#SBATCH --time=00:20:00
 #SBATCH --output=logs/slurm-%x-%j.out
 #SBATCH --error=logs/slurm-%x-%j.err
 
@@ -32,12 +32,19 @@ export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
 
 mkdir -p logs runs
+RUN_OUTPUT_DIR="$(uv run --frozen python -c '
+from pathlib import Path
+import sys
+from text_feedback_dpo.config import load_config
+print(load_config(Path(sys.argv[1]))["output_dir"])
+' "$CONFIG")"
 
 echo "job_id=${SLURM_JOB_ID}"
 echo "turing_account=${TURING_ACCOUNT}"
 echo "host=$(hostname)"
 echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "config=${CONFIG}"
+echo "output_dir=${RUN_OUTPUT_DIR}"
 echo "start_time=$(date --iso-8601=seconds)"
 nvidia-smi
 export HF_HOME="$SCRATCH_DIR/hf_cache"
@@ -47,9 +54,16 @@ export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
   --format=csv -l 10 > "logs/gpu-${SLURM_JOB_ID}.csv" &
 GPU_MONITOR_PID=$!
+cleanup_gpu_monitor() {
+  if kill -0 "$GPU_MONITOR_PID" 2>/dev/null; then
+    kill "$GPU_MONITOR_PID"
+  fi
+}
+trap cleanup_gpu_monitor EXIT
 
 uv run --frozen python -m text_feedback_dpo.cli generate-pipeline --config "$CONFIG"
 
-kill "$GPU_MONITOR_PID"
-cp "logs/gpu-${SLURM_JOB_ID}.csv" "runs/qwen35-basic-smoke/gpu-${SLURM_JOB_ID}.csv"
+cleanup_gpu_monitor
+trap - EXIT
+cp "logs/gpu-${SLURM_JOB_ID}.csv" "${RUN_OUTPUT_DIR}/gpu-${SLURM_JOB_ID}.csv"
 echo "end_time=$(date --iso-8601=seconds)"
