@@ -79,6 +79,29 @@ class GeneratePipelineTest(unittest.TestCase):
             self.assertTrue(any(event["event_name"] == "student_generated" for event in events))
             self.assertTrue(any(event["event_name"] == "teacher_corrected" for event in events))
 
+    def test_cli_fake_smoke_mode_writes_artifacts_without_transformers(self):
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "run"
+            exit_code = __import__("subprocess").run(
+                [
+                    "python3",
+                    "-m",
+                    "text_feedback_dpo.cli",
+                    "generate-pipeline",
+                    "--config",
+                    "configs/basic_smoke.yaml",
+                    "--output-dir",
+                    str(out),
+                    "--fake-smoke",
+                ],
+                env={"PYTHONPATH": "src"},
+                check=False,
+                capture_output=True,
+                text=True,
+            ).returncode
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((out / "pairs.jsonl").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

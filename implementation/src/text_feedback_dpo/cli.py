@@ -13,6 +13,46 @@ from text_feedback_dpo.report import write_html_report
 from text_feedback_dpo.scoring import evaluate_rollout
 
 
+FAKE_STUDENT_ROLLOUT = """<plan>
+Solve with one arithmetic branch.
+</plan>
+<think branch="A">
+2 + 2 = 5.
+</think>
+<reflect>
+Branch comparison: one branch.
+Evidence / derivation check: the arithmetic should be checked.
+Verification: recalculating 2 + 2 does not support 5.
+Decision: answer
+</reflect>
+<final>
+5
+</final>"""
+
+
+FAKE_TEACHER_OUTPUT = """<feedback>
+The student should recompute the arithmetic and verify before final.
+</feedback>
+
+<corrected_rollout>
+<plan>
+Solve with one arithmetic branch and verify before final.
+</plan>
+<think branch="A">
+2 + 2 = 4.
+</think>
+<reflect>
+Branch comparison: one branch is sufficient.
+Evidence / derivation check: direct addition gives 4.
+Verification: recalculating 2 + 2 gives 4.
+Decision: answer
+</reflect>
+<final>
+4
+</final>
+</corrected_rollout>"""
+
+
 def _index_by_id(rows: list[dict], source_name: str) -> dict[str, dict]:
     indexed: dict[str, dict] = {}
     for row in rows:
@@ -179,6 +219,7 @@ def run_generate_pipeline(
     config_path: Path,
     output_dir: Path | None = None,
     model_provider: ModelProvider | None = None,
+    fake_smoke: bool = False,
 ) -> dict:
     config = load_config(config_path)
     run_id = str(config["run_id"])
@@ -187,9 +228,19 @@ def run_generate_pipeline(
     logger = JsonlLogger(output / "events.jsonl", run_id=run_id)
     logger.event("run_start", stage="generate", config_path=str(config_path), output_dir=str(output))
 
-    provider = model_provider or TransformersModelProvider(
-        model_ids={"student": str(config["student_model"]), "teacher": str(config["teacher_model"])},
-    )
+    if fake_smoke and model_provider is None:
+        from text_feedback_dpo.models import FakeModelProvider
+
+        logger.event(
+            "fake_smoke_enabled",
+            stage="generate",
+            fallback_reason="explicit --fake-smoke test mode requested",
+        )
+        provider = FakeModelProvider({"student": FAKE_STUDENT_ROLLOUT, "teacher": FAKE_TEACHER_OUTPUT})
+    else:
+        provider = model_provider or TransformersModelProvider(
+            model_ids={"student": str(config["student_model"]), "teacher": str(config["teacher_model"])},
+        )
 
     examples = _default_smoke_examples(int(config["max_examples"]))
     rollouts: list[dict] = []
@@ -308,6 +359,7 @@ def main() -> None:
     generate = subparsers.add_parser("generate-pipeline")
     generate.add_argument("--config", required=True, type=Path)
     generate.add_argument("--output-dir", type=Path)
+    generate.add_argument("--fake-smoke", action="store_true")
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -318,7 +370,11 @@ def main() -> None:
             run_id=args.run_id,
         )
     elif args.command == "generate-pipeline":
-        result = run_generate_pipeline(config_path=args.config, output_dir=args.output_dir)
+        result = run_generate_pipeline(
+            config_path=args.config,
+            output_dir=args.output_dir,
+            fake_smoke=args.fake_smoke,
+        )
     else:
         raise SystemExit(f"unknown command: {args.command}")
     print(json.dumps(result, sort_keys=True))
