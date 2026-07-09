@@ -1,4 +1,5 @@
 import unittest
+from types import ModuleType
 from unittest import mock
 
 from text_feedback_dpo.models import FakeModelProvider, PresencePenaltyLogitsProcessor, TransformersModelProvider
@@ -37,6 +38,10 @@ class FakeModel:
         return [[1, 2, 3]]
 
 
+class FakeLogitsProcessorList(list):
+    pass
+
+
 class ModelProviderTest(unittest.TestCase):
     def test_fake_model_provider_returns_configured_text(self):
         provider = FakeModelProvider({"student": "hello"})
@@ -64,15 +69,18 @@ class ModelProviderTest(unittest.TestCase):
         fake_model = FakeModel()
         provider._loaded["student"] = (FakeTokenizer(), fake_model)
 
-        output = provider.generate(
-            "student",
-            "prompt",
-            max_new_tokens=11,
-            temperature=1.0,
-            top_p=0.95,
-            top_k=20,
-            presence_penalty=1.5,
-        )
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            output = provider.generate(
+                "student",
+                "prompt",
+                max_new_tokens=11,
+                temperature=1.0,
+                top_p=0.95,
+                top_k=20,
+                presence_penalty=1.5,
+            )
 
         self.assertEqual(output, "decoded")
         self.assertEqual(fake_model.generate_kwargs["max_new_tokens"], 11)
