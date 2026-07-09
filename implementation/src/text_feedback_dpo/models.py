@@ -53,6 +53,9 @@ class TransformersModelProvider(ModelProvider):
         if role not in self.model_ids:
             raise ValueError(f"missing model id for role: {role}")
 
+        if role in self._loaded:
+            return self._loaded[role]
+
         try:
             import torch
         except ImportError as exc:
@@ -65,16 +68,15 @@ class TransformersModelProvider(ModelProvider):
         if not self.allow_cpu_for_unit_tests and not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for model generation; refusing hidden CPU fallback")
 
-        if role not in self._loaded:
-            model_id = self.model_ids[role]
-            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                device_map="auto" if torch.cuda.is_available() else None,
-                torch_dtype="auto",
-                trust_remote_code=True,
-            )
-            self._loaded[role] = (tokenizer, model)
+        model_id = self.model_ids[role]
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="auto" if torch.cuda.is_available() else None,
+            torch_dtype="auto",
+            trust_remote_code=True,
+        )
+        self._loaded[role] = (tokenizer, model)
         return self._loaded[role]
 
     def generate(self, role: str, prompt: str, **generation_kwargs: object) -> str:

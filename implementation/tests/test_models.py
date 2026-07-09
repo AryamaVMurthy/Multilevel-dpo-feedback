@@ -85,6 +85,16 @@ class ModelProviderTest(unittest.TestCase):
         self.assertIsInstance(processors[0], PresencePenaltyLogitsProcessor)
         self.assertEqual(processors[0].penalty, 1.5)
 
+    def test_cached_model_load_does_not_import_torch(self):
+        provider = TransformersModelProvider(
+            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        provider._loaded["student"] = (FakeTokenizer(), FakeModel())
+
+        with mock.patch.dict("sys.modules", {"torch": None}):
+            self.assertIsInstance(provider._load("student")[1], FakeModel)
+
 
 if __name__ == "__main__":
     unittest.main()
