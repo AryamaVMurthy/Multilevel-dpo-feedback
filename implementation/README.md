@@ -25,3 +25,21 @@ cat runs/basic-fixture/rejections.jsonl
 ```
 
 Open `runs/basic-fixture/report.html` in a browser for the human-readable summary.
+
+Turing model-load smoke:
+
+```bash
+sbatch -A <account> --job-name=tfdpo-model-load \
+  --export=ALL,TURING_ACCOUNT=<account> \
+  scripts/turing_model_load_smoke.sh
+```
+
+Turing tiny pair generation:
+
+```bash
+sbatch -A <account> --job-name=tfdpo-basic-pairs \
+  --export=ALL,TURING_ACCOUNT=<account>,CONFIG=configs/basic_smoke.yaml \
+  scripts/turing_basic_pair_generation.sh
+```
+
+These jobs only verify model loading and tiny pair generation. They do not start DPO, GRPO, or distillation training.
