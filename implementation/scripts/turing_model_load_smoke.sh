@@ -16,10 +16,21 @@ TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 module load u22/cuda/12.4
 
 export PATH="$HOME/.local/bin:$PATH"
+if [[ ! -d /scratch || ! -w /scratch ]]; then
+  echo "ERROR: /scratch is not writable on host $(hostname); refusing to use /home for model cache or Python environment" >&2
+  exit 1
+fi
+echo "scratch_df_before=$(df -h /scratch | tail -1)"
+SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
+mkdir -p "$SCRATCH_DIR"
+echo "scratch_dir=${SCRATCH_DIR}"
+
 export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
+export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
 
 mkdir -p logs "$RUN_DIR"
 
@@ -30,15 +41,6 @@ echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "model_id=${MODEL_ID}"
 echo "start_time=$(date --iso-8601=seconds)"
 nvidia-smi
-
-if [[ ! -d /scratch || ! -w /scratch ]]; then
-  echo "ERROR: /scratch is not writable on host $(hostname); refusing to use /home for model cache" >&2
-  exit 1
-fi
-echo "scratch_df_before=$(df -h /scratch | tail -1)"
-SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
-mkdir -p "$SCRATCH_DIR"
-echo "scratch_dir=${SCRATCH_DIR}"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
