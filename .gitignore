@@ -17,3 +17,5 @@ outputs/
 logs/
 tmp/
 
+# Local implementation worktrees.
+.worktrees/
