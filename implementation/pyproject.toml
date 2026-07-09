@@ -1,0 +1,21 @@
+[project]
+name = "text-feedback-dpo"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "accelerate",
+  "bitsandbytes",
+  "datasets",
+  "jinja2",
+  "peft",
+  "pyyaml",
+  "torch",
+  "transformers",
+  "trl",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+tfdpo = "text_feedback_dpo.cli:main"
