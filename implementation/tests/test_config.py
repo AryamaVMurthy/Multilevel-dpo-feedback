@@ -55,7 +55,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config["teacher_mode"], "stronger_model")
         self.assertEqual(config["max_examples"], 1)
         self.assertEqual(config["generation"]["max_new_tokens"], 32)
-        self.assertEqual(config["teacher_generation"]["max_new_tokens"], 64)
+        self.assertEqual(config["teacher_generation"]["max_new_tokens"], 256)
         for section in ("generation", "teacher_generation"):
             self.assertEqual(config[section]["temperature"], 1.0)
             self.assertEqual(config[section]["top_p"], 0.95)

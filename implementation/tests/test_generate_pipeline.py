@@ -102,6 +102,29 @@ class GeneratePipelineTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue((out / "pairs.jsonl").exists())
 
+    def test_malformed_teacher_output_is_logged_and_persisted_before_failure(self):
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "run"
+            provider = FakeModelProvider(
+                {"student": STUDENT_WRONG, "teacher": "missing required structured blocks"}
+            )
+
+            with self.assertRaisesRegex(ValueError, "missing <feedback> block"):
+                run_generate_pipeline(
+                    config_path=Path("configs/basic_smoke.yaml"),
+                    output_dir=out,
+                    model_provider=provider,
+                )
+
+            failure = json.loads((out / "teacher_failures.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(failure["error_code"], "teacher_output_parse_failed")
+            self.assertEqual(failure["raw_teacher_output"], "missing required structured blocks")
+            events = [
+                json.loads(line)
+                for line in (out / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(any(event["event_name"] == "failure" for event in events))
+
 
 if __name__ == "__main__":
     unittest.main()

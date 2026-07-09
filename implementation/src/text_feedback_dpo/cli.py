@@ -273,8 +273,27 @@ def run_generate_pipeline(
             teacher_mode=str(config["teacher_mode"]),
         )
         teacher_output = provider.generate("teacher", teacher_prompt, **config["teacher_generation"])
-        feedback = _extract_required_block(teacher_output, "feedback")
-        corrected_rollout = _extract_required_block(teacher_output, "corrected_rollout")
+        try:
+            feedback = _extract_required_block(teacher_output, "feedback")
+            corrected_rollout = _extract_required_block(teacher_output, "corrected_rollout")
+        except ValueError as exc:
+            failure = {
+                "id": example["id"],
+                "domain": example["domain"],
+                "error_code": "teacher_output_parse_failed",
+                "message": str(exc),
+                "raw_teacher_output": teacher_output,
+            }
+            write_jsonl(output / "teacher_failures.jsonl", [failure])
+            logger.failure(
+                stage="teacher_correction",
+                error_code="teacher_output_parse_failed",
+                message=str(exc),
+                example_id=example["id"],
+                domain=example["domain"],
+                raw_output_path=str(output / "teacher_failures.jsonl"),
+            )
+            raise
         corrected_result = evaluate_rollout(corrected_rollout, str(example["gold_answer"]))
         corrections.append(
             {

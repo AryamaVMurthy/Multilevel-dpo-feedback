@@ -11,6 +11,7 @@ set -euo pipefail
 
 CONFIG="${CONFIG:?CONFIG is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+HF_CACHE_DIR="${HF_CACHE_DIR:?HF_CACHE_DIR is required}"
 
 module load u22/cuda/12.4
 
@@ -22,7 +23,9 @@ fi
 echo "scratch_df_before=$(df -h /scratch | tail -1)"
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR"
+mkdir -p "$HF_CACHE_DIR"
 echo "scratch_dir=${SCRATCH_DIR}"
+echo "hf_cache_dir=${HF_CACHE_DIR}"
 
 export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
@@ -48,9 +51,9 @@ echo "config=${CONFIG}"
 echo "output_dir=${RUN_OUTPUT_DIR}"
 echo "start_time=$(date --iso-8601=seconds)"
 nvidia-smi
-export HF_HOME="$SCRATCH_DIR/hf_cache"
-export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
-export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
+export HF_HOME="$HF_CACHE_DIR"
+export TRANSFORMERS_CACHE="$HF_CACHE_DIR"
+export HF_DATASETS_CACHE="$HF_CACHE_DIR/datasets"
 
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
   --format=csv -l 10 > "logs/gpu-${SLURM_JOB_ID}.csv" &
