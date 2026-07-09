@@ -45,12 +45,44 @@ ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
 
 ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
   aryamavmurthy@turing.iiit.ac.in 'hostname && whoami'
+
+ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+  -l 'aryama.murthy@research.iiit.ac.in' turing.iiit.ac.in 'hostname && whoami'
+
+ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+  -l 'aryama.murthy@students.iiit.ac.in' turing.iiit.ac.in 'hostname && whoami'
+
+ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+  -l 'aryamavmurthy@research.iiit.ac.in' turing.iiit.ac.in 'hostname && whoami'
+
+ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+  -l 'aryamavmurthy@students.iiit.ac.in' turing.iiit.ac.in 'hostname && whoami'
 ```
 
-Observed result for both usernames:
+Observed result for all usernames:
 
 ```text
 Permission denied (publickey,gssapi-keyex,gssapi-with-mic,password,hostbased).
+```
+
+Additional auth diagnostics:
+
+```bash
+ssh-add -l
+ssh-keygen -y -f ~/.ssh/id_ed25519
+ssh -vvv -o BatchMode=yes -o ConnectTimeout=8 \
+  -o StrictHostKeyChecking=accept-new \
+  -i ~/.ssh/id_ed25519 aryama.murthy@turing.iiit.ac.in 'hostname'
+```
+
+Observed:
+
+```text
+The agent has no identities.
+ssh-keygen -y -f ~/.ssh/id_ed25519 exited 0 and printed the local public key.
+OpenSSH offered /home/aryamavmurthy/.ssh/id_ed25519 to turing.iiit.ac.in.
+The server rejected the offered key and returned Permission denied.
+No Kerberos credentials were available.
 ```
 
 ## Status
