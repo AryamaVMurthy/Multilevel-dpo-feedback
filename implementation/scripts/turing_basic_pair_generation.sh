@@ -30,6 +30,7 @@ export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
 export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}src"
 
 mkdir -p logs runs
 RUN_OUTPUT_DIR="$(uv run --frozen python -c '
