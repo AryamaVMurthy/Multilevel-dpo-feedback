@@ -30,8 +30,14 @@ echo "config=${CONFIG}"
 echo "start_time=$(date --iso-8601=seconds)"
 nvidia-smi
 
-SCRATCH_DIR="/scratch/$(hostname)/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
+if [[ ! -d /scratch || ! -w /scratch ]]; then
+  echo "ERROR: /scratch is not writable on host $(hostname); refusing to use /home for model cache" >&2
+  exit 1
+fi
+echo "scratch_df_before=$(df -h /scratch | tail -1)"
+SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR"
+echo "scratch_dir=${SCRATCH_DIR}"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
