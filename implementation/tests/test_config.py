@@ -47,6 +47,21 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(config[section]["top_k"], 20)
             self.assertEqual(config[section]["presence_penalty"], 1.5)
 
+    def test_one_example_pair_validation_config_is_explicitly_bounded(self):
+        config = load_config(Path("configs/pair_validation_1x.yaml"))
+        self.assertEqual(config["run_id"], "qwen35-pair-validation-1x")
+        self.assertEqual(config["student_model"], "Qwen/Qwen3.5-2B")
+        self.assertEqual(config["teacher_model"], "Qwen/Qwen3.5-9B")
+        self.assertEqual(config["teacher_mode"], "stronger_model")
+        self.assertEqual(config["max_examples"], 1)
+        self.assertEqual(config["generation"]["max_new_tokens"], 32)
+        self.assertEqual(config["teacher_generation"]["max_new_tokens"], 64)
+        for section in ("generation", "teacher_generation"):
+            self.assertEqual(config[section]["temperature"], 1.0)
+            self.assertEqual(config[section]["top_p"], 0.95)
+            self.assertEqual(config[section]["top_k"], 20)
+            self.assertEqual(config[section]["presence_penalty"], 1.5)
+
 
 if __name__ == "__main__":
     unittest.main()

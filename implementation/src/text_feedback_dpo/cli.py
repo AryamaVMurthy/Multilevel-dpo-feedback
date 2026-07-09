@@ -11,6 +11,7 @@ from text_feedback_dpo.observability import JsonlLogger
 from text_feedback_dpo.prompts import build_student_prompt, build_teacher_prompt
 from text_feedback_dpo.report import write_html_report
 from text_feedback_dpo.scoring import evaluate_rollout
+from text_feedback_dpo.validation import validate_run
 
 
 FAKE_STUDENT_ROLLOUT = """<plan>
@@ -360,6 +361,8 @@ def main() -> None:
     generate.add_argument("--config", required=True, type=Path)
     generate.add_argument("--output-dir", type=Path)
     generate.add_argument("--fake-smoke", action="store_true")
+    validate = subparsers.add_parser("validate-run")
+    validate.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -375,6 +378,8 @@ def main() -> None:
             output_dir=args.output_dir,
             fake_smoke=args.fake_smoke,
         )
+    elif args.command == "validate-run":
+        result = validate_run(args.output_dir)
     else:
         raise SystemExit(f"unknown command: {args.command}")
     print(json.dumps(result, sort_keys=True))
