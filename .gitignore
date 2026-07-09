@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+*.egg-info/
+
+# Large or machine-local experiment outputs.
+implementation/runs/*
+!implementation/runs/.gitkeep
+
+# Cluster and model caches must stay out of the repo.
+hf_cache/
+hf_datasets/
+outputs/
+logs/
+tmp/
+
