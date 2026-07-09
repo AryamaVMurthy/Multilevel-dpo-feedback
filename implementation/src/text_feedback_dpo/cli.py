@@ -34,6 +34,7 @@ def run_basic_pipeline(
     logger = JsonlLogger(output_dir / "events.jsonl", run_id=run_id)
     logger.event(
         "run_start",
+        stage="load_inputs",
         examples_path=str(examples_path),
         rollouts_path=str(rollouts_path),
         corrections_path=str(corrections_path),
@@ -65,6 +66,7 @@ def run_basic_pipeline(
 
         logger.event(
             "example_evaluated",
+            stage="evaluate",
             example_id=example_id,
             domain=example.get("domain"),
             original_score=original_result["score"],
@@ -119,7 +121,7 @@ def run_basic_pipeline(
     write_jsonl(output_dir / "rejections.jsonl", rejections)
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
     write_html_report(output_dir / "report.html", metrics)
-    logger.event("run_end", **metrics)
+    logger.event("run_end", stage="complete", **metrics)
     return metrics
 
 
