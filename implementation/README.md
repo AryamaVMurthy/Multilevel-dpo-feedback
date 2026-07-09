@@ -43,3 +43,14 @@ sbatch -A <account> --job-name=tfdpo-basic-pairs \
 ```
 
 These jobs only verify model loading and tiny pair generation. They do not start DPO, GRPO, or distillation training.
+
+Current smoke generation settings:
+
+```yaml
+temperature: 1.0
+top_p: 0.95
+top_k: 20
+presence_penalty: 1.5
+```
+
+`temperature`, `top_p`, and `top_k` are passed directly to Hugging Face Transformers `generate()`. `presence_penalty` is not a native Transformers `GenerationConfig` field, so this repo applies it through a custom logits processor that subtracts the penalty from tokens already present in the sequence. This is explicit and tested; it is not mapped silently to `repetition_penalty`.

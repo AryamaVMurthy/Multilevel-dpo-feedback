@@ -8,13 +8,17 @@ allow_missing_slurm_account_for_local: true
 
 generation:
   max_new_tokens: 512
-  temperature: 0.2
+  temperature: 1.0
   top_p: 0.95
+  top_k: 20
+  presence_penalty: 1.5
 
 teacher_generation:
   max_new_tokens: 1024
-  temperature: 0.2
+  temperature: 1.0
   top_p: 0.95
+  top_k: 20
+  presence_penalty: 1.5
 
 slurm:
   account: null

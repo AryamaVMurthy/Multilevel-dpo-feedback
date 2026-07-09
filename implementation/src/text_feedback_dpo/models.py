@@ -3,6 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+class PresencePenaltyLogitsProcessor:
+    """Subtract a fixed penalty from tokens already present in each sequence."""
+
+    def __init__(self, penalty: float) -> None:
+        if penalty < 0:
+            raise ValueError("presence_penalty must be non-negative")
+        self.penalty = penalty
+
+    def __call__(self, input_ids: object, scores: object) -> object:
+        if self.penalty == 0:
+            return scores
+        for batch_idx, sequence in enumerate(input_ids):
+            unique_token_ids = set(sequence.tolist() if hasattr(sequence, "tolist") else sequence)
+            if unique_token_ids:
+                scores[batch_idx, list(unique_token_ids)] -= self.penalty
+        return scores
+
+
 class ModelProvider:
     def generate(self, role: str, prompt: str, **generation_kwargs: object) -> str:
         raise NotImplementedError
@@ -61,15 +79,27 @@ class TransformersModelProvider(ModelProvider):
 
     def generate(self, role: str, prompt: str, **generation_kwargs: object) -> str:
         tokenizer, model = self._load(role)
+        try:
+            from transformers import LogitsProcessorList
+        except ImportError as exc:
+            raise ImportError("transformers is required for TransformersModelProvider") from exc
+
         encoded = tokenizer(prompt, return_tensors="pt")
         if hasattr(model, "device"):
             encoded = {key: value.to(model.device) for key, value in encoded.items()}
+        temperature = float(generation_kwargs.get("temperature", 0.0))
+        presence_penalty = float(generation_kwargs.get("presence_penalty", 0.0))
+        logits_processor = LogitsProcessorList()
+        if presence_penalty:
+            logits_processor.append(PresencePenaltyLogitsProcessor(presence_penalty))
         output_ids = model.generate(
             **encoded,
             max_new_tokens=int(generation_kwargs.get("max_new_tokens", 128)),
-            do_sample=float(generation_kwargs.get("temperature", 0.0)) > 0.0,
-            temperature=float(generation_kwargs.get("temperature", 0.0)) or None,
+            do_sample=temperature > 0.0,
+            temperature=temperature or None,
             top_p=float(generation_kwargs.get("top_p", 1.0)),
+            top_k=int(generation_kwargs.get("top_k", 50)),
+            logits_processor=logits_processor,
         )
         generated = output_ids[0][encoded["input_ids"].shape[-1] :]
         return tokenizer.decode(generated, skip_special_tokens=True)

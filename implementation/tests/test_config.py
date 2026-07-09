@@ -41,6 +41,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config["student_model"], "Qwen/Qwen3.5-2B")
         self.assertEqual(config["teacher_model"], "Qwen/Qwen3.5-9B")
         self.assertEqual(config["max_examples"], 5)
+        for section in ("generation", "teacher_generation"):
+            self.assertEqual(config[section]["temperature"], 1.0)
+            self.assertEqual(config[section]["top_p"], 0.95)
+            self.assertEqual(config[section]["top_k"], 20)
+            self.assertEqual(config[section]["presence_penalty"], 1.5)
 
 
 if __name__ == "__main__":
