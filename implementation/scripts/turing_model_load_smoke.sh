@@ -45,7 +45,7 @@ export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 
-uv run python - <<'PY'
+uv run --frozen python - <<'PY'
 import json
 from datetime import datetime, timezone
 from pathlib import Path

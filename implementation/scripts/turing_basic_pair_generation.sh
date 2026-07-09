@@ -48,7 +48,7 @@ nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.t
   --format=csv -l 10 > "logs/gpu-${SLURM_JOB_ID}.csv" &
 GPU_MONITOR_PID=$!
 
-uv run python -m text_feedback_dpo.cli generate-pipeline --config "$CONFIG"
+uv run --frozen python -m text_feedback_dpo.cli generate-pipeline --config "$CONFIG"
 
 kill "$GPU_MONITOR_PID"
 cp "logs/gpu-${SLURM_JOB_ID}.csv" "runs/qwen35-basic-smoke/gpu-${SLURM_JOB_ID}.csv"
