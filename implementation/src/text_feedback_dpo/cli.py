@@ -4,8 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from text_feedback_dpo.config import load_config
 from text_feedback_dpo.io import read_jsonl, write_jsonl
+from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
+from text_feedback_dpo.prompts import build_student_prompt, build_teacher_prompt
 from text_feedback_dpo.report import write_html_report
 from text_feedback_dpo.scoring import evaluate_rollout
 
@@ -20,6 +23,52 @@ def _index_by_id(rows: list[dict], source_name: str) -> dict[str, dict]:
             raise ValueError(f"{source_name} contains duplicate id: {row_id}")
         indexed[row_id] = row
     return indexed
+
+
+def _extract_required_block(text: str, tag: str) -> str:
+    start_tag = f"<{tag}>"
+    end_tag = f"</{tag}>"
+    start = text.find(start_tag)
+    end = text.find(end_tag, start + len(start_tag))
+    if start < 0 or end < 0:
+        raise ValueError(f"teacher output missing <{tag}> block")
+    return text[start + len(start_tag) : end].strip()
+
+
+def _default_smoke_examples(max_examples: int) -> list[dict]:
+    examples = [
+        {
+            "id": "math-1",
+            "domain": "math",
+            "problem": "What is 2 + 2?",
+            "gold_answer": "4",
+        },
+        {
+            "id": "math-2",
+            "domain": "math",
+            "problem": "What is 3 + 3?",
+            "gold_answer": "6",
+        },
+        {
+            "id": "math-3",
+            "domain": "math",
+            "problem": "What is 5 - 2?",
+            "gold_answer": "3",
+        },
+        {
+            "id": "math-4",
+            "domain": "math",
+            "problem": "What is 7 + 1?",
+            "gold_answer": "8",
+        },
+        {
+            "id": "math-5",
+            "domain": "math",
+            "problem": "What is 10 / 2?",
+            "gold_answer": "5",
+        },
+    ]
+    return examples[:max_examples]
 
 
 def run_basic_pipeline(
@@ -125,24 +174,153 @@ def run_basic_pipeline(
     return metrics
 
 
+def run_generate_pipeline(
+    *,
+    config_path: Path,
+    output_dir: Path | None = None,
+    model_provider: ModelProvider | None = None,
+) -> dict:
+    config = load_config(config_path)
+    run_id = str(config["run_id"])
+    output = output_dir or Path(str(config["output_dir"]))
+    output.mkdir(parents=True, exist_ok=True)
+    logger = JsonlLogger(output / "events.jsonl", run_id=run_id)
+    logger.event("run_start", stage="generate", config_path=str(config_path), output_dir=str(output))
+
+    provider = model_provider or TransformersModelProvider(
+        model_ids={"student": str(config["student_model"]), "teacher": str(config["teacher_model"])},
+    )
+
+    examples = _default_smoke_examples(int(config["max_examples"]))
+    rollouts: list[dict] = []
+    corrections: list[dict] = []
+    pairs: list[dict] = []
+    rejections: list[dict] = []
+    verification_missing_rejections = 0
+
+    for example in examples:
+        student_prompt = build_student_prompt(str(example["problem"]), str(example["domain"]))
+        student_rollout = provider.generate("student", student_prompt, **config["generation"])
+        rollouts.append({"id": example["id"], "prompt": student_prompt, "rollout": student_rollout})
+        original_result = evaluate_rollout(student_rollout, str(example["gold_answer"]))
+        logger.event(
+            "student_generated",
+            stage="student_generation",
+            example_id=example["id"],
+            domain=example["domain"],
+            original_score=original_result["score"],
+            original_error_code=original_result["error_code"],
+        )
+
+        teacher_prompt = build_teacher_prompt(
+            problem=str(example["problem"]),
+            gold_answer=str(example["gold_answer"]),
+            student_rollout=student_rollout,
+            result=original_result,
+            domain=str(example["domain"]),
+            teacher_mode=str(config["teacher_mode"]),
+        )
+        teacher_output = provider.generate("teacher", teacher_prompt, **config["teacher_generation"])
+        feedback = _extract_required_block(teacher_output, "feedback")
+        corrected_rollout = _extract_required_block(teacher_output, "corrected_rollout")
+        corrected_result = evaluate_rollout(corrected_rollout, str(example["gold_answer"]))
+        corrections.append(
+            {
+                "id": example["id"],
+                "prompt": teacher_prompt,
+                "feedback": feedback,
+                "corrected_rollout": corrected_rollout,
+                "corrected_result": corrected_result,
+            }
+        )
+        logger.event(
+            "teacher_corrected",
+            stage="teacher_correction",
+            example_id=example["id"],
+            domain=example["domain"],
+            corrected_score=corrected_result["score"],
+            corrected_error_code=corrected_result["error_code"],
+            corrected_verification_present=corrected_result["verification_present"],
+        )
+
+        if not corrected_result["verification_present"]:
+            verification_missing_rejections += 1
+        accepted = (
+            original_result["score"] < corrected_result["score"]
+            and corrected_result["format_valid"]
+            and corrected_result["verification_present"]
+        )
+        if accepted:
+            pairs.append(
+                {
+                    "id": example["id"],
+                    "prompt": str(example["problem"]),
+                    "chosen": corrected_rollout,
+                    "rejected": student_rollout,
+                    "metadata": {
+                        "domain": example["domain"],
+                        "original_score": original_result["score"],
+                        "corrected_score": corrected_result["score"],
+                        "feedback": feedback,
+                    },
+                }
+            )
+        else:
+            rejections.append(
+                {
+                    "id": example["id"],
+                    "reason": corrected_result["error_code"] or "corrected_not_better",
+                    "original_result": original_result,
+                    "corrected_result": corrected_result,
+                }
+            )
+
+    metrics = {
+        "run_id": run_id,
+        "examples_total": len(examples),
+        "accepted_pairs": len(pairs),
+        "rejected_examples": len(rejections),
+        "verification_missing_rejections": verification_missing_rejections,
+        "student_model": config["student_model"],
+        "teacher_model": config["teacher_model"],
+        "teacher_mode": config["teacher_mode"],
+    }
+    write_jsonl(output / "examples.jsonl", examples)
+    write_jsonl(output / "rollouts.jsonl", rollouts)
+    write_jsonl(output / "corrections.jsonl", corrections)
+    write_jsonl(output / "pairs.jsonl", pairs)
+    write_jsonl(output / "rejections.jsonl", rejections)
+    (output / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+    write_html_report(output / "report.html", metrics)
+    logger.event("run_end", stage="complete", **metrics)
+    return metrics
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("basic_pipeline", nargs="?")
-    parser.add_argument("--examples", required=True, type=Path)
-    parser.add_argument("--rollouts", required=True, type=Path)
-    parser.add_argument("--corrections", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--run-id", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    basic = subparsers.add_parser("basic-pipeline")
+    basic.add_argument("--examples", required=True, type=Path)
+    basic.add_argument("--rollouts", required=True, type=Path)
+    basic.add_argument("--corrections", required=True, type=Path)
+    basic.add_argument("--output-dir", required=True, type=Path)
+    basic.add_argument("--run-id", required=True)
+    generate = subparsers.add_parser("generate-pipeline")
+    generate.add_argument("--config", required=True, type=Path)
+    generate.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
-    if args.basic_pipeline != "basic-pipeline":
-        raise SystemExit("Only the basic-pipeline command is implemented.")
-    result = run_basic_pipeline(
-        examples_path=args.examples,
-        rollouts_path=args.rollouts,
-        corrections_path=args.corrections,
-        output_dir=args.output_dir,
-        run_id=args.run_id,
-    )
+    if args.command == "basic-pipeline":
+        result = run_basic_pipeline(
+            examples_path=args.examples,
+            rollouts_path=args.rollouts,
+            corrections_path=args.corrections,
+            output_dir=args.output_dir,
+            run_id=args.run_id,
+        )
+    elif args.command == "generate-pipeline":
+        result = run_generate_pipeline(config_path=args.config, output_dir=args.output_dir)
+    else:
+        raise SystemExit(f"unknown command: {args.command}")
     print(json.dumps(result, sort_keys=True))
 
 
