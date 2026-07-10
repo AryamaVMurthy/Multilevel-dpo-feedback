@@ -14,6 +14,7 @@ CONFIG="${CONFIG:?CONFIG is required}"
 DATASET_DIR="${DATASET_DIR:?DATASET_DIR is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required}"
 SPLIT="${SPLIT:?SPLIT is required}"
 NUM_SHARDS="${NUM_SHARDS:?NUM_SHARDS is required}"
 SHARD_INDEX="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
@@ -30,8 +31,13 @@ mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
 export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
+if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
+  echo "ERROR: MODEL_CACHE_DIR is not present on $(hostname): $MODEL_CACHE_DIR" >&2
+  exit 1
+fi
+export HF_HOME="$MODEL_CACHE_DIR"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
-export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
+export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"
 export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1

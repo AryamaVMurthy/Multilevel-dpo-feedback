@@ -19,6 +19,7 @@ VALIDATION_PATH="${VALIDATION_PATH:?VALIDATION_PATH is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 LEDGER_PATH="${LEDGER_PATH:?LEDGER_PATH is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 
 module load u22/cuda/12.4
@@ -31,8 +32,12 @@ SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
 export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
-export HF_HOME="$SCRATCH_DIR/hf_cache"
-export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
+if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
+  echo "ERROR: MODEL_CACHE_DIR is not present on $(hostname): $MODEL_CACHE_DIR" >&2
+  exit 1
+fi
+export HF_HOME="$MODEL_CACHE_DIR"
+export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
