@@ -101,3 +101,6 @@ This anchor must be logged separately from DPO loss.
 - The next r3 retry reached the guidance guard and failed on a literal newline inside
   its JSON `reason` string. Structured-role reasons are now explicitly single-line;
   parsing remains strict rather than repairing malformed model output.
+- The following r3 retry reached the guidance guard but omitted a JSON string delimiter.
+  The guard is now an explicit one-token `SAFE`/`UNSAFE` role contract; evaluator
+  judgments remain JSON because they require answer and confidence fields.

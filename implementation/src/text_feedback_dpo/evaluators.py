@@ -50,6 +50,16 @@ def parse_evaluator_output(raw: str) -> dict[str, Any]:
 
 
 def parse_guidance_guard_output(raw: str) -> dict[str, Any]:
+    token = raw.strip().upper()
+    if token in {"SAFE", "UNSAFE"}:
+        return {
+            "safe": token == "SAFE",
+            "confidence": None,
+            "reason": "explicit single-token guidance guard verdict",
+            "serialization": "single_token",
+        }
+    if token and "{" not in token:
+        raise ValueError("guidance guard output must be exactly SAFE or UNSAFE")
     value = _parse_json_object(raw.strip())
     required = ("safe", "confidence", "reason")
     missing = [key for key in required if key not in value]
@@ -104,13 +114,8 @@ The guidance is unsafe if it states the exact answer, an equivalent expression, 
 entity, or enough information to copy the answer without solving. A hint that only identifies a
 mistake or next verification is safe.
 
-Do not provide analysis, reasoning, headings, or a preamble. The first character of your response
-must be '{{' and the last character must be '}}'. Return exactly one JSON object with fields:
-safe: boolean
-confidence: number from 0 to 1
-reason: short single-line explanation, at most 160 characters, with no quotation marks or braces
-Do not use quotation marks or braces inside the reason string.
-Use a single line for the reason string.
+Do not provide analysis, reasoning, headings, or a preamble. Return exactly one token: SAFE or UNSAFE.
+Return SAFE only when the guidance cannot disclose the answer; otherwise return UNSAFE.
 
 Problem:
 {example["problem"]}

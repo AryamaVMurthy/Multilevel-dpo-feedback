@@ -3,6 +3,7 @@ import unittest
 from text_feedback_dpo.evaluators import (
     build_evaluator_prompt,
     build_guidance_guard_prompt,
+    parse_guidance_guard_output,
     parse_evaluator_output,
 )
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
@@ -51,6 +52,15 @@ class NativePipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "correct"):
             parse_evaluator_output('{"answer": "4"}')
 
+    def test_guidance_guard_accepts_explicit_single_token_contract(self):
+        parsed = parse_guidance_guard_output("SAFE")
+        self.assertTrue(parsed["safe"])
+        self.assertIsNone(parsed["confidence"])
+        self.assertIn("explicit", parsed["reason"])
+
+        with self.assertRaisesRegex(ValueError, "SAFE or UNSAFE"):
+            parse_guidance_guard_output("MAYBE")
+
     def test_evaluator_accepts_native_reasoning_around_final_json(self):
         parsed = parse_evaluator_output(
             'I checked the response carefully.\n'
@@ -67,12 +77,12 @@ class NativePipelineTest(unittest.TestCase):
         }
         evaluator_prompt = build_evaluator_prompt(example=example, response=WRONG)
         guard_prompt = build_guidance_guard_prompt(example=example, guidance="Recheck the operation.")
-        for prompt in (evaluator_prompt, guard_prompt):
-            self.assertIn("first character", prompt.lower())
-            self.assertIn("do not provide analysis", prompt.lower())
+        self.assertIn("first character", evaluator_prompt.lower())
+        self.assertIn("do not provide analysis", evaluator_prompt.lower())
         self.assertIn("at most 160 characters", evaluator_prompt.lower())
         self.assertIn("do not use quotation marks", evaluator_prompt.lower())
         self.assertIn("single line", evaluator_prompt.lower())
+        self.assertIn("exactly one token: safe or unsafe", guard_prompt.lower())
 
     def test_native_collector_pairs_all_wrong_attempts_with_first_correct(self):
         examples = [
