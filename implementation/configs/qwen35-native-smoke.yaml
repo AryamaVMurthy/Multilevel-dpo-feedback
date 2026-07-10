@@ -25,7 +25,7 @@ teacher_generation:
   presence_penalty: 1.5
 
 evaluator_generation:
-  max_new_tokens: 1024
+  max_new_tokens: 2048
   temperature: 0.2
   top_p: 0.95
   top_k: 20

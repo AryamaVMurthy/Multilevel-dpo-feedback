@@ -1,4 +1,4 @@
-run_id: qwen35-native-pairs-smoke
+run_id: qwen35-native-pairs-smoke-r2
 student_model: Qwen/Qwen3.5-2B
 teacher_model: Qwen/Qwen3.5-9B
 evaluator_model: Qwen/Qwen3.5-9B
@@ -7,7 +7,7 @@ examples_path: ../examples/native_smoke/pairs_examples.jsonl
 max_examples: 4
 max_guidance_steps: 3
 max_guidance_regenerations: 1
-output_dir: runs/qwen35-native-pairs-smoke
+output_dir: runs/qwen35-native-pairs-smoke-r2
 allow_missing_slurm_account_for_local: true
 
 generation:
@@ -25,7 +25,7 @@ teacher_generation:
   presence_penalty: 1.5
 
 evaluator_generation:
-  max_new_tokens: 1024
+  max_new_tokens: 2048
   temperature: 0.2
   top_p: 0.95
   top_k: 20
