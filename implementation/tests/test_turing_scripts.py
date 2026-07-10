@@ -8,6 +8,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_setup_environment.sh",
             "turing_stage_model_cache.sh",
             "turing_download_dataset_source.sh",
+            "turing_download_math_source.sh",
             "turing_materialize_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_freeze_baseline.sh",
@@ -29,6 +30,12 @@ class TuringScriptTest(unittest.TestCase):
         setup = Path("scripts/turing_setup_environment.sh").read_text(encoding="utf-8")
         self.assertIn("SHARED_UV_CACHE:?SHARED_UV_CACHE is required", setup)
         self.assertIn("uv sync --frozen", setup)
+        math_download = Path("scripts/turing_download_math_source.sh").read_text(encoding="utf-8")
+        self.assertIn("CONFIG:?CONFIG is required", math_download)
+        self.assertIn("EleutherAI/hendrycks_math", math_download)
+        self.assertIn("dataset[\"subjects\"]", math_download)
+        self.assertIn("dataset[\"revision\"]", math_download)
+        self.assertIn("refusing non-empty MATH source output directory", math_download)
         stage_cache = Path("scripts/turing_stage_model_cache.sh").read_text(encoding="utf-8")
         self.assertIn("CONFIG:?CONFIG is required", stage_cache)
         self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", stage_cache)
