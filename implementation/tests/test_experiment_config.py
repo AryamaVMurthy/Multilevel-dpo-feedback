@@ -1,10 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
 from text_feedback_dpo.cli import run_validate_paper_config
+from text_feedback_dpo.cli import run_materialize_dataset
 from text_feedback_dpo.experiment_config import load_paper_experiment
 
 
@@ -86,6 +88,17 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(result["experiment_id"], "qwen35-paper-gsm8k")
         self.assertEqual(result["dataset"], "gsm8k")
         self.assertTrue(result["require_freeze_manifest_for_test"])
+
+    def test_materialize_cli_validates_config_before_delegating(self):
+        with mock.patch("text_feedback_dpo.cli.materialize_paper_dataset", return_value={"ok": True}) as materialize:
+            result = run_materialize_dataset(
+                Path("configs/paper/gsm8k.yaml"),
+                Path("/tmp/gsm8k-source"),
+                Path("/tmp/gsm8k-output"),
+            )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(materialize.call_args.args[1:], (Path("/tmp/gsm8k-source"), Path("/tmp/gsm8k-output")))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from text_feedback_dpo.searchqa import convert_original_searchqa_row
+
 
 def convert_gsm8k_row(row: dict[str, Any], *, index: int) -> dict[str, Any]:
     answer = str(row.get("answer", ""))
@@ -22,6 +24,8 @@ def convert_gsm8k_row(row: dict[str, Any], *, index: int) -> dict[str, Any]:
 
 
 def convert_searchqa_row(row: dict[str, Any], *, index: int) -> dict[str, Any]:
+    if "search_results" in row:
+        return convert_original_searchqa_row(row, split="unknown", index=index)
     answers = row.get("answers")
     if not isinstance(answers, list) or not answers or not str(answers[0]).strip():
         raise ValueError(f"SearchQA row {index} has no answer")
@@ -34,7 +38,7 @@ def convert_searchqa_row(row: dict[str, Any], *, index: int) -> dict[str, Any]:
         "problem": str(row["question"]),
         "gold_answer": str(answers[0]).strip(),
         "evidence": [context[:6000]],
-        "source": "lucadiliello/searchqa",
+        "source": "nyu-dl/SearchQA",
     }
 
 

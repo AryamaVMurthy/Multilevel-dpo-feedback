@@ -13,6 +13,7 @@ from text_feedback_dpo.evaluators import (
     make_model_evaluator,
     make_model_guidance_guard,
 )
+from text_feedback_dpo.dataset_manifests import materialize_paper_dataset
 from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
@@ -646,6 +647,12 @@ def run_validate_paper_config(config_path: Path) -> dict[str, object]:
     }
 
 
+def run_materialize_dataset(config_path: Path, source_path: Path, output_dir: Path) -> dict[str, object]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    return materialize_paper_dataset(config, source_path, output_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -672,6 +679,10 @@ def main() -> None:
     validate.add_argument("--output-dir", required=True, type=Path)
     paper_config = subparsers.add_parser("validate-paper-config")
     paper_config.add_argument("--config", required=True, type=Path)
+    materialize = subparsers.add_parser("materialize-dataset")
+    materialize.add_argument("--config", required=True, type=Path)
+    materialize.add_argument("--source-path", required=True, type=Path)
+    materialize.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -704,6 +715,8 @@ def main() -> None:
         result = validate_run(args.output_dir)
     elif args.command == "validate-paper-config":
         result = run_validate_paper_config(args.config)
+    elif args.command == "materialize-dataset":
+        result = run_materialize_dataset(args.config, args.source_path, args.output_dir)
     else:
         raise SystemExit(f"unknown command: {args.command}")
     print(json.dumps(result, sort_keys=True))

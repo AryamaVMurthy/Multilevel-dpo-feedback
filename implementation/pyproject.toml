@@ -12,6 +12,7 @@ dependencies = [
   "torch",
   "transformers",
   "trl",
+  "zstandard",
 ]
 
 [project.optional-dependencies]
