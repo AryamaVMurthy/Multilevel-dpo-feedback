@@ -140,9 +140,9 @@ def split_gsm8k_validation_roles(
 def _math_stratum(row: Mapping[str, Any]) -> str:
     subject = str(row.get("source_subject", "")).strip()
     level = row.get("difficulty_level")
-    if not subject or isinstance(level, bool) or not isinstance(level, int):
+    if not subject or isinstance(level, bool) or (level is not None and not isinstance(level, int)):
         raise ValueError("MATH row is missing subject or difficulty level")
-    return f"math:{subject}:level{level}"
+    return f"math:{subject}:level{level if level is not None else 'unknown'}"
 
 
 def _hash_order(rows: Iterable[dict[str, Any]], *, seed: int, salt: str) -> list[dict[str, Any]]:

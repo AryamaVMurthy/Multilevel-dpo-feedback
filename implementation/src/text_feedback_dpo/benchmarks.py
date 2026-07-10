@@ -92,7 +92,7 @@ def convert_math_row(
     if isinstance(level, str):
         match = re.fullmatch(r"Level\s+([1-5])", level.strip(), flags=re.IGNORECASE)
         level = int(match.group(1)) if match is not None else None
-    if isinstance(level, bool) or not isinstance(level, int) or level not in {1, 2, 3, 4, 5}:
+    if isinstance(level, bool) or (level is not None and (not isinstance(level, int) or level not in {1, 2, 3, 4, 5})):
         raise ValueError(f"MATH {subject}:{source_split}:{index} has invalid level")
     declared_subject = re.sub(r"[\s-]+", "_", str(row.get("type", subject)).strip().casefold())
     declared_subject = {"counting_&_probability": "counting_and_probability"}.get(
