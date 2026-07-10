@@ -17,6 +17,18 @@ REQUIRED_ARTIFACTS = (
     "metrics.json",
 )
 
+NATIVE_REQUIRED_ARTIFACTS = (
+    "events.jsonl",
+    "examples.jsonl",
+    "attempts.jsonl",
+    "guidance.jsonl",
+    "generation_events.jsonl",
+    "pairs.jsonl",
+    "response_sft.jsonl",
+    "failures.jsonl",
+    "metrics.json",
+)
+
 
 def _read_metrics(path: Path) -> dict:
     try:
@@ -42,8 +54,69 @@ def _write_validation(path: Path, payload: dict) -> None:
     )
 
 
+def validate_native_run(output_dir: Path) -> dict:
+    output_dir = output_dir.resolve()
+    missing = [name for name in NATIVE_REQUIRED_ARTIFACTS if not (output_dir / name).is_file()]
+    if missing:
+        raise ValueError(f"missing required native run artifacts: {', '.join(missing)}")
+    metrics = _read_metrics(output_dir / "metrics.json")
+    run_id = metrics.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("metrics.json is missing run_id")
+    logger = JsonlLogger(output_dir / "events.jsonl", run_id=run_id)
+    try:
+        if metrics.get("method") != "native_iterative_guidance_dpo":
+            raise ValueError("native run metrics has unexpected method")
+        examples = read_jsonl(output_dir / "examples.jsonl")
+        attempts = read_jsonl(output_dir / "attempts.jsonl")
+        pairs = read_jsonl(output_dir / "pairs.jsonl")
+        if not examples:
+            raise ValueError("examples.jsonl is empty")
+        example_ids = {str(row.get("id")) for row in examples}
+        if len(example_ids) != len(examples) or "None" in example_ids:
+            raise ValueError("examples.jsonl has missing or duplicate ids")
+        if any(str(row.get("id")) not in example_ids for row in attempts):
+            raise ValueError("attempts.jsonl contains an unknown example id")
+        if len(pairs) != metrics.get("accepted_pairs"):
+            raise ValueError("pairs.jsonl count does not match accepted_pairs")
+        if not isinstance(metrics.get("accepted_pairs"), int) or metrics["accepted_pairs"] <= 0:
+            raise ValueError("accepted_pairs must be positive for real native validation")
+        for pair in pairs:
+            prompt = str(pair.get("prompt", ""))
+            if not prompt or "gold answer" in prompt.lower() or "teacher guidance" in prompt.lower():
+                raise ValueError("native pair prompt leaks privileged collection context")
+            if not pair.get("chosen") or not pair.get("rejected"):
+                raise ValueError("native pair is missing chosen or rejected rollout")
+        events = read_jsonl(output_dir / "events.jsonl")
+        event_names = {event.get("event_name") for event in events}
+        if "run_start" not in event_names or "run_end" not in event_names:
+            raise ValueError("events.jsonl must include run_start and run_end")
+        if not list(output_dir.glob("gpu-*.csv")):
+            raise ValueError("missing GPU telemetry CSV")
+        result = {
+            "valid": True,
+            "schema": "native_iterative_guidance",
+            "run_id": run_id,
+            "accepted_pairs": metrics["accepted_pairs"],
+            "examples_total": len(examples),
+            "attempts_total": len(attempts),
+        }
+        _write_validation(output_dir, result)
+        logger.event("validation_complete", stage="validate_native_run", **result)
+        return result
+    except Exception as exc:
+        logger.failure(
+            stage="validate_native_run",
+            error_code="native_run_artifact_validation_failed",
+            message=str(exc),
+        )
+        raise
+
+
 def validate_run(output_dir: Path) -> dict:
     output_dir = output_dir.resolve()
+    if (output_dir / "attempts.jsonl").is_file():
+        return validate_native_run(output_dir)
     missing = [name for name in REQUIRED_ARTIFACTS if not (output_dir / name).is_file()]
     if missing:
         raise ValueError(f"missing required run artifacts: {', '.join(missing)}")

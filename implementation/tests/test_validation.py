@@ -10,6 +10,43 @@ from text_feedback_dpo.validation import validate_run
 
 
 class RunValidationTest(unittest.TestCase):
+    def _write_valid_native_run(self, output: Path) -> None:
+        output.mkdir(parents=True)
+        (output / "events.jsonl").write_text(
+            json.dumps({"event_name": "run_start", "run_id": "native-1"}) + "\n"
+            + json.dumps({"event_name": "run_end", "run_id": "native-1"})
+            + "\n",
+            encoding="utf-8",
+        )
+        (output / "metrics.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "native-1",
+                    "method": "native_iterative_guidance_dpo",
+                    "student_model": "Qwen/Qwen3.5-2B",
+                    "teacher_model": "Qwen/Qwen3.5-9B",
+                    "accepted_pairs": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        example = {"id": "m1", "domain": "math", "problem": "2+2", "gold_answer": "4"}
+        attempt = {"id": "m1", "attempt": 0, "response": "5", "result": {"correct": False}}
+        pair = {"id": "m1", "prompt": "2+2", "chosen": "4", "rejected": "5", "metadata": {}}
+        for name, rows in {
+            "examples.jsonl": [example],
+            "attempts.jsonl": [attempt],
+            "guidance.jsonl": [],
+            "generation_events.jsonl": [],
+            "pairs.jsonl": [pair],
+            "response_sft.jsonl": [],
+            "failures.jsonl": [],
+        }.items():
+            (output / name).write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+            )
+        (output / "gpu-1.csv").write_text("timestamp,memory.used\n", encoding="utf-8")
+
     def _write_valid_run(self, output: Path) -> None:
         output.mkdir(parents=True)
         (output / "events.jsonl").write_text(
@@ -112,6 +149,16 @@ class RunValidationTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((output / "validation.json").exists())
+
+    def test_valid_native_run_writes_validation_summary(self):
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / "run"
+            self._write_valid_native_run(output)
+
+            result = validate_run(output)
+
+            self.assertTrue(result["valid"])
+            self.assertEqual(result["schema"], "native_iterative_guidance")
 
 
 if __name__ == "__main__":
