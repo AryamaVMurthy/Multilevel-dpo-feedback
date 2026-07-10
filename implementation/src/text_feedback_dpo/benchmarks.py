@@ -6,6 +6,41 @@ from typing import Any
 from text_feedback_dpo.searchqa import convert_original_searchqa_row
 
 
+MATH_SUBJECTS = (
+    "algebra",
+    "counting_and_probability",
+    "geometry",
+    "intermediate_algebra",
+    "number_theory",
+    "prealgebra",
+    "precalculus",
+)
+
+
+def extract_math_boxed_answer(solution: str) -> str:
+    """Extract the final balanced ``\\boxed{...}`` answer from an official MATH solution."""
+
+    text = str(solution)
+    marker = "\\boxed{"
+    start = text.rfind(marker)
+    if start < 0:
+        raise ValueError("MATH solution has no boxed final answer")
+    index = start + len(marker)
+    depth = 1
+    for end in range(index, len(text)):
+        character = text[end]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                answer = text[index:end].strip()
+                if not answer:
+                    raise ValueError("MATH solution has an empty boxed final answer")
+                return answer
+    raise ValueError("MATH solution has an unbalanced boxed final answer")
+
+
 def convert_gsm8k_row(row: dict[str, Any], *, index: int) -> dict[str, Any]:
     answer = str(row.get("answer", ""))
     marker = "####"
@@ -20,6 +55,49 @@ def convert_gsm8k_row(row: dict[str, Any], *, index: int) -> dict[str, Any]:
         "problem": str(row["question"]),
         "gold_answer": gold_answer,
         "source": "openai/gsm8k",
+    }
+
+
+def convert_math_row(
+    row: dict[str, Any],
+    *,
+    subject: str,
+    source_split: str,
+    index: int,
+) -> dict[str, Any]:
+    """Normalize one official MATH row while retaining extraction provenance."""
+
+    if subject not in MATH_SUBJECTS:
+        raise ValueError(f"unsupported MATH subject: {subject}")
+    problem = str(row.get("problem", "")).strip()
+    solution = str(row.get("solution", "")).strip()
+    if not problem:
+        raise ValueError(f"MATH {subject}:{source_split}:{index} has an empty problem")
+    if not solution:
+        raise ValueError(f"MATH {subject}:{source_split}:{index} has an empty solution")
+    level = row.get("level")
+    if isinstance(level, bool) or not isinstance(level, int) or level not in {1, 2, 3, 4, 5}:
+        raise ValueError(f"MATH {subject}:{source_split}:{index} has invalid level")
+    declared_subject = str(row.get("type", subject)).strip()
+    if declared_subject and declared_subject != subject:
+        raise ValueError(
+            f"MATH {subject}:{source_split}:{index} declares mismatched subject {declared_subject!r}"
+        )
+    gold_answer = extract_math_boxed_answer(solution)
+    return {
+        "id": f"math-{subject}-{source_split}-{index}",
+        "domain": "math",
+        "problem": problem,
+        "gold_answer": gold_answer,
+        "reference_solution": solution,
+        "source": "EleutherAI/hendrycks_math",
+        "source_subject": subject,
+        "difficulty_level": level,
+        "gold_answer_extraction": {
+            "method": "last_balanced_boxed",
+            "source_field": "solution",
+            "source_value": gold_answer,
+        },
     }
 
 
@@ -65,6 +143,17 @@ def load_benchmark_examples(specs: Iterable[dict[str, Any]]) -> list[dict[str, A
                 break
             if name == "openai/gsm8k":
                 examples.append(convert_gsm8k_row(row, index=len(examples)))
+            elif name == "EleutherAI/hendrycks_math":
+                if not config_name:
+                    raise ValueError("MATH benchmark loading requires one official subject config")
+                examples.append(
+                    convert_math_row(
+                        dict(row),
+                        subject=str(config_name),
+                        source_split=split,
+                        index=len(examples),
+                    )
+                )
             elif name == "lucadiliello/searchqa":
                 examples.append(convert_searchqa_row(row, index=len(examples)))
             else:

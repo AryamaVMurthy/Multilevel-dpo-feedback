@@ -1,6 +1,11 @@
 import unittest
 
-from text_feedback_dpo.answer_evaluation import evaluate_gsm8k_answer, evaluate_searchqa_answer
+from text_feedback_dpo.answer_evaluation import (
+    evaluate_domain_answer,
+    evaluate_gsm8k_answer,
+    evaluate_math_answer,
+    evaluate_searchqa_answer,
+)
 
 
 class AnswerEvaluationTest(unittest.TestCase):
@@ -57,6 +62,41 @@ class AnswerEvaluationTest(unittest.TestCase):
         self.assertTrue(ambiguous["requires_model_judgment"])
         self.assertFalse(unsupported["correct"])
         self.assertFalse(unsupported["evidence_supported"])
+
+    def test_math_accepts_rational_decimal_and_simple_algebraic_equivalence(self):
+        for prediction, gold in (
+            ("\\frac{1}{2}", "0.5"),
+            ("\\boxed{(x+1)^2}", "x^2+2*x+1"),
+            ("2*(a+b)", "2*a+2*b"),
+        ):
+            result = evaluate_math_answer(prediction, gold)
+            self.assertTrue(result["correct"], result)
+            self.assertEqual(result["evaluator_source"], "deterministic_math")
+
+    def test_math_accepts_set_interval_and_unit_equivalence(self):
+        cases = (
+            ("\\{2, \\frac{1}{2}\\}", "{0.5, 2}"),
+            ("(0, \\frac{1}{2}]", "(0, 0.5]"),
+            ("200 \\text{minutes}", "200 minutes"),
+        )
+        for prediction, gold in cases:
+            result = evaluate_math_answer(prediction, gold)
+            self.assertTrue(result["correct"], result)
+
+    def test_math_routes_ambiguous_or_unsupported_forms_to_model_judgment(self):
+        for prediction, gold in (("1 or 2", "1"), ("a proof", "1"), ("2 cm", "2 meters")):
+            result = evaluate_math_answer(prediction, gold)
+            self.assertFalse(result["correct"])
+            self.assertTrue(result["requires_model_judgment"])
+
+    def test_domain_dispatch_uses_math_evaluator_only_for_official_math_rows(self):
+        result = evaluate_domain_answer(
+            domain="math",
+            prediction="\\frac{1}{2}",
+            example={"source": "EleutherAI/hendrycks_math", "gold_answer": "0.5"},
+        )
+        self.assertTrue(result["correct"])
+        self.assertEqual(result["evaluator_source"], "deterministic_math")
 
 
 if __name__ == "__main__":

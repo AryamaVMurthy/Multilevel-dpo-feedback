@@ -71,6 +71,29 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.splits, {"train": 5000, "validation": 1000, "test": 2000})
         self.assertEqual(config.dataset.auxiliary_hparam, {"train": 2000, "validation": 500})
 
+    def test_math_config_pins_all_subjects_and_derives_primary_split_counts(self):
+        config = load_paper_experiment(Path("configs/paper/math.yaml"))
+
+        self.assertEqual(config.dataset.source, "EleutherAI/hendrycks_math")
+        self.assertEqual(config.dataset.revision, "21a5633873b6a120296cce3e2df9d5550074f4a3")
+        self.assertEqual(config.dataset.source_counts, {"train": 7500, "validation": 0, "test": 5000})
+        self.assertEqual(config.dataset.splits, {"train": 0, "validation": 0, "test": 5000})
+        self.assertEqual(config.dataset.primary_levels, (4, 5))
+        self.assertEqual(config.dataset.train_fraction, 0.9)
+        self.assertEqual(config.dataset.validation_tune_fraction, 2 / 3)
+        self.assertEqual(len(config.dataset.subjects), 7)
+
+    def test_math_config_rejects_noncanonical_subject_order_or_primary_levels(self):
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["dataset"]["subjects"] = list(reversed(value["dataset"]["subjects"]))
+        with self.assertRaisesRegex(ValueError, "official MATH subjects"):
+            self._write_and_load(value)
+
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["dataset"]["primary_levels"] = [3, 4]
+        with self.assertRaisesRegex(ValueError, "primary_levels"):
+            self._write_and_load(value)
+
     def test_unknown_nested_optimizer_key_fails_with_field_path(self):
         value = self._load_mapping("configs/paper/gsm8k.yaml")
         value["optimizer"]["silent_magic"] = True

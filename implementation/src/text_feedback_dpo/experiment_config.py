@@ -7,6 +7,15 @@ from typing import Any, Mapping
 
 
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_MATH_SUBJECTS = (
+    "algebra",
+    "counting_and_probability",
+    "geometry",
+    "intermediate_algebra",
+    "number_theory",
+    "prealgebra",
+    "precalculus",
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +29,10 @@ class DatasetConfig:
     validation_roles: dict[str, int]
     auxiliary_hparam: dict[str, int]
     seed: int
+    subjects: tuple[str, ...] = ()
+    primary_levels: tuple[int, ...] = ()
+    train_fraction: float | None = None
+    validation_tune_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -185,7 +198,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def _parse_dataset(value: object) -> DatasetConfig:
     path = "dataset"
     mapping = _mapping(value, path)
-    required = {
+    base_required = {
         "name",
         "config",
         "source",
@@ -196,6 +209,12 @@ def _parse_dataset(value: object) -> DatasetConfig:
         "auxiliary_hparam",
         "seed",
     }
+    name = str(mapping.get("name", ""))
+    required = base_required | (
+        {"subjects", "primary_levels", "train_fraction", "validation_tune_fraction"}
+        if name == "math"
+        else set()
+    )
     _strict_keys(mapping, path, required)
     revision = mapping["revision"]
     if not isinstance(revision, str) or not _SHA_PATTERN.fullmatch(revision):
@@ -206,7 +225,10 @@ def _parse_dataset(value: object) -> DatasetConfig:
     splits = _count_mapping(mapping["splits"], "dataset.splits", {"train", "validation", "test"})
     validation_roles = _mapping(mapping["validation_roles"], "dataset.validation_roles")
     auxiliary_hparam = _mapping(mapping["auxiliary_hparam"], "dataset.auxiliary_hparam")
-    name = str(mapping["name"])
+    subjects: tuple[str, ...] = ()
+    primary_levels: tuple[int, ...] = ()
+    train_fraction: float | None = None
+    validation_tune_fraction: float | None = None
     if name == "gsm8k":
         validation_roles = _count_mapping(
             validation_roles, "dataset.validation_roles", {"tune", "confirm"}
@@ -236,8 +258,31 @@ def _parse_dataset(value: object) -> DatasetConfig:
                 raise ValueError(
                     f"dataset.auxiliary_hparam.{split} exceeds unused official {split} rows"
                 )
+    elif name == "math":
+        if mapping["source"] != "EleutherAI/hendrycks_math":
+            raise ValueError("MATH paper config must use the pinned EleutherAI/hendrycks_math mirror")
+        if mapping["config"] != "all_subjects":
+            raise ValueError("MATH paper config must materialize all official subject configurations")
+        subjects = _string_tuple(mapping["subjects"], "dataset.subjects")
+        if subjects != _MATH_SUBJECTS:
+            raise ValueError("dataset.subjects must list the seven official MATH subjects in canonical order")
+        primary_levels = _int_tuple(mapping["primary_levels"], "dataset.primary_levels")
+        if primary_levels != (4, 5):
+            raise ValueError("dataset.primary_levels must be exactly [4, 5]")
+        train_fraction = _number(mapping["train_fraction"], "dataset.train_fraction")
+        validation_tune_fraction = _number(
+            mapping["validation_tune_fraction"], "dataset.validation_tune_fraction"
+        )
+        if train_fraction != 0.9 or validation_tune_fraction != 2 / 3:
+            raise ValueError("MATH split fractions must be train=0.9 and validation_tune=2/3")
+        if source_counts != {"test": 5000, "train": 7500, "validation": 0}:
+            raise ValueError("MATH source counts must be the official 7,500 train / 5,000 test release")
+        if splits != {"test": 5000, "train": 0, "validation": 0}:
+            raise ValueError("MATH Levels 4-5 train/validation counts must be derived during materialization")
+        if validation_roles or auxiliary_hparam:
+            raise ValueError("MATH validation roles and auxiliary pools must be derived during materialization")
     else:
-        raise ValueError("dataset.name must be gsm8k or searchqa8k")
+        raise ValueError("dataset.name must be gsm8k, math, or searchqa8k")
     return DatasetConfig(
         name=name,
         config=str(mapping["config"]),
@@ -248,6 +293,10 @@ def _parse_dataset(value: object) -> DatasetConfig:
         validation_roles=dict(validation_roles),
         auxiliary_hparam=dict(auxiliary_hparam),
         seed=_positive_int(mapping["seed"], "dataset.seed"),
+        subjects=subjects,
+        primary_levels=primary_levels,
+        train_fraction=train_fraction,
+        validation_tune_fraction=validation_tune_fraction,
     )
 
 

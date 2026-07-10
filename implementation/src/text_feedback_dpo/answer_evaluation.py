@@ -17,6 +17,9 @@ _NUMBER_RE = re.compile(
     r"(?<![A-Za-z0-9_])[-+]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?%?(?![A-Za-z0-9_])"
 )
 _ALTERNATIVE_RE = re.compile(r"\b(?:or|and/or)\b", re.IGNORECASE)
+_MATH_SAFE_RE = re.compile(r"^[0-9A-Za-z\s+\-*/^=().,\[\]{}]+$")
+_MATH_UNIT_RE = re.compile(r"^(.*?)(?:\s+|\\\\text\{)([A-Za-z]+)\}?$")
+_MATH_INTERVAL_RE = re.compile(r"^([\[(])(.+),(.+)([\])])$")
 
 
 def _require_text(value: Any, field: str) -> str:
@@ -89,6 +92,179 @@ def evaluate_gsm8k_answer(prediction: str, gold_answer: str) -> dict[str, Any]:
         values=_numeric_values(prediction),
         gold_values=_numeric_values(gold_answer),
     )
+
+
+def _last_boxed(value: str) -> str:
+    marker = "\\boxed{"
+    start = value.rfind(marker)
+    if start < 0:
+        return value.strip()
+    index = start + len(marker)
+    depth = 1
+    for end in range(index, len(value)):
+        if value[end] == "{":
+            depth += 1
+        elif value[end] == "}":
+            depth -= 1
+            if depth == 0:
+                return value[index:end].strip()
+    raise ValueError("unbalanced boxed MATH answer")
+
+
+def _latex_math(value: str) -> str:
+    value = _last_boxed(value).strip()
+    value = value.replace("\\left", "").replace("\\right", "")
+    value = value.replace("\\cdot", "*").replace("\\times", "*")
+    value = value.replace("\\pi", "pi")
+    value = value.replace("\\infty", "oo")
+    value = value.replace("\\{", "{").replace("\\}", "}")
+    value = re.sub(r"\\text\{([^{}]+)\}", r" \1", value)
+    fraction = re.compile(r"\\frac\{([^{}]+)\}\{([^{}]+)\}")
+    square_root = re.compile(r"\\sqrt\{([^{}]+)\}")
+    previous = None
+    while value != previous:
+        previous = value
+        value = fraction.sub(r"(\1)/(\2)", value)
+        value = square_root.sub(r"sqrt(\1)", value)
+    value = value.replace("{", "(").replace("}", ")")
+    value = value.replace("^", "**")
+    return " ".join(value.split())
+
+
+def _sympy_expression(value: str) -> Any | None:
+    normalized = _latex_math(value)
+    if not normalized or "__" in normalized or not _MATH_SAFE_RE.fullmatch(normalized):
+        return None
+    try:
+        import sympy
+    except ImportError as exc:
+        raise ImportError("sympy is required for deterministic MATH answer evaluation") from exc
+    symbols = {letter: sympy.Symbol(letter) for letter in "abcdefghijklmnopqrstuvwxyz"}
+    locals_map = {**symbols, "pi": sympy.pi, "oo": sympy.oo, "sqrt": sympy.sqrt}
+    try:
+        return sympy.sympify(normalized, locals=locals_map, evaluate=True)
+    except (sympy.SympifyError, TypeError, ValueError, SyntaxError):
+        return None
+
+
+def _unit_parts(value: str) -> tuple[str, str | None]:
+    normalized = _latex_math(value)
+    match = _MATH_UNIT_RE.fullmatch(normalized)
+    if match is None:
+        return normalized, None
+    expression, unit = match.groups()
+    expression = expression.strip()
+    if not expression or not any(character.isdigit() for character in expression):
+        return normalized, None
+    return expression, unit.casefold()
+
+
+def _math_interval(value: str) -> tuple[str, Any, Any, str] | None:
+    normalized = _latex_math(value).replace(" ", "")
+    match = _MATH_INTERVAL_RE.fullmatch(normalized)
+    if match is None:
+        return None
+    left, start, end, right = match.groups()
+    start_expression = _sympy_expression(start)
+    end_expression = _sympy_expression(end)
+    if start_expression is None or end_expression is None:
+        return None
+    try:
+        import sympy
+    except ImportError as exc:
+        raise ImportError("sympy is required for deterministic MATH answer evaluation") from exc
+    return left, sympy.nsimplify(start_expression, rational=True), sympy.nsimplify(end_expression, rational=True), right
+
+
+def _math_set(value: str) -> set[str] | None:
+    raw = _last_boxed(value).strip()
+    if raw.startswith("\\{") and raw.endswith("\\}"):
+        contents = raw[2:-2]
+    elif raw.startswith("{") and raw.endswith("}"):
+        contents = raw[1:-1]
+    else:
+        return None
+    if "," not in contents:
+        return None
+    values = [part.strip() for part in contents.split(",")]
+    if not all(values):
+        return None
+    canonical: set[str] = set()
+    for item in values:
+        expression = _sympy_expression(item)
+        if expression is None:
+            return None
+        try:
+            import sympy
+        except ImportError as exc:
+            raise ImportError("sympy is required for deterministic MATH answer evaluation") from exc
+        canonical.add(str(sympy.nsimplify(expression, rational=True)))
+    return canonical
+
+
+def evaluate_math_answer(prediction: str, gold_answer: str) -> dict[str, Any]:
+    """Evaluate safe numeric, symbolic, set, interval, and unit MATH answers.
+
+    Unsupported or ambiguous formats deliberately route to the model evaluator instead of
+    being heuristically accepted as correct.
+    """
+
+    prediction = _require_text(prediction, "prediction")
+    gold_answer = _require_text(gold_answer, "gold_answer")
+    base: dict[str, Any] = {
+        "evaluator_source": "deterministic_math",
+        "extracted_answer": prediction,
+        "gold_answer": gold_answer,
+        "correct": False,
+        "confidence": 0.0,
+        "ambiguous": False,
+        "requires_model_judgment": False,
+        "error_code": None,
+    }
+    if _ALTERNATIVE_RE.search(prediction) or _ALTERNATIVE_RE.search(gold_answer):
+        return {
+            **base,
+            "ambiguous": True,
+            "requires_model_judgment": True,
+            "confidence": 0.5,
+            "error_code": "alternative_answer",
+        }
+    prediction_set = _math_set(prediction)
+    gold_set = _math_set(gold_answer)
+    if prediction_set is not None or gold_set is not None:
+        if prediction_set is None or gold_set is None:
+            return {**base, "requires_model_judgment": True, "confidence": 0.5, "error_code": "set_parse_failure"}
+        correct = prediction_set == gold_set
+        return {**base, "correct": correct, "confidence": 1.0 if correct else 0.0, "normalized_prediction": sorted(prediction_set), "normalized_gold": sorted(gold_set)}
+    prediction_interval = _math_interval(prediction)
+    gold_interval = _math_interval(gold_answer)
+    if prediction_interval is not None or gold_interval is not None:
+        if prediction_interval is None or gold_interval is None:
+            return {**base, "requires_model_judgment": True, "confidence": 0.5, "error_code": "interval_parse_failure"}
+        correct = prediction_interval == gold_interval
+        return {**base, "correct": correct, "confidence": 1.0 if correct else 0.0, "normalized_prediction": str(prediction_interval), "normalized_gold": str(gold_interval)}
+    prediction_expression, prediction_unit = _unit_parts(prediction)
+    gold_expression, gold_unit = _unit_parts(gold_answer)
+    if prediction_unit != gold_unit:
+        return {**base, "requires_model_judgment": True, "confidence": 0.5, "error_code": "unit_mismatch_or_ambiguity"}
+    left = _sympy_expression(prediction_expression)
+    right = _sympy_expression(gold_expression)
+    if left is None or right is None:
+        return {**base, "requires_model_judgment": True, "confidence": 0.5, "error_code": "symbolic_parse_failure"}
+    try:
+        import sympy
+
+        correct = bool(sympy.simplify(left - right) == 0)
+    except (TypeError, ValueError):
+        return {**base, "requires_model_judgment": True, "confidence": 0.5, "error_code": "symbolic_comparison_failure"}
+    return {
+        **base,
+        "correct": correct,
+        "confidence": 1.0 if correct else 0.0,
+        "normalized_prediction": str(left),
+        "normalized_gold": str(right),
+        "unit": prediction_unit,
+    }
 
 
 def _normalize_search_text(value: str) -> str:
@@ -190,6 +366,8 @@ def evaluate_domain_answer(
     """Dispatch answer-only evaluation for native and model-backed evaluator paths."""
 
     if domain == "math":
+        if example.get("source") == "EleutherAI/hendrycks_math" or "source_subject" in example:
+            return evaluate_math_answer(prediction, str(example["gold_answer"]))
         return evaluate_gsm8k_answer(prediction, str(example["gold_answer"]))
     if domain == "search_qa":
         result = evaluate_searchqa_answer(

@@ -9,6 +9,7 @@ dependencies = [
   "jinja2",
   "peft",
   "pyyaml",
+  "sympy",
   "torch",
   "transformers",
   "trl",

@@ -137,6 +137,87 @@ def split_gsm8k_validation_roles(
     return {"tune": tune, "confirm": confirm}
 
 
+def _math_stratum(row: Mapping[str, Any]) -> str:
+    subject = str(row.get("source_subject", "")).strip()
+    level = row.get("difficulty_level")
+    if not subject or isinstance(level, bool) or not isinstance(level, int):
+        raise ValueError("MATH row is missing subject or difficulty level")
+    return f"math:{subject}:level{level}"
+
+
+def _hash_order(rows: Iterable[dict[str, Any]], *, seed: int, salt: str) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: hashlib.sha256(
+            f"{seed}:{salt}:{row['row_hash']}".encode("utf-8")
+        ).hexdigest(),
+    )
+
+
+def split_math_train(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    seed: int,
+    primary_levels: tuple[int, ...] = (4, 5),
+) -> dict[str, list[dict[str, Any]]]:
+    """Create deterministic 90/10 train/validation roles within MATH subject-level strata."""
+
+    raw_rows = list(rows)
+    if not raw_rows:
+        raise ValueError("MATH source train must not be empty")
+    if primary_levels != (4, 5):
+        raise ValueError("MATH primary levels must be exactly (4, 5)")
+    annotated = [_annotate(row, source_split="train", source_index=index) for index, row in enumerate(raw_rows)]
+    primary = [row for row in annotated if int(row.get("difficulty_level", 0)) in primary_levels]
+    if not primary:
+        raise ValueError("MATH source train has no Levels 4-5 rows")
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in primary:
+        groups[_math_stratum(row)].append(row)
+    train_rows: list[dict[str, Any]] = []
+    validation_rows: list[dict[str, Any]] = []
+    for stratum in sorted(groups):
+        ordered = _hash_order(groups[stratum], seed=seed, salt=f"math:validation:{stratum}")
+        if len(ordered) < 2:
+            raise ValueError(f"MATH stratum {stratum} has fewer than two rows")
+        validation_count = min(len(ordered) - 1, max(1, round(len(ordered) * 0.10)))
+        validation_keys = {row["source_key"] for row in ordered[:validation_count]}
+        for row in sorted(ordered, key=lambda item: int(item["source_index"])):
+            role = "validation" if row["source_key"] in validation_keys else "train"
+            item = {**row, "dataset_role": role, "stratum": stratum}
+            (validation_rows if role == "validation" else train_rows).append(item)
+    return {"train": train_rows, "validation": validation_rows}
+
+
+def split_math_validation_roles(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    seed: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Partition every primary MATH validation stratum into two-thirds tune / one-third confirm."""
+
+    raw_rows = [dict(row) for row in rows]
+    if not raw_rows:
+        raise ValueError("MATH validation rows must not be empty")
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in raw_rows:
+        if row.get("dataset_role") != "validation" or not row.get("source_key") or not row.get("row_hash"):
+            raise ValueError("MATH validation rows must be annotated validation rows")
+        groups[_math_stratum(row)].append(row)
+    tune: list[dict[str, Any]] = []
+    confirm: list[dict[str, Any]] = []
+    for stratum in sorted(groups):
+        ordered = _hash_order(groups[stratum], seed=seed, salt=f"math:tune:{stratum}")
+        if len(ordered) < 2:
+            raise ValueError(f"MATH validation stratum {stratum} has fewer than two rows")
+        tune_count = min(len(ordered) - 1, max(1, round(len(ordered) * (2 / 3))))
+        tune_keys = {row["source_key"] for row in ordered[:tune_count]}
+        for row in sorted(ordered, key=lambda item: int(item["source_index"])):
+            item = {**row, "dataset_role": "validation_tune" if row["source_key"] in tune_keys else "validation_confirm"}
+            (tune if item["dataset_role"] == "validation_tune" else confirm).append(item)
+    return {"tune": tune, "confirm": confirm}
+
+
 def _answer_text(row: Mapping[str, Any]) -> str:
     answers = row.get("answers")
     if isinstance(answers, list) and answers:
@@ -472,6 +553,57 @@ def materialize_paper_dataset(config: Any, source_path: Any, output_dir: Any) ->
             "revision": dataset.revision,
             "source_artifact_sha256": loaded["artifact_sha256"],
             "seed": dataset.seed,
+        }
+    elif dataset.name == "math":
+        if not source.is_dir():
+            raise ValueError("MATH materialization source must be a directory of official subject subdirectories")
+        from text_feedback_dpo.benchmarks import MATH_SUBJECTS, convert_math_row
+
+        if tuple(dataset.subjects) != MATH_SUBJECTS:
+            raise ValueError("MATH config subjects do not match the supported official snapshot")
+        raw_train: list[dict[str, Any]] = []
+        raw_test: list[dict[str, Any]] = []
+        for subject in MATH_SUBJECTS:
+            subject_dir = source / subject
+            if not subject_dir.is_dir():
+                raise ValueError(f"MATH source is missing subject directory: {subject}")
+            source_files = {
+                file.stem.lower(): file
+                for file in subject_dir.iterdir()
+                if file.suffix.lower() in {".json", ".jsonl"}
+            }
+            if set(source_files) != {"train", "test"}:
+                raise ValueError(f"MATH subject {subject} must contain exactly train and test JSON/JSONL files")
+            for index, row in enumerate(_read_json_rows(source_files["train"])):
+                raw_train.append(convert_math_row(row, subject=subject, source_split="train", index=index))
+            for index, row in enumerate(_read_json_rows(source_files["test"])):
+                raw_test.append(convert_math_row(row, subject=subject, source_split="test", index=index))
+        if len(raw_train) != dataset.source_counts["train"] or len(raw_test) != dataset.source_counts["test"]:
+            raise ValueError("MATH source counts do not match the frozen paper config")
+        split_rows = split_math_train(
+            raw_train,
+            seed=dataset.seed,
+            primary_levels=dataset.primary_levels,
+        )
+        split_rows["test"] = [
+            {
+                **_annotate(row, source_split="test", source_index=index),
+                "dataset_role": "test",
+                "stratum": _math_stratum(row),
+            }
+            for index, row in enumerate(raw_test)
+        ]
+        nested_roles = split_math_validation_roles(split_rows["validation"], seed=dataset.seed)
+        metadata = {
+            "dataset": dataset.name,
+            "source": dataset.source,
+            "revision": dataset.revision,
+            "source_artifact_sha256": _source_directory_sha256(source),
+            "seed": dataset.seed,
+            "subjects": list(dataset.subjects),
+            "primary_levels": list(dataset.primary_levels),
+            "train_fraction": dataset.train_fraction,
+            "validation_tune_fraction": dataset.validation_tune_fraction,
         }
     else:
         raise ValueError(f"unsupported paper dataset: {dataset.name}")
