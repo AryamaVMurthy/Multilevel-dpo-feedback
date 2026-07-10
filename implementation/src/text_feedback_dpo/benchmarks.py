@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import re
 from typing import Any
 
 from text_feedback_dpo.searchqa import convert_original_searchqa_row
