@@ -84,6 +84,8 @@ class DpoSearchConfig:
     effective_global_batch: int
     promote_counts: tuple[int, ...]
     tuning_seeds: tuple[int, ...]
+    loss_type: str
+    ld_alpha_values: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -459,6 +461,8 @@ def _parse_dpo_search(value: object) -> DpoSearchConfig:
         "effective_global_batch",
         "promote_counts",
         "tuning_seeds",
+        "loss_type",
+        "ld_alpha_values",
     }
     _strict_keys(mapping, "dpo_search", required)
     config = DpoSearchConfig(
@@ -471,9 +475,15 @@ def _parse_dpo_search(value: object) -> DpoSearchConfig:
         effective_global_batch=_positive_int(mapping["effective_global_batch"], "dpo_search.effective_global_batch"),
         promote_counts=_int_tuple(mapping["promote_counts"], "dpo_search.promote_counts"),
         tuning_seeds=_int_tuple(mapping["tuning_seeds"], "dpo_search.tuning_seeds"),
+        loss_type=str(mapping["loss_type"]),
+        ld_alpha_values=_number_tuple(mapping["ld_alpha_values"], "dpo_search.ld_alpha_values"),
     )
     if config.learning_rates != (2e-6, 5e-6, 1e-5) or config.betas != (0.05, 0.1, 0.3, 0.5):
         raise ValueError("dpo_search must contain the approved learning-rate and beta matrix")
+    if config.loss_type != "sigmoid_norm":
+        raise ValueError("dpo_search.loss_type must be sigmoid_norm for the primary LN-DPO objective")
+    if config.ld_alpha_values != (0.25, 0.5, 0.75):
+        raise ValueError("dpo_search.ld_alpha_values must be exactly [0.25, 0.5, 0.75]")
     return config
 
 

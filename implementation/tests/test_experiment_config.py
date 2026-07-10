@@ -129,6 +129,17 @@ class PaperExperimentConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*8192"):
             self._write_and_load(value)
 
+    def test_primary_dpo_objective_and_length_ablation_grid_are_frozen(self):
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["dpo_search"]["loss_type"] = "sigmoid"
+        with self.assertRaisesRegex(ValueError, "sigmoid_norm"):
+            self._write_and_load(value)
+
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["dpo_search"]["ld_alpha_values"] = [0.5]
+        with self.assertRaisesRegex(ValueError, "ld_alpha_values"):
+            self._write_and_load(value)
+
     def test_missing_role_generation_profile_fails_explicitly(self):
         value = self._load_mapping("configs/paper/gsm8k.yaml")
         del value["generation"]["guidance_critic"]

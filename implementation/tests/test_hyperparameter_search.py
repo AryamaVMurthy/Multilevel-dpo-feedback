@@ -28,7 +28,27 @@ class HyperparameterSearchTest(unittest.TestCase):
         self.assertEqual(len({candidate.candidate_id for candidate in dpo}), 12)
         self.assertEqual(len({candidate.candidate_id for candidate in grpo}), 12)
         self.assertEqual(dpo[0].scheduler, "cosine")
+        self.assertEqual(dpo[0].loss_type, "sigmoid_norm")
+        self.assertIsNone(dpo[0].ld_alpha)
         self.assertEqual(grpo[-1].kl_beta, 0.04)
+
+    def test_length_desensitized_candidates_are_labeled_and_reject_invalid_alpha(self):
+        candidates = build_dpo_candidates(
+            learning_rates=(5e-6,),
+            betas=(0.1,),
+            weight_decay=0.01,
+            warmup_fraction=0.05,
+            scheduler="cosine",
+            loss_type="sigmoid",
+            ld_alpha=0.5,
+        )
+        self.assertEqual(candidates[0].loss_type, "sigmoid")
+        self.assertEqual(candidates[0].ld_alpha, 0.5)
+        with self.assertRaisesRegex(ValueError, "ld_alpha"):
+            build_dpo_candidates(
+                learning_rates=(5e-6,), betas=(0.1,), weight_decay=0.01,
+                warmup_fraction=0.05, scheduler="cosine", loss_type="sigmoid", ld_alpha=1.0,
+            )
 
     def test_successive_halving_rejects_invalid_runs_and_freezes_without_overwrite(self):
         candidates = build_dpo_candidates(

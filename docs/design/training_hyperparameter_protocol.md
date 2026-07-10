@@ -3,7 +3,8 @@
 Status: approved and reverified against current official documentation on 2026-07-10
 
 This document is the canonical optimizer, LoRA coverage, hyperparameter search, and
-model-selection protocol for the paper-scale GSM8K and SearchQA-8K experiments. The
+model-selection protocol for the paper-scale MATH Levels 4-5 study and secondary
+SearchQA-8K experiment. GSM8K remains a preserved diagnostic only. The
 historical smoke-run constants in `implementation/src/text_feedback_dpo/training.py`
 are runtime checks only and are not approved paper settings.
 
@@ -141,7 +142,7 @@ the same candidate set, pilot examples, update budget, seed, and promotion rule.
 
 - learning rate: `2e-6`, `5e-6`, `1e-5`;
 - DPO beta: `0.05`, `0.1`, `0.3`, `0.5`;
-- loss: sigmoid DPO;
+- primary loss: `sigmoid_norm` length-normalized DPO;
 - maximum duration: one epoch;
 - effective global batch: 16 preference pairs.
 
@@ -152,6 +153,10 @@ the top two to full pilot data and two tuning seeds. Standard, multilevel, and m
 DPO receive independent but equal-budget selection. Also run one shared-profile seed
 for all three methods to isolate the preference-data effect from method-specific
 hyperparameter selection.
+
+Length-desensitized DPO is a separate, explicitly labeled `ld_dpo` ablation. It uses
+ordinary `sigmoid` loss with `ld_alpha` in `{0.25, 0.5, 0.75}` and is never combined
+with the primary `sigmoid_norm` objective.
 
 ### GRPO Candidates
 

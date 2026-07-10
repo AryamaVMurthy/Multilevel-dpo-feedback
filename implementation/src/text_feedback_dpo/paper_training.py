@@ -89,8 +89,8 @@ def train_paper_dpo(
     candidate: DpoCandidate,
     seed: int,
 ) -> dict[str, Any]:
-    if method not in {"standard_dpo", "multilevel_dpo", "matched_dpo"}:
-        raise ValueError("paper DPO method must be standard_dpo, multilevel_dpo, or matched_dpo")
+    if method not in {"standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo"}:
+        raise ValueError("paper DPO method must be standard_dpo, multilevel_dpo, matched_dpo, or ld_dpo")
     if not pairs:
         raise ValueError("paper DPO training requires non-empty preference pairs")
     _seed(seed)
@@ -102,6 +102,15 @@ def train_paper_dpo(
     output_dir.mkdir(parents=True, exist_ok=True)
     effective_batch = int(config.dpo_search.effective_global_batch)
     max_steps = max(1, (len(pairs) + effective_batch - 1) // effective_batch)
+    loss_type = str(config.dpo_search.loss_type)
+    ld_alpha: float | None = None
+    if method == "ld_dpo":
+        loss_type = "sigmoid"
+        ld_alpha = candidate.ld_alpha
+        if ld_alpha not in set(config.dpo_search.ld_alpha_values):
+            raise ValueError("ld_dpo candidate ld_alpha is not in the frozen config")
+    elif candidate.loss_type != loss_type or candidate.ld_alpha is not None:
+        raise ValueError("primary DPO candidate does not match the frozen sigmoid_norm objective")
     model, tokenizer = _load_student(config)
     coverage = discover_lora_coverage(
         model,
@@ -122,6 +131,8 @@ def train_paper_dpo(
             candidate=candidate,
             effective_global_batch=effective_batch,
             max_length=int(config.training["max_sequence_tokens"]),
+            loss_type=loss_type,
+            ld_alpha=ld_alpha,
         ),
         seed=seed,
     )
@@ -148,6 +159,8 @@ def train_paper_dpo(
         "seed": seed,
         "pairs": len(pairs),
         "max_steps": max_steps,
+        "loss_type": loss_type,
+        "ld_alpha": ld_alpha,
         "train_metrics": result.metrics,
         "history": trainer.state.log_history,
         "lora_coverage": {

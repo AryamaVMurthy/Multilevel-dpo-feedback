@@ -817,7 +817,22 @@ def _paper_candidates(config: Any, method: str) -> list[Any]:
             weight_decay=config.optimizer.weight_decay,
             warmup_fraction=config.optimizer.warmup_fraction,
             scheduler=config.optimizer.scheduler,
+            loss_type=config.dpo_search.loss_type,
         )
+    if method == "ld_dpo":
+        return [
+            candidate
+            for alpha in config.dpo_search.ld_alpha_values
+            for candidate in build_dpo_candidates(
+                learning_rates=config.dpo_search.learning_rates,
+                betas=config.dpo_search.betas,
+                weight_decay=config.optimizer.weight_decay,
+                warmup_fraction=config.optimizer.warmup_fraction,
+                scheduler=config.optimizer.scheduler,
+                loss_type="sigmoid",
+                ld_alpha=alpha,
+            )
+        ]
     if method in {"grpo", "dapo_sensitivity"}:
         return build_grpo_candidates(
             learning_rates=config.grpo_search.learning_rates,
@@ -878,6 +893,8 @@ def _candidate_from_ledger(ledger: dict[str, Any], candidate_id: str) -> Any:
             weight_decay=float(payload["weight_decay"]),
             warmup_fraction=float(payload["warmup_fraction"]),
             scheduler=str(payload["scheduler"]),
+            loss_type=str(payload.get("loss_type", "sigmoid_norm")),
+            ld_alpha=float(payload["ld_alpha"]) if payload.get("ld_alpha") is not None else None,
         )
     return GrpoCandidate(
         learning_rate=float(payload["learning_rate"]),
@@ -920,7 +937,7 @@ def _paper_examples_with_prompts(rows: list[dict[str, Any]]) -> list[dict[str, A
 
 
 def _selection_metric(config: Any, metrics: dict[str, Any]) -> float:
-    if config.dataset.name == "gsm8k":
+    if config.dataset.name in {"gsm8k", "math"}:
         return float(metrics["math"]["exact_accuracy"])
     return float(metrics["search_qa"]["exact_match"])
 
@@ -1274,7 +1291,7 @@ def main() -> None:
     preferences.add_argument("--seed", required=True, type=int)
     init_ledger = subparsers.add_parser("init-search-ledger")
     init_ledger.add_argument("--config", required=True, type=Path)
-    init_ledger.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo"])
+    init_ledger.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo", "grpo"])
     init_ledger.add_argument("--dataset-manifest-hash", required=True)
     init_ledger.add_argument("--output", required=True, type=Path)
     promote = subparsers.add_parser("promote-search-stage")

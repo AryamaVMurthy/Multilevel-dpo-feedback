@@ -122,11 +122,19 @@ def build_paper_dpo_config_kwargs(
     candidate: Any,
     effective_global_batch: int,
     max_length: int,
+    loss_type: str,
+    ld_alpha: float | None,
 ) -> dict[str, Any]:
     if effective_global_batch <= 0:
         raise ValueError("effective_global_batch must be positive")
     if max_length <= 0:
         raise ValueError("max_length must be positive")
+    if loss_type not in {"sigmoid_norm", "sigmoid"}:
+        raise ValueError("paper DPO loss_type must be sigmoid_norm or sigmoid")
+    if loss_type == "sigmoid_norm" and ld_alpha is not None:
+        raise ValueError("sigmoid_norm DPO must not set ld_alpha")
+    if loss_type == "sigmoid" and ld_alpha not in {0.25, 0.5, 0.75}:
+        raise ValueError("length-desensitized DPO requires ld_alpha in {0.25, 0.5, 0.75}")
     profile = build_optimizer_profile(
         learning_rate=float(candidate.learning_rate),
         weight_decay=float(candidate.weight_decay),
@@ -134,7 +142,7 @@ def build_paper_dpo_config_kwargs(
         total_updates=max_steps,
         scheduler=str(candidate.scheduler),
     )
-    return {
+    result = {
         "output_dir": str(output_dir),
         "beta": float(candidate.beta),
         "max_length": max_length,
@@ -146,8 +154,12 @@ def build_paper_dpo_config_kwargs(
         "save_strategy": "no",
         "remove_unused_columns": False,
         "bf16": True,
+        "loss_type": loss_type,
         **profile,
     }
+    if ld_alpha is not None:
+        result["ld_alpha"] = float(ld_alpha)
+    return result
 
 
 def build_paper_grpo_config_kwargs(

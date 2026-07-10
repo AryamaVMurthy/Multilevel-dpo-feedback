@@ -18,6 +18,8 @@ class DpoCandidate:
     weight_decay: float
     warmup_fraction: float
     scheduler: str
+    loss_type: str = "sigmoid_norm"
+    ld_alpha: float | None = None
 
     @property
     def candidate_id(self) -> str:
@@ -45,9 +47,25 @@ def build_dpo_candidates(
     weight_decay: float,
     warmup_fraction: float,
     scheduler: str,
+    loss_type: str = "sigmoid_norm",
+    ld_alpha: float | None = None,
 ) -> list[DpoCandidate]:
+    if loss_type not in {"sigmoid_norm", "sigmoid"}:
+        raise ValueError("DPO loss_type must be sigmoid_norm or sigmoid")
+    if loss_type == "sigmoid_norm" and ld_alpha is not None:
+        raise ValueError("sigmoid_norm DPO must not set ld_alpha")
+    if loss_type == "sigmoid" and ld_alpha not in {0.25, 0.5, 0.75}:
+        raise ValueError("length-desensitized DPO requires ld_alpha in {0.25, 0.5, 0.75}")
     candidates = [
-        DpoCandidate(float(lr), float(beta), float(weight_decay), float(warmup_fraction), str(scheduler))
+        DpoCandidate(
+            float(lr),
+            float(beta),
+            float(weight_decay),
+            float(warmup_fraction),
+            str(scheduler),
+            str(loss_type),
+            ld_alpha,
+        )
         for lr in learning_rates
         for beta in betas
     ]
