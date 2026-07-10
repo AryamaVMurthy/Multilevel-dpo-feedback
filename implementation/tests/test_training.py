@@ -1,6 +1,7 @@
 import unittest
 
 from text_feedback_dpo.training import (
+    build_dpo_config_kwargs,
     build_distillation_rows,
     build_standard_dpo_pairs,
     dpo_loss,
@@ -9,6 +10,11 @@ from text_feedback_dpo.training import (
 
 
 class TrainingDataTest(unittest.TestCase):
+    def test_dpo_config_uses_current_trl_sequence_length_contract(self):
+        values = build_dpo_config_kwargs(output_dir="out", max_steps=1)
+        self.assertEqual(values["max_length"], 1024)
+        self.assertNotIn("max_prompt_length", values)
+
     def test_distillation_rows_keep_prompt_and_teacher_target(self):
         rows = build_distillation_rows(
             [{"prompt": "Solve", "completion": "answer"}],

@@ -110,6 +110,24 @@ def _lora_config() -> Any:
     )
 
 
+def build_dpo_config_kwargs(*, output_dir: Any, max_steps: int) -> dict[str, Any]:
+    """Build DPOConfig arguments compatible with the locked TRL v1 API."""
+
+    return {
+        "output_dir": str(output_dir),
+        "beta": 0.1,
+        "max_length": 1024,
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "learning_rate": 5e-6,
+        "max_steps": max_steps,
+        "logging_steps": 1,
+        "report_to": [],
+        "save_strategy": "no",
+        "remove_unused_columns": False,
+    }
+
+
 def run_dpo_training(
     *,
     model_id: str,
@@ -127,20 +145,7 @@ def run_dpo_training(
 
     rows = build_standard_dpo_pairs(pairs) if baseline else list(pairs)
     model, tokenizer = _load_model_and_tokenizer(model_id)
-    args = DPOConfig(
-        output_dir=str(output_dir),
-        beta=0.1,
-        max_length=1024,
-        max_prompt_length=512,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        learning_rate=5e-6,
-        max_steps=max_steps,
-        logging_steps=1,
-        report_to=[],
-        save_strategy="no",
-        remove_unused_columns=False,
-    )
+    args = DPOConfig(**build_dpo_config_kwargs(output_dir=output_dir, max_steps=max_steps))
     trainer = DPOTrainer(
         model=model,
         ref_model=None,
