@@ -496,6 +496,11 @@ git add implementation/src/text_feedback_dpo/rewards.py implementation/src/text_
 git commit -m "fix: add nondegenerate shared GRPO rewards"
 ```
 
+The fixed SearchQA reward weights are exact match `0.55`, token F1 `0.25`, controlled
+evidence support `0.10`, and answer-type correctness `0.10`; unknown official answer
+types receive a neutral type component of `0.5`. Missing evaluator fields and failed
+reward evaluation are hard errors.
+
 ## Task 11: Expand Observability and Run Validation
 
 **Files:**
@@ -575,6 +580,10 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_turing_scripts.py'
 git add implementation/scripts implementation/tests/test_turing_scripts.py
 git commit -m "feat: add paper-scale Turing workflows"
 ```
+
+The script commands map to `materialize-dataset`, `collect-shard`, `merge-collection`,
+`tune-paper`, `train-paper`, and `evaluate-paper`. Search-ledger initialization,
+promotion, and freezing are explicit CLI operations between tuning and final training.
 
 ## Task 13: Run the Complete Local Verification Gate
 

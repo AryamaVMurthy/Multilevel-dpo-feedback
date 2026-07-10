@@ -3,6 +3,38 @@ from pathlib import Path
 
 
 class TuringScriptTest(unittest.TestCase):
+    def test_paper_scripts_use_fail_fast_slurm_and_explicit_artifacts(self):
+        for name in (
+            "turing_materialize_dataset.sh",
+            "turing_collect_array.sh",
+            "turing_merge_collection.sh",
+            "turing_tune_paper.sh",
+            "turing_train_paper.sh",
+            "turing_evaluate_paper.sh",
+        ):
+            text = Path("scripts" / Path(name)).read_text(encoding="utf-8")
+            self.assertIn("set -euo pipefail", text, name)
+            self.assertIn("TURING_ACCOUNT:?TURING_ACCOUNT is required", text, name)
+            self.assertIn("module load u22/cuda/12.4", text, name)
+            self.assertNotIn("|| true", text, name)
+            self.assertNotIn("/home/$USER/.cache", text, name)
+        for name in (
+            "turing_collect_array.sh",
+            "turing_tune_paper.sh",
+            "turing_train_paper.sh",
+            "turing_evaluate_paper.sh",
+        ):
+            self.assertIn("nvidia-smi", Path("scripts" / Path(name)).read_text(encoding="utf-8"), name)
+
+    def test_paper_scripts_have_role_specific_commands_and_cleanup_traps(self):
+        collect = Path("scripts/turing_collect_array.sh").read_text(encoding="utf-8")
+        self.assertIn("SLURM_ARRAY_TASK_ID", collect)
+        self.assertIn("collect-shard", collect)
+        merge = Path("scripts/turing_merge_collection.sh").read_text(encoding="utf-8")
+        self.assertIn("merge-collection", merge)
+        for name in ("turing_tune_paper.sh", "turing_train_paper.sh", "turing_evaluate_paper.sh"):
+            text = Path("scripts" / Path(name)).read_text(encoding="utf-8")
+            self.assertIn("trap cleanup EXIT", text, name)
     def test_model_load_smoke_script_has_required_gpu_checks(self):
         text = Path("scripts/turing_model_load_smoke.sh").read_text(encoding="utf-8")
         self.assertIn("#SBATCH -p u22", text)

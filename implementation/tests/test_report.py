@@ -28,13 +28,18 @@ class ReportTest(unittest.TestCase):
             write_html_report(
                 path,
                 {"run_id": "r1", "success_by_attempt": {"0": 1, "1": 2}},
-                training_history=[{"step": 1, "loss": 0.8}, {"step": 2, "loss": 0.4}],
+                training_history=[
+                    {"step": 1, "loss": 0.8, "reward_margin": 0.1, "accuracy": 0.5},
+                    {"step": 2, "loss": 0.4, "reward_margin": 0.3, "accuracy": 0.75},
+                ],
             )
             html = path.read_text(encoding="utf-8")
             self.assertIn("<table>", html)
             self.assertIn("<svg", html)
             self.assertIn("success_by_attempt", html)
             self.assertIn("training_loss", html)
+            self.assertIn("reward_margin", html)
+            self.assertIn("training_accuracy", html)
 
 
 if __name__ == "__main__":

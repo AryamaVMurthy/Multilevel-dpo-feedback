@@ -43,9 +43,11 @@ class TransformersModelProvider(ModelProvider):
         self,
         *,
         model_ids: dict[str, str],
+        model_revisions: dict[str, str] | None = None,
         allow_cpu_for_unit_tests: bool = False,
     ) -> None:
         self.model_ids = model_ids
+        self.model_revisions = model_revisions or {}
         self.allow_cpu_for_unit_tests = allow_cpu_for_unit_tests
         self._loaded: dict[str, tuple[object, object]] = {}
 
@@ -71,12 +73,16 @@ class TransformersModelProvider(ModelProvider):
         if not self.allow_cpu_for_unit_tests and not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for model generation; refusing hidden CPU fallback")
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        revision = self.model_revisions.get(role) or self.model_revisions.get(model_id)
+        tokenizer_kwargs = {"trust_remote_code": True}
+        model_kwargs = {"device_map": "auto" if torch.cuda.is_available() else None, "torch_dtype": "auto", "trust_remote_code": True}
+        if revision:
+            tokenizer_kwargs["revision"] = revision
+            model_kwargs["revision"] = revision
+        tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_kwargs)
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            device_map="auto" if torch.cuda.is_available() else None,
-            torch_dtype="auto",
-            trust_remote_code=True,
+            **model_kwargs,
         )
         self._loaded[model_id] = (tokenizer, model)
         return self._loaded[model_id]

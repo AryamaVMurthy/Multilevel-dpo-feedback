@@ -48,15 +48,16 @@ when the guard rejects it. If all attempts are unsafe, the group is marked
 
 ## Collection artifacts
 
-- `examples.jsonl`: input problems and teacher-only gold answers
-- `attempts.jsonl`: every student attempt and evaluator result
-- `guidance.jsonl`: every teacher hint, including rejected hints
-- `pairs.jsonl`: all wrong-versus-first-correct preference pairs
-- `response_sft.jsonl`: first-correct responses for optional temporary SFT anchoring
-- `failures.jsonl`: unresolved or unsafe groups
-- `events.jsonl`: structured lifecycle and metric events
-- `metrics.json`: aggregate experiment metrics
-- `report.html`: human-readable summary
+- Immutable dataset roles are stored as `*.jsonl.zst` with a manifest and content hash.
+- Collection shards store one compressed record per immutable example ID, with atomic
+  progress and completion markers; attempt records reference the example rather than
+  duplicating the base prompt and evidence.
+- Merged collection records retain every raw student response, evaluator result, teacher
+  output, guidance-policy decision, guard result, token estimate, and latency.
+- `standard.jsonl`, `multilevel.jsonl`, and `matched.jsonl` are separate preference
+  artifacts built after merge, each with prompt and response hashes.
+- Each paper run also writes canonical JSONL events, a required run manifest, metrics,
+  GPU telemetry for GPU phases, optional TensorBoard scalars, and an HTML report.
 
 ## Planned comparisons
 
@@ -99,6 +100,11 @@ This anchor must be logged separately from DPO loss.
 - Made answer-free teacher guidance a hard collection invariant.
 - Added a separate evaluator and guidance-guard role; roles may share the 9B weights.
 - Set the initial prompt-only smoke to two examples and at most three guidance steps.
+- Frozen paper sampling uses temperature `1.0`, top-p `0.95`, top-k `20`, presence
+  penalty `1.5`, and a 2048-token completion budget; the student remains in native
+  Qwen thinking mode while structured teacher/evaluator roles use non-thinking mode.
+- SearchQA GRPO reward weights are fixed at exact `0.55`, token F1 `0.25`, evidence
+  support `0.10`, and answer type `0.10`; unknown answer type is neutral `0.5`.
 - Prompt-only run qwen35-native-smoke-r2 completed on one RTX 6000 Ada with both
   examples correct on attempt 0; it produced no pairs, so the next smoke uses four
   harder but still controlled examples to test the guidance loop.

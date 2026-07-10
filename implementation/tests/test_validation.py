@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from text_feedback_dpo.validation import validate_run
+from text_feedback_dpo.validation import validate_observability_manifest, validate_run
 
 
 class RunValidationTest(unittest.TestCase):
@@ -159,6 +159,13 @@ class RunValidationTest(unittest.TestCase):
 
             self.assertTrue(result["valid"])
             self.assertEqual(result["schema"], "native_iterative_guidance")
+
+    def test_observability_manifest_validation_requires_failure_ledger(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "run_manifest.json"
+            path.write_text(json.dumps({"git_commit": "abc"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "run manifest"):
+                validate_observability_manifest(path)
 
 
 if __name__ == "__main__":

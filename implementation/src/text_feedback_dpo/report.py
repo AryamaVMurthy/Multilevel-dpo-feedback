@@ -58,12 +58,41 @@ def _line_chart(title: str, history: list[dict]) -> str:
     )
 
 
+def _field_line_chart(title: str, history: list[dict], field: str) -> str:
+    points = [
+        (float(row["step"]), float(row[field]))
+        for row in history
+        if "step" in row and field in row
+    ]
+    if not points:
+        return ""
+    width = 640
+    height = 220
+    margin = 32
+    max_x = max(point[0] for point in points) or 1.0
+    min_y = min(point[1] for point in points)
+    max_y = max(point[1] for point in points)
+    span = max_y - min_y or 1.0
+    path = []
+    for x_value, y_value in points:
+        x = margin + (width - 2 * margin) * x_value / max_x
+        y = height - margin - (height - 2 * margin) * (y_value - min_y) / span
+        path.append(f"{x:.1f},{y:.1f}")
+    return (
+        f'<section><h2>{escape(title)}</h2><svg data-chart="{escape(title)}" '
+        f'viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title)}">'
+        f'<polyline points="{" ".join(path)}" fill="none" stroke="#059669" '
+        f'stroke-width="3"/></svg></section>'
+    )
+
+
 def write_html_report(
     path: Path,
     metrics: dict,
     *,
     training_history: list[dict] | None = None,
 ) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     rows = "\n".join(
         f"<tr><th>{escape(str(key))}</th><td>{escape(str(value))}</td></tr>"
         for key, value in sorted(metrics.items())
@@ -73,6 +102,11 @@ def write_html_report(
         {str(key): float(value) for key, value in metrics.get("success_by_attempt", {}).items()},
     )
     charts += _line_chart("training_loss", training_history or [])
+    charts += _field_line_chart("reward_margin", training_history or [], "reward_margin")
+    charts += _field_line_chart("training_accuracy", training_history or [], "accuracy")
+    charts += _field_line_chart("gradient_norm", training_history or [], "gradient_norm")
+    charts += _field_line_chart("peak_memory_bytes", training_history or [], "peak_memory_bytes")
+    charts += _field_line_chart("throughput", training_history or [], "throughput")
     html = f"""<!doctype html>
 <html lang="en">
 <head>

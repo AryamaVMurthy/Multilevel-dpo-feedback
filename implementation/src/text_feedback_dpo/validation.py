@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from text_feedback_dpo.io import read_jsonl
-from text_feedback_dpo.observability import JsonlLogger
+from text_feedback_dpo.observability import JsonlLogger, validate_run_manifest as _validate_run_manifest
 
 
 REQUIRED_ARTIFACTS = (
@@ -52,6 +52,12 @@ def _write_validation(path: Path, payload: dict) -> None:
     (path / "validation.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def validate_observability_manifest(path: Path) -> dict:
+    """Validate the paper-run manifest independently of domain artifacts."""
+
+    return _validate_run_manifest(path)
 
 
 def validate_native_run(output_dir: Path) -> dict:

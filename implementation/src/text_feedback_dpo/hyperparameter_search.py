@@ -156,6 +156,7 @@ def register_observation(
     key = f"{stage}:{candidate_id}"
     observation = {
         "candidate_id": candidate_id,
+        "candidate": dict(ledger["candidates"][candidate_id]),
         "stage": stage,
         "status": status,
         "metrics": copied_metrics,

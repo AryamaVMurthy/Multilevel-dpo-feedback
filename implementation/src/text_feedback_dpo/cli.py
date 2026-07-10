@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -20,6 +21,18 @@ from text_feedback_dpo.experiment_config import load_paper_experiment, validate_
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
+from text_feedback_dpo.paper_training import train_paper_dpo, train_paper_grpo
+from text_feedback_dpo.hyperparameter_search import (
+    DpoCandidate,
+    GrpoCandidate,
+    build_dpo_candidates,
+    build_grpo_candidates,
+    create_search_ledger,
+    freeze_selection,
+    promote_stage,
+    register_observation,
+)
+from text_feedback_dpo.heldout import build_transformers_checkpoint_generator, evaluate_checkpoint
 from text_feedback_dpo.preference_data import build_preference_datasets
 from text_feedback_dpo.prompts import (
     build_native_student_prompt,
@@ -760,6 +773,285 @@ def run_build_preferences(
     return datasets["metrics"]
 
 
+def _paper_candidates(config: Any, method: str) -> list[Any]:
+    if method in {"standard_dpo", "multilevel_dpo", "matched_dpo"}:
+        return build_dpo_candidates(
+            learning_rates=config.dpo_search.learning_rates,
+            betas=config.dpo_search.betas,
+            weight_decay=config.optimizer.weight_decay,
+            warmup_fraction=config.optimizer.warmup_fraction,
+            scheduler=config.optimizer.scheduler,
+        )
+    if method in {"grpo", "dapo_sensitivity"}:
+        return build_grpo_candidates(
+            learning_rates=config.grpo_search.learning_rates,
+            kl_betas=config.grpo_search.kl_betas,
+            epsilon=config.grpo_search.epsilon,
+            num_iterations=config.grpo_search.num_iterations,
+            num_generations=config.grpo_search.num_generations,
+            loss_type=config.grpo_search.loss_type,
+        )
+    raise ValueError(f"unsupported paper method: {method}")
+
+
+def run_init_search_ledger(*, config_path: Path, method: str, output_path: Path, dataset_manifest_hash: str) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    candidates = _paper_candidates(config, method)
+    promote_counts = config.dpo_search.promote_counts if method.endswith("dpo") else config.grpo_search.promote_counts
+    ledger = create_search_ledger(
+        method=method,
+        candidates=candidates,
+        promote_counts=promote_counts,
+        dataset_manifest_hash=dataset_manifest_hash,
+        seed=config.dataset.seed,
+    )
+    if output_path.exists():
+        raise FileExistsError(f"refusing to overwrite search ledger: {output_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"method": method, "candidates": len(candidates), "ledger": str(output_path)}
+
+
+def run_promote_search_stage(*, ledger_path: Path, stage: int) -> dict[str, Any]:
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    promoted = promote_stage(ledger, stage=stage)
+    ledger_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"stage": stage, "promoted": promoted}
+
+
+def run_freeze_search(*, ledger_path: Path, candidate_id: str, stage: int, output_path: Path) -> dict[str, Any]:
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    manifest = freeze_selection(ledger, candidate_id=candidate_id, stage=stage)
+    if output_path.exists():
+        raise FileExistsError(f"refusing to overwrite freeze manifest: {output_path}")
+    ledger_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _candidate_from_ledger(ledger: dict[str, Any], candidate_id: str) -> Any:
+    payload = ledger.get("candidates", {}).get(candidate_id)
+    if not isinstance(payload, dict):
+        raise ValueError(f"candidate is not present in search ledger: {candidate_id}")
+    if "beta" in payload:
+        return DpoCandidate(
+            learning_rate=float(payload["learning_rate"]),
+            beta=float(payload["beta"]),
+            weight_decay=float(payload["weight_decay"]),
+            warmup_fraction=float(payload["warmup_fraction"]),
+            scheduler=str(payload["scheduler"]),
+        )
+    return GrpoCandidate(
+        learning_rate=float(payload["learning_rate"]),
+        kl_beta=float(payload["kl_beta"]),
+        epsilon=float(payload["epsilon"]),
+        num_iterations=int(payload["num_iterations"]),
+        num_generations=int(payload["num_generations"]),
+        loss_type=str(payload["loss_type"]),
+    )
+
+
+def _read_rows_for_paper(path: Path) -> list[dict[str, Any]]:
+    return read_jsonl_zst(path) if path.name.endswith(".zst") else read_jsonl(path)
+
+
+def _paper_evaluator(config: Any):
+    provider = TransformersModelProvider(
+        model_ids={"evaluator": config.models["evaluator"]["id"]},
+        model_revisions={"evaluator": config.models["evaluator"]["revision"]},
+    )
+    return make_model_evaluator(
+        generate=provider.generate,
+        generation_kwargs={
+            "max_new_tokens": config.generation.max_completion_tokens,
+            "temperature": config.generation.temperature,
+            "top_p": config.generation.top_p,
+            "top_k": config.generation.top_k,
+            "presence_penalty": config.generation.presence_penalty,
+            "enable_thinking": False,
+        },
+    )
+
+
+def _paper_examples_with_prompts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **row,
+            "prompt": build_native_student_prompt(
+                problem=str(row["problem"]),
+                domain=str(row["domain"]),
+                evidence=row.get("evidence"),
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _selection_metric(config: Any, metrics: dict[str, Any]) -> float:
+    if config.dataset.name == "gsm8k":
+        return float(metrics["math"]["exact_accuracy"])
+    return float(metrics["search_qa"]["exact_match"])
+
+
+def run_tune_paper(
+    *,
+    config_path: Path,
+    method: str,
+    candidate_id: str,
+    stage: int,
+    data_path: Path,
+    validation_path: Path,
+    output_dir: Path,
+    ledger_path: Path,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    if ledger.get("method") != method:
+        raise ValueError("search ledger method does not match tune method")
+    candidate = _candidate_from_ledger(ledger, candidate_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if method.endswith("dpo"):
+        train_metrics = train_paper_dpo(
+            config=config,
+            method=method,
+            pairs=_read_rows_for_paper(data_path),
+            output_dir=output_dir / "train",
+            candidate=candidate,
+            seed=config.dataset.seed,
+        )
+    else:
+        evaluator = _paper_evaluator(config)
+        train_metrics = train_paper_grpo(
+            config=config,
+            method=method,
+            examples=_paper_examples_with_prompts(_read_rows_for_paper(data_path)),
+            output_dir=output_dir / "train",
+            candidate=candidate,
+            seed=config.dataset.seed,
+            evaluator=evaluator,
+        )
+    adapter_manifest = json.loads((output_dir / "train" / "adapter_manifest.json").read_text(encoding="utf-8"))
+    generator = build_transformers_checkpoint_generator(
+        model_id=config.models["student"]["id"],
+        revision=config.models["student"]["revision"],
+        generation_kwargs={
+            "max_new_tokens": config.generation.max_completion_tokens,
+            "temperature": config.generation.temperature,
+            "top_p": config.generation.top_p,
+            "top_k": config.generation.top_k,
+        },
+        adapter_dir=output_dir / "train",
+        adapter_base_revision=config.models["student"]["revision"],
+        adapter_lora_coverage_hash=adapter_manifest["lora"]["coverage_hash"],
+    )
+    validation_metrics = evaluate_checkpoint(
+        examples=_read_rows_for_paper(validation_path),
+        generate=generator,
+        evaluator=_paper_evaluator(config),
+        output_dir=output_dir / "validation",
+        checkpoint_kind="adapter",
+        base_model_revision=config.models["student"]["revision"],
+        seed=config.dataset.seed,
+        test=False,
+        adapter_manifest=adapter_manifest,
+    )
+    artifact_hash = hashlib.sha256((output_dir / "train" / "train_metrics.json").read_bytes()).hexdigest()
+    register_observation(
+        ledger,
+        candidate_id=candidate_id,
+        stage=stage,
+        status="valid",
+        metrics={"selection_metric": _selection_metric(config, validation_metrics), "gpu_hours": 0.0},
+        artifact_hash=artifact_hash,
+    )
+    ledger_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"candidate_id": candidate_id, "stage": stage, "validation": validation_metrics, "train": train_metrics}
+
+
+def run_train_paper(
+    *,
+    config_path: Path,
+    method: str,
+    seed: int,
+    data_path: Path,
+    freeze_manifest_path: Path,
+    output_dir: Path,
+    evaluator: Any | None = None,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    freeze = json.loads(freeze_manifest_path.read_text(encoding="utf-8"))
+    if freeze.get("method") != method or not freeze.get("candidate"):
+        raise ValueError("freeze manifest does not contain the requested method and candidate")
+    payload = freeze["candidate"]
+    candidate = _candidate_from_ledger({"candidates": {freeze["candidate_id"]: payload}}, freeze["candidate_id"])
+    if method.endswith("dpo"):
+        return train_paper_dpo(
+            config=config,
+            method=method,
+            pairs=_read_rows_for_paper(data_path),
+            output_dir=output_dir,
+            candidate=candidate,
+            seed=seed,
+        )
+    if evaluator is None:
+        evaluator = _paper_evaluator(config)
+    return train_paper_grpo(
+        config=config,
+        method=method,
+        examples=_paper_examples_with_prompts(_read_rows_for_paper(data_path)),
+        output_dir=output_dir,
+        candidate=candidate,
+        seed=seed,
+        evaluator=evaluator,
+    )
+
+
+def run_evaluate_paper(
+    *,
+    config_path: Path,
+    checkpoint: Path,
+    data_path: Path,
+    split: str,
+    output_dir: Path,
+    freeze_manifest: Path | None,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    test = split == "test"
+    if test and freeze_manifest is None:
+        raise FileNotFoundError("test evaluation requires --freeze-manifest")
+    adapter_manifest = json.loads((checkpoint / "adapter_manifest.json").read_text(encoding="utf-8"))
+    generator = build_transformers_checkpoint_generator(
+        model_id=config.models["student"]["id"],
+        revision=config.models["student"]["revision"],
+        generation_kwargs={
+            "max_new_tokens": config.generation.max_completion_tokens,
+            "temperature": config.generation.temperature,
+            "top_p": config.generation.top_p,
+            "top_k": config.generation.top_k,
+        },
+        adapter_dir=checkpoint,
+        adapter_base_revision=config.models["student"]["revision"],
+        adapter_lora_coverage_hash=adapter_manifest["lora"]["coverage_hash"],
+    )
+    return evaluate_checkpoint(
+        examples=_read_rows_for_paper(data_path),
+        generate=generator,
+        evaluator=_paper_evaluator(config),
+        output_dir=output_dir,
+        checkpoint_kind="adapter",
+        base_model_revision=config.models["student"]["revision"],
+        seed=config.dataset.seed,
+        test=test,
+        freeze_manifest=freeze_manifest,
+        adapter_manifest=adapter_manifest,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -808,6 +1100,42 @@ def main() -> None:
     preferences.add_argument("--dataset", required=True, type=Path)
     preferences.add_argument("--output-dir", required=True, type=Path)
     preferences.add_argument("--seed", required=True, type=int)
+    init_ledger = subparsers.add_parser("init-search-ledger")
+    init_ledger.add_argument("--config", required=True, type=Path)
+    init_ledger.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo"])
+    init_ledger.add_argument("--dataset-manifest-hash", required=True)
+    init_ledger.add_argument("--output", required=True, type=Path)
+    promote = subparsers.add_parser("promote-search-stage")
+    promote.add_argument("--ledger", required=True, type=Path)
+    promote.add_argument("--stage", required=True, type=int)
+    freeze = subparsers.add_parser("freeze-search")
+    freeze.add_argument("--ledger", required=True, type=Path)
+    freeze.add_argument("--candidate-id", required=True)
+    freeze.add_argument("--stage", required=True, type=int)
+    freeze.add_argument("--output", required=True, type=Path)
+    tune = subparsers.add_parser("tune-paper")
+    tune.add_argument("--config", required=True, type=Path)
+    tune.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo"])
+    tune.add_argument("--candidate-id", required=True)
+    tune.add_argument("--stage", required=True, type=int)
+    tune.add_argument("--data", required=True, type=Path)
+    tune.add_argument("--validation", required=True, type=Path)
+    tune.add_argument("--output-dir", required=True, type=Path)
+    tune.add_argument("--ledger", required=True, type=Path)
+    paper_train = subparsers.add_parser("train-paper")
+    paper_train.add_argument("--config", required=True, type=Path)
+    paper_train.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo", "dapo_sensitivity"])
+    paper_train.add_argument("--seed", required=True, type=int)
+    paper_train.add_argument("--data", required=True, type=Path)
+    paper_train.add_argument("--freeze-manifest", required=True, type=Path)
+    paper_train.add_argument("--output-dir", required=True, type=Path)
+    paper_eval = subparsers.add_parser("evaluate-paper")
+    paper_eval.add_argument("--config", required=True, type=Path)
+    paper_eval.add_argument("--checkpoint", required=True, type=Path)
+    paper_eval.add_argument("--data", required=True, type=Path)
+    paper_eval.add_argument("--split", required=True, choices=["validation", "test"])
+    paper_eval.add_argument("--output-dir", required=True, type=Path)
+    paper_eval.add_argument("--freeze-manifest", type=Path)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -865,6 +1193,51 @@ def main() -> None:
             dataset_path=args.dataset,
             output_dir=args.output_dir,
             seed=args.seed,
+        )
+    elif args.command == "init-search-ledger":
+        result = run_init_search_ledger(
+            config_path=args.config,
+            method=args.method,
+            output_path=args.output,
+            dataset_manifest_hash=args.dataset_manifest_hash,
+        )
+    elif args.command == "promote-search-stage":
+        result = run_promote_search_stage(ledger_path=args.ledger, stage=args.stage)
+    elif args.command == "freeze-search":
+        result = run_freeze_search(
+            ledger_path=args.ledger,
+            candidate_id=args.candidate_id,
+            stage=args.stage,
+            output_path=args.output,
+        )
+    elif args.command == "tune-paper":
+        result = run_tune_paper(
+            config_path=args.config,
+            method=args.method,
+            candidate_id=args.candidate_id,
+            stage=args.stage,
+            data_path=args.data,
+            validation_path=args.validation,
+            output_dir=args.output_dir,
+            ledger_path=args.ledger,
+        )
+    elif args.command == "train-paper":
+        result = run_train_paper(
+            config_path=args.config,
+            method=args.method,
+            seed=args.seed,
+            data_path=args.data,
+            freeze_manifest_path=args.freeze_manifest,
+            output_dir=args.output_dir,
+        )
+    elif args.command == "evaluate-paper":
+        result = run_evaluate_paper(
+            config_path=args.config,
+            checkpoint=args.checkpoint,
+            data_path=args.data,
+            split=args.split,
+            output_dir=args.output_dir,
+            freeze_manifest=args.freeze_manifest,
         )
     else:
         raise SystemExit(f"unknown command: {args.command}")

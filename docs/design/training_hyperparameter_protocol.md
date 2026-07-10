@@ -138,6 +138,21 @@ baseline is explicitly labeled original GRPO. A one-seed sensitivity run uses th
 current TRL DAPO loss and is labeled `dapo_sensitivity`; it is not reported as standard
 GRPO and cannot replace a failed original-GRPO run.
 
+### Shared SearchQA GRPO Reward
+
+The SearchQA reward is a fixed weighted sum recorded in every reward artifact:
+
+| Component | Weight |
+| --- | ---: |
+| alias/normalized exact match | 0.55 |
+| token F1 | 0.25 |
+| controlled-evidence support | 0.10 |
+| answer-type correctness | 0.10 |
+
+When the official row has no known answer type, the type component is neutral `0.5`;
+it is not treated as an incorrect answer. Ambiguous or evaluator-failed rows are
+explicitly routed to the evaluator and never silently receive a reward.
+
 ## Promotion And Freeze Rules
 
 A candidate is invalid, not merely low-ranked, if it has a nonfinite loss, nonfinite
@@ -170,3 +185,18 @@ truncation, peak GPU memory, throughput, wall time, and GPU-hours.
 
 The final HTML report includes candidate tables, promotion paths, validation curves,
 failure reasons, selected settings, and sensitivity plots for learning rate and beta.
+
+## Artifact Commands
+
+Paper workflows use the implementation CLI with explicit immutable paths:
+
+- `materialize-dataset` writes the pinned dataset manifest and compressed role files.
+- `collect-shard` and `merge-collection` write resumable compressed trajectory records.
+- `build-preferences` writes `standard`, `multilevel`, and `matched` datasets.
+- `init-search-ledger`, `tune-paper`, `promote-search-stage`, and `freeze-search`
+  create the auditable candidate-selection chain.
+- `train-paper` accepts only a freeze manifest; `evaluate-paper` requires it for the
+  official test split and writes a one-time test marker.
+
+All Turing scripts use scratch for caches and virtual environments. Collection,
+training, and evaluation record GPU telemetry; materialization and merge are CPU-only.

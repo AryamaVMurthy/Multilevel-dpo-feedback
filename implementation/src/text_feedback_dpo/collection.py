@@ -89,7 +89,8 @@ def collect_paper_shard(
         )
 
     provider = model_provider or TransformersModelProvider(
-        model_ids={role: config.models[role]["id"] for role in ("student", "teacher", "evaluator")}
+        model_ids={role: config.models[role]["id"] for role in ("student", "teacher", "evaluator")},
+        model_revisions={role: config.models[role]["revision"] for role in ("student", "teacher", "evaluator")},
     )
     evaluate = evaluator or make_model_evaluator(
         generate=provider.generate,
