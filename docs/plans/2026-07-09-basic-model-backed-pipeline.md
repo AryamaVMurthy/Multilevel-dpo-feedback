@@ -1,5 +1,9 @@
 # Basic Model-Backed Pipeline Implementation Plan
 
+> Historical smoke-pipeline plan. Paper-scale work is governed by
+> `2026-07-10-paper-scale-experiment-implementation.md` and
+> `../design/training_hyperparameter_protocol.md`.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Extend the current fixture-only observable pipeline into a verified model-backed smoke pipeline that can generate, correct, filter, and inspect a tiny set of Qwen3.5-2B preference pairs before any training starts.

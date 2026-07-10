@@ -63,11 +63,25 @@ when the guard rejects it. If all attempts are unsafe, the group is marked
 1. Prompt-only student baseline.
 2. Standard DPO with one initial wrong versus first-correct pair.
 3. Native multilevel DPO with all wrong attempts versus first correct.
-4. Standard GRPO using the shared evaluator.
-5. On-policy distillation using the privileged teacher as target policy.
+4. Pair-budget-matched multilevel DPO.
+5. Original GRPO using the shared evaluator and reward semantics.
+6. One-seed DAPO-loss sensitivity analysis, labeled separately from GRPO.
 
-The first training smoke will use the same prompt-only artifact split. Training is
-not started until the collection artifacts have been manually inspected.
+On-policy distillation remains a completed smoke baseline but is outside the primary
+paper-scale GSM8K and SearchQA-8K comparison. Paper training is not started until the
+collection artifacts and the optimizer/LoRA preflight have been manually inspected.
+
+## Paper training policy
+
+The canonical optimizer, architecture-aware LoRA coverage, hyperparameter search,
+selection, and freeze rules are in `docs/design/training_hyperparameter_protocol.md`.
+Historical one-step smoke constants are not paper hyperparameters.
+
+The Qwen3.5 text backbone mixes linear-attention and full-attention layers. Paper LoRA
+therefore uses an inventoried text-only linear target set rather than assuming that
+`q_proj`, `k_proj`, `v_proj`, and `o_proj` cover the architecture. Vision and output
+modules remain frozen. Every comparison method uses the same verified target set and
+parameter budget.
 
 ## Loss policy
 
@@ -117,3 +131,11 @@ This anchor must be logged separately from DPO loss.
   standard deviation `0.0` and all completions clipped at the configured limit, so
   it is a runtime smoke only and not a gain claim. Aggregate artifacts are in
   `runs/qwen35-method-comparison-r3/`.
+- Approved deterministic paper hyperparameter tuning. DPO searches learning rate and
+  DPO beta; GRPO searches learning rate and KL beta. Optimizer, warmup, decay, clipping,
+  architecture coverage, candidate promotion, and model-selection evidence are logged.
+- Reserved official test splits exclusively for final frozen evaluation. GSM8K tuning
+  uses nested train/validation subsets; SearchQA-8K uses an additional disjoint
+  2,000/500 auxiliary tuning pool from unused original official rows.
+- Defined original `loss_type="grpo"` as the primary GRPO baseline and relegated the
+  current DAPO loss to a separately labeled one-seed sensitivity run.

@@ -10,6 +10,10 @@
 
 ---
 
+The canonical optimizer and search specification is
+`docs/design/training_hyperparameter_protocol.md`. Historical smoke settings are not
+paper defaults.
+
 ## Execution Rules
 
 - Work in the existing `agent/qwen35-pretest` worktree.
@@ -17,6 +21,7 @@
 - Commit after each task; push only verified commits.
 - Never run ML imports, dataset processing, inference, or training on the Turing login node.
 - Never use the official test split for pair collection or model selection.
+- Never use SearchQA auxiliary tuning rows in final SearchQA-8K training or reporting.
 - Never merge a missing or failed shard as an empty shard.
 - Do not start SearchQA until the GSM8K completion gate passes.
 - Do not start a full job after a failed preflight.
@@ -34,9 +39,11 @@
 **Step 1: Write failing schema tests**
 
 Test that a paper config requires dataset revision, source counts, split manifest,
-seeds, LoRA settings, generation settings, shard size, retry budget, and final-test
-freeze flag. Test that unknown keys, missing revisions, overlap-prone split settings,
-and a non-2048 completion budget fail explicitly.
+seeds, architecture-audited LoRA settings, optimizer fields, deterministic candidate
+matrix, promotion budgets, nested validation partitions, generation settings, shard
+size, retry budget, and final-test freeze flag. Test that unknown keys, missing
+revisions, overlap-prone split settings, deprecated warmup fields, implicit optimizer
+defaults, and a non-2048 completion budget fail explicitly.
 
 **Step 2: Verify the tests fail**
 
@@ -62,9 +69,11 @@ must fail with the exact field path and remediation.
 
 **Step 4: Add frozen GSM8K and SearchQA-8K configs**
 
-GSM8K contains source counts `7473/1319`, split counts `6726/747/1319`, seeds, BF16
-LoRA rank 16, alpha 32, and the approved sampling settings. SearchQA-8K contains
-source counts `99820/13393/27248` and sample counts `5000/1000/2000`.
+GSM8K contains source counts `7473/1319`, split counts `6726/747/1319`, nested
+validation counts `500/247`, seeds, BF16 LoRA rank 16, alpha 32, the approved DPO and
+GRPO candidate matrices, and the approved sampling settings. SearchQA-8K contains
+source counts `99820/13393/27248`, sample counts `5000/1000/2000`, and disjoint
+auxiliary tuning counts `2000/500`.
 
 **Step 5: Run tests and commit**
 
@@ -90,7 +99,9 @@ Use small fixtures to prove that:
 - a fixed seed produces identical manifests;
 - GSM8K train and validation counts sum to the source train count;
 - official test rows remain test rows;
+- GSM8K tuning-development and confirmation-development exactly partition validation;
 - SearchQA sampling stays inside each official source split;
+- SearchQA auxiliary tuning rows are disjoint from every SearchQA-8K split;
 - normalized question or source-key overlap fails;
 - an unexpected source count fails before writing output.
 
@@ -117,6 +128,9 @@ Use stable hashing and deterministic ordering, not the process-global random sta
 
 The command runs under Slurm, pins dataset revisions, writes `manifest.json`,
 `train.jsonl.zst`, `validation.jsonl.zst`, `test.jsonl.zst`, and a duplicate audit.
+GSM8K additionally writes nested validation-role manifests. SearchQA additionally
+writes `hparam_train.jsonl.zst` and `hparam_validation.jsonl.zst`; final trainers must
+reject these roles.
 
 **Step 5: Test and commit**
 
@@ -337,38 +351,72 @@ git add implementation/src/text_feedback_dpo/preference_data.py implementation/s
 git commit -m "feat: build fair paper preference datasets"
 ```
 
-## Task 8: Add Fixed BF16 LoRA Training Profiles
+## Task 8: Add Architecture-Audited LoRA And Hyperparameter Search
 
 **Files:**
+- Create: `implementation/src/text_feedback_dpo/lora_coverage.py`
+- Create: `implementation/src/text_feedback_dpo/hyperparameter_search.py`
 - Modify: `implementation/src/text_feedback_dpo/training.py`
 - Modify: `implementation/src/text_feedback_dpo/cli.py`
 - Modify: `implementation/tests/test_training.py`
 - Create: `implementation/tests/test_training_profiles.py`
+- Create: `implementation/tests/test_lora_coverage.py`
+- Create: `implementation/tests/test_hyperparameter_search.py`
 
-**Step 1: Write failing profile tests**
+**Step 1: Write failing architecture-coverage tests**
 
-Assert rank 16, alpha 32, dropout 0.05, attention projection targets, BF16, no
-quantization, equal profiles across methods, seed propagation, TensorBoard logging,
-validation strategy, and explicit effective batch/update budget.
+Use a hybrid-model fixture with text linear-attention, full-attention, MLP, vision,
+embedding, and output modules. Assert that discovery covers all text projection classes,
+excludes vision/embedding/output modules, fails on an empty or unexpected inventory,
+and writes exact matched names, shapes, and trainable parameter counts.
 
-**Step 2: Verify red**
+**Step 2: Write failing optimizer and search-ledger tests**
+
+Assert BF16, no quantization, fused AdamW, Adam coefficients `0.9/0.999`, epsilon
+`1e-8`, weight decay `0.01`, maximum gradient norm `1.0`, integer 5% warmup, cosine
+scheduling, effective DPO batch 16, and identical LoRA targets across methods. Assert
+the exact DPO and GRPO candidate matrices, deterministic successive-halving promotion,
+invalid-run rejection, prespecified tie-breakers, equal per-method budgets, resumable
+ledgers, and refusal to overwrite a frozen selection.
+
+**Step 3: Verify red**
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_training_profiles.py'
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_lora_coverage.py'
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_hyperparameter_search.py'
 ```
 
-**Step 3: Implement profile-driven training**
+**Step 4: Implement architecture-driven profiles**
+
+Inventory the pinned Qwen3.5 model structurally and create a text-backbone target list.
+Do not use a static `q/k/v/o` assumption. Apply rank 16, alpha 32, and dropout 0.05,
+then assert the recorded target inventory before constructing any trainer.
+
+**Step 5: Implement explicit optimizer and deterministic search APIs**
+
+Expose immutable candidate, stage, observation, promotion, and freeze records. Compute
+integer warmup steps from total optimizer updates. The CLI must support creating a
+search ledger, registering a completed run, promoting a stage, and writing a signed
+freeze manifest. Missing metrics and failed artifacts are explicit invalid candidates,
+never worst-score placeholders.
+
+**Step 6: Expand profile-driven training observability**
 
 Training must write config, dataset manifest hash, parameter counts, trainable parameter
-percentage, optimizer/scheduler, package versions, history, best validation checkpoint,
-and final adapter. Standard and matched runs must use equal optimizer-update budgets.
+percentage, exact target modules, optimizer/scheduler, learning rate by step, warmup,
+gradient norms, clipping, beta/KL, package versions, history, candidate ID, search-ledger
+hash, best validation checkpoint, and final adapter. Standard and matched runs must use
+equal optimizer-update budgets.
 
-**Step 4: Test and commit**
+**Step 7: Test and commit**
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_training*.py'
-git add implementation/src/text_feedback_dpo/training.py implementation/src/text_feedback_dpo/cli.py implementation/tests/test_training.py implementation/tests/test_training_profiles.py
-git commit -m "feat: add paper BF16 LoRA profiles"
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_lora_coverage.py'
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_hyperparameter_search.py'
+git add implementation/src/text_feedback_dpo/lora_coverage.py implementation/src/text_feedback_dpo/hyperparameter_search.py implementation/src/text_feedback_dpo/training.py implementation/src/text_feedback_dpo/cli.py implementation/tests/test_training.py implementation/tests/test_training_profiles.py implementation/tests/test_lora_coverage.py implementation/tests/test_hyperparameter_search.py
+git commit -m "feat: add audited LoRA and hyperparameter search"
 ```
 
 ## Task 9: Add Adapter-Aware Held-Out Generation
@@ -430,7 +478,9 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_rewards.py'
 Use the same evaluation result schema as held-out scoring. Configure four generations,
 generation batch divisibility, max completion length 2048, temperature 1.0, top-p 0.95,
 top-k 20, presence penalty 1.5 through supported generation kwargs, completion logging,
-and truncated-completion masking.
+and truncated-completion masking. Configure the primary baseline explicitly as original
+`loss_type="grpo"`, one policy iteration, clipping epsilon `0.2`, and within-group reward
+scaling. Configure DAPO only through the separately named `dapo_sensitivity` profile.
 
 **Step 4: Add preflight metric gates**
 
@@ -460,7 +510,9 @@ git commit -m "fix: add nondegenerate shared GRPO rewards"
 
 Require Git commit, config hash, dataset hash, seed, source revision, model revisions,
 package versions, Slurm metadata, GPU telemetry, token counts, latency, throughput,
-peak memory, pair metrics, evaluator confidence, training metrics, and failure ledger.
+peak memory, pair metrics, evaluator confidence, training metrics, architecture target
+inventory, optimizer fields, learning-rate schedule, warmup, gradient norms, clipping,
+candidate ID, promotion stage, selection evidence, search-ledger hash, and failure ledger.
 
 **Step 2: Verify red**
 
@@ -491,6 +543,7 @@ git commit -m "feat: add paper experiment observability"
 - Create: `implementation/scripts/turing_materialize_dataset.sh`
 - Create: `implementation/scripts/turing_collect_array.sh`
 - Create: `implementation/scripts/turing_merge_collection.sh`
+- Create: `implementation/scripts/turing_tune_paper.sh`
 - Create: `implementation/scripts/turing_train_paper.sh`
 - Create: `implementation/scripts/turing_evaluate_paper.sh`
 - Modify: `implementation/tests/test_turing_scripts.py`
@@ -510,9 +563,10 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_turing_scripts.py'
 
 **Step 3: Implement scripts**
 
-Collection arrays use one GPU per task. Dataset and model caches use a node-local shared
-cache keyed by revision. Job-specific environments and temporary outputs use job scratch.
-Critical copies and merges must not use `|| true`.
+Collection and tuning arrays use one GPU per task. Dataset and model caches use a
+node-local shared cache keyed by revision. Job-specific environments and temporary
+outputs use job scratch. Tuning jobs require candidate and stage IDs and atomically
+write ledger observations. Critical copies and merges must not use `|| true`.
 
 **Step 4: Test and commit**
 
@@ -575,7 +629,9 @@ Use `turing_materialize_dataset.sh` with the GSM config. Record the job ID.
 **Step 3: Verify materialized counts and hashes**
 
 Run the manifest validator. Expected counts: 6,726 train, 747 validation, 1,319 test,
-zero overlap, pinned revision, and successful duplicate audit.
+500 tuning-development, 247 confirmation-development, zero overlap, pinned revision,
+and successful duplicate audit. Nested development roles must exactly partition the
+747 validation rows.
 
 **Step 4: Record accounting and queue state**
 
@@ -648,21 +704,37 @@ yield, attempt distribution, unresolved rate, and unsafe-guidance rate.
 
 **Step 1: Run equal-budget validation tuning**
 
-Each method receives the same grid: beta `{0.05, 0.1}`, learning rate
-`{2e-6, 5e-6}`, one epoch maximum, identical seeds for tuning, and validation-only
-selection. Never inspect test predictions.
+Create separate immutable ledgers for standard, multilevel, and matched DPO. Each
+method receives the same 12 candidates formed by learning rate
+`{2e-6, 5e-6, 1e-5}` and beta `{0.05, 0.1, 0.3, 0.5}`, one epoch maximum, identical
+pilot subsets, identical tuning seeds, and identical promotion budgets. Use the
+500-example tuning-development role for ranking. Never inspect test predictions.
 
-**Step 2: Freeze selected hyperparameters**
+**Step 2: Run optimizer finalist checks**
+
+For the top four candidates, execute the fixed fractional comparison of weight decay
+`{0.0, 0.01}`, warmup `{5%, 10%}`, and scheduler `{linear, cosine}`. Promote the top
+two to full pilot data and two tuning seeds. Evaluate the selected candidate once on
+the 247-example confirmation-development role.
+
+**Step 3: Freeze selected hyperparameters**
 
 Write a signed freeze manifest containing selected settings, validation evidence,
-adapter-selection rule, and test command.
+complete candidate-ledger hash, tie-break evidence, adapter-selection rule, and test
+command.
 
-**Step 3: Run three seeds per selected method**
+**Step 4: Run three seeds per selected method**
 
 Train standard, multilevel, and matched LoRA adapters. Log losses, margins, preference
 accuracy, throughput, memory, wall time, GPU-hours, and adapter hashes.
 
-**Step 4: Generate validation predictions and validate artifacts**
+**Step 5: Run the shared-profile sensitivity**
+
+Run one seed of all three DPO methods with the same optimizer and DPO beta selected by
+the prespecified aggregate validation rule. Report it separately from the independently
+tuned primary results.
+
+**Step 6: Generate validation predictions and validate artifacts**
 
 No test job starts until every selected run and validation prediction artifact passes.
 
@@ -671,23 +743,33 @@ No test job starts until every selected run and validation prediction artifact p
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/grpo/`
 
-**Step 1: Run 32-prompt reward preflight**
+**Step 1: Run 32-prompt reward and optimizer preflight**
 
-Generate four completions per prompt. Audit every completion and reward.
+Generate four completions per prompt with original `loss_type="grpo"`, one policy
+iteration, clipping epsilon `0.2`, within-group scaling, and truncation masking. Audit
+every completion, reward, optimizer field, and gradient update.
 
 **Step 2: Enforce GRPO gates**
 
 Zero-variance groups at most 50%, truncation at most 5%, evaluator agreement at least
 95%, and nonzero gradient/reward signal.
 
-**Step 3: Tune on validation with the same budget policy**
+**Step 3: Run deterministic GRPO successive halving**
 
-Freeze GRPO settings before test evaluation.
+Screen the 12 candidates formed by learning rate `{2e-6, 5e-6, 1e-5}` and KL beta
+`{0.0, 0.001, 0.01, 0.04}` on fixed training subsets. Promote four, then two, using
+the same tuning-development and confirmation-development roles and prespecified
+invalid-run and tie-break rules. Freeze settings before test evaluation.
 
 **Step 4: Run three seeds and validate adapters**
 
 Record reward components, variance, KL, clipping, entropy, length, throughput, memory,
 and GPU-hours.
+
+**Step 5: Run the labeled DAPO sensitivity**
+
+Run one seed with the frozen GRPO optimizer profile but `loss_type="dapo"`. Store it
+under `runs/paper/gsm8k/dapo_sensitivity/`; never substitute it for an invalid GRPO run.
 
 ## Task 19: Run the Frozen GSM8K Test Evaluation
 
@@ -698,8 +780,9 @@ and GPU-hours.
 
 **Step 2: Generate full 1,319-example predictions**
 
-Evaluate base, standard DPO, multilevel DPO, matched DPO, and GRPO for every primary
-seed. Teacher guidance is disabled.
+Evaluate base, standard DPO, multilevel DPO, matched DPO, and original GRPO for every
+primary seed. Evaluate the one-seed DAPO sensitivity in a separately labeled artifact.
+Teacher guidance is disabled.
 
 **Step 3: Score and validate**
 
@@ -750,6 +833,11 @@ Expected sample counts: 5,000 train, 1,000 validation, 2,000 test. Validate sour
 split membership, stratification, disjointness, hashes, evidence packaging, answer
 aliases, and duplicate audit.
 
+Also materialize 2,000 auxiliary hyperparameter-train and 500 auxiliary
+hyperparameter-validation rows from otherwise unused original official rows. Validate
+that both auxiliary roles are disjoint from every SearchQA-8K role and are rejected by
+final-training and final-evaluation commands.
+
 **Step 2: Run 64-example collection preflight**
 
 Audit every response, slight hint, accumulated guard decision, evidence package, and
@@ -776,7 +864,9 @@ validate all IDs, and build standard, multilevel, and matched preference dataset
 
 Repeat Tasks 17 and 18 using SearchQA exact match, token F1, answer type, and evidence
 support. Use the approved composite GRPO reward. Keep the same LoRA architecture and
-three-seed policy. Tune on the 1,000-example validation subset only.
+three-seed policy. Run tuning pilots on the disjoint 2,000/500 auxiliary pool, then
+evaluate the chosen configuration once on the main 1,000-example validation split
+before freezing it. Final training uses only the main 5,000-example training split.
 
 ## Task 24: Run Frozen SearchQA-8K Test and Statistics
 
@@ -811,14 +901,17 @@ rather than use asymmetric settings.
 
 **Step 1: Generate cross-domain tables and figures**
 
-Include base, standard, multilevel, matched, and GRPO results, uncertainty, significance,
-effect sizes, pair distributions, guidance outcomes, compute, and limitations.
+Include base, standard, multilevel, matched, original GRPO, and separately labeled DAPO
+sensitivity results, uncertainty, significance, effect sizes, pair distributions,
+guidance outcomes, hyperparameter sensitivity, promotion ledgers, compute, and
+limitations.
 
 **Step 2: Audit every explicit requirement**
 
-Verify datasets, split hashes, no test contamination, slight-hint policy, all methods,
-all seeds, adapters, test predictions, statistics, raw logs, telemetry, reports, Git
-commits, and reproduction commands.
+Verify datasets, split hashes, auxiliary tuning-role isolation, no test contamination,
+slight-hint policy, LoRA target coverage, optimizer manifests, candidate ledgers,
+freeze signatures, all methods, all seeds, adapters, test predictions, statistics,
+raw logs, telemetry, reports, Git commits, and reproduction commands.
 
 **Step 3: Verify repository and cluster state**
 

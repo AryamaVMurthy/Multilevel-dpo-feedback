@@ -1,5 +1,9 @@
 # Qwen3.5-2B DPO, GRPO, And Distillation Pretest Design
 
+> Historical pretest specification. Paper-scale work is governed by
+> `2026-07-10-paper-scale-experiment-design.md` and
+> `../design/training_hyperparameter_protocol.md`.
+
 **Status:** Design approved for planning. No implementation has started.
 
 **Current date:** 2026-07-09

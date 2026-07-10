@@ -1,5 +1,9 @@
 # Textual Feedback DPO On Turing Implementation Plan
 
+> Historical XML-era plan. The active native-Qwen paper implementation is governed by
+> `2026-07-10-paper-scale-experiment-implementation.md` and
+> `../design/training_hyperparameter_protocol.md`.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement the V1 textual-feedback DPO prototype from `multilevel-feedback-dpo/v1_textual_feedback_dpo_design.pdf` end to end on the IIIT Turing GPU cluster.
