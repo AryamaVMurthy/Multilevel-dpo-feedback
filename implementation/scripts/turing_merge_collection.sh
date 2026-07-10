@@ -14,6 +14,7 @@ DATASET_DIR="${DATASET_DIR:?DATASET_DIR is required}"
 COLLECTION_DIR="${COLLECTION_DIR:?COLLECTION_DIR is required}"
 EXPECTED_SHARDS="${EXPECTED_SHARDS:?EXPECTED_SHARDS is required}"
 OUTPUT_PATH="${OUTPUT_PATH:?OUTPUT_PATH is required}"
+PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 
 module load u22/cuda/12.4
@@ -27,6 +28,7 @@ mkdir -p "$SCRATCH_DIR"
 export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
 export UV_LINK_MODE=copy
+cd "$PROJECT_DIR"
 cp "$CONFIG" "$SCRATCH_DIR/config.yaml"
 uv run --frozen python -m text_feedback_dpo.cli merge-collection \
   --config "$SCRATCH_DIR/config.yaml" \

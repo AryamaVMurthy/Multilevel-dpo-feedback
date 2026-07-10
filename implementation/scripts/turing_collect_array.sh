@@ -13,6 +13,7 @@ set -euo pipefail
 CONFIG="${CONFIG:?CONFIG is required}"
 DATASET_DIR="${DATASET_DIR:?DATASET_DIR is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
+PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 SPLIT="${SPLIT:?SPLIT is required}"
 NUM_SHARDS="${NUM_SHARDS:?NUM_SHARDS is required}"
 SHARD_INDEX="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
@@ -35,6 +36,7 @@ export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
+cd "$PROJECT_DIR"
 
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}_${SHARD_INDEX}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \

@@ -18,6 +18,7 @@ DATA_PATH="${DATA_PATH:?DATA_PATH is required}"
 VALIDATION_PATH="${VALIDATION_PATH:?VALIDATION_PATH is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 LEDGER_PATH="${LEDGER_PATH:?LEDGER_PATH is required}"
+PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 
 module load u22/cuda/12.4
@@ -34,6 +35,7 @@ export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export UV_LINK_MODE=copy
+cd "$PROJECT_DIR"
 
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \

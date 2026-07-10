@@ -12,6 +12,7 @@ set -euo pipefail
 CONFIG="${CONFIG:?CONFIG is required}"
 SOURCE_PATH="${SOURCE_PATH:?SOURCE_PATH is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
+PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 
 module load u22/cuda/12.4
@@ -31,6 +32,7 @@ export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
+cd "$PROJECT_DIR"
 
 echo "job_id=${SLURM_JOB_ID} account=${TURING_ACCOUNT} host=$(hostname)"
 echo "scratch_before=$(df -h /scratch | tail -1)"

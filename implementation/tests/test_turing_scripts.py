@@ -5,6 +5,7 @@ from pathlib import Path
 class TuringScriptTest(unittest.TestCase):
     def test_paper_scripts_use_fail_fast_slurm_and_explicit_artifacts(self):
         for name in (
+            "turing_download_dataset_source.sh",
             "turing_materialize_dataset.sh",
             "turing_collect_array.sh",
             "turing_merge_collection.sh",
@@ -15,6 +16,7 @@ class TuringScriptTest(unittest.TestCase):
             text = Path("scripts" / Path(name)).read_text(encoding="utf-8")
             self.assertIn("set -euo pipefail", text, name)
             self.assertIn("TURING_ACCOUNT:?TURING_ACCOUNT is required", text, name)
+            self.assertIn("PROJECT_DIR:?PROJECT_DIR is required", text, name)
             self.assertIn("module load u22/cuda/12.4", text, name)
             self.assertNotIn("|| true", text, name)
             self.assertNotIn("/home/$USER/.cache", text, name)

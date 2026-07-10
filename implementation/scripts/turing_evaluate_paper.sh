@@ -14,6 +14,7 @@ CONFIG="${CONFIG:?CONFIG is required}"
 CHECKPOINT="${CHECKPOINT:?CHECKPOINT is required}"
 DATA_PATH="${DATA_PATH:?DATA_PATH is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
+PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 SPLIT="${SPLIT:?SPLIT is required}"
 FREEZE_MANIFEST="${FREEZE_MANIFEST:?FREEZE_MANIFEST is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
@@ -32,6 +33,7 @@ export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export UV_LINK_MODE=copy
+cd "$PROJECT_DIR"
 
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
