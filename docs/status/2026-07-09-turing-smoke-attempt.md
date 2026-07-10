@@ -4,7 +4,11 @@ Date: 2026-07-09
 
 ## Scope
 
-Attempted Task 9 from `docs/plans/2026-07-09-basic-model-backed-pipeline.md` after completing the local implementation and local verification.
+Attempted the model-backed pipeline smoke task from the superseded 2026-07-09 plan
+after completing local implementation and verification. That plan was removed after
+its findings were incorporated into `docs/design/native_iterative_guidance_dpo.md`;
+paper execution now follows
+`docs/plans/2026-07-10-paper-scale-experiment-implementation.md`.
 
 ## Local Verification Completed
 
