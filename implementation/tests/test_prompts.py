@@ -37,6 +37,9 @@ class PromptTest(unittest.TestCase):
         self.assertIn('"score": 0.0', prompt)
         self.assertIn("<feedback>", prompt)
         self.assertIn("<corrected_rollout>", prompt)
+        self.assertIn("<think branch=\"A\">", prompt)
+        self.assertIn("do not use <thinking>", prompt)
+        self.assertIn("Verification:", prompt)
 
     def test_privileged_teacher_prompt_marks_training_only_context(self):
         prompt = build_teacher_prompt(

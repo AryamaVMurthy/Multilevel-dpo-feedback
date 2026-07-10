@@ -3,9 +3,9 @@ import unittest
 from text_feedback_dpo.evaluation import evaluate_examples
 
 
-VALID_MATH = "<plan>x</plan><reflect>Verification: 2 + 2 = 4</reflect><final>4</final>"
+VALID_MATH = '<plan>x</plan><think branch="A">2 + 2 = 4</think><reflect>Verification: 2 + 2 = 4</reflect><final>4</final>'
 VALID_SEARCH = (
-    "<plan>x</plan><reflect>Verification: evidence supports Ada Lovelace</reflect>"
+    '<plan>x</plan><think branch="A">retrieve evidence</think><reflect>Verification: evidence supports Ada Lovelace</reflect>'
     "<final>Ada Lovelace</final>"
 )
 

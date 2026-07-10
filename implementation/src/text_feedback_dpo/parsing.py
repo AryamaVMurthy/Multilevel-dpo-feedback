@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -13,6 +14,7 @@ class TrajectoryParseError(ValueError):
 class Trajectory:
     raw: str
     plan: str
+    thinks: list[str]
     reflect: str
     final: str
 
@@ -39,6 +41,13 @@ def _extract_tag(text: str, tag: str) -> str:
     return text[start + len(open_tag) : end].strip()
 
 
+def _extract_thinks(text: str) -> list[str]:
+    matches = list(re.finditer(r"<think(?:\s+[^>]*)?>(.*?)</think>", text, flags=re.DOTALL))
+    if not matches:
+        raise TrajectoryParseError("missing_think", "missing <think> or <think branch=\"...\"> block")
+    return [match.group(1).strip() for match in matches]
+
+
 def parse_trajectory(text: str) -> Trajectory:
     if not text or not text.strip():
         raise TrajectoryParseError("empty_trajectory", "trajectory text is empty")
@@ -57,6 +66,7 @@ def parse_trajectory(text: str) -> Trajectory:
     trajectory = Trajectory(
         raw=text,
         plan=_extract_tag(text, "plan"),
+        thinks=_extract_thinks(text),
         reflect=_extract_tag(text, "reflect"),
         final=_extract_tag(text, "final"),
     )
@@ -65,4 +75,3 @@ def parse_trajectory(text: str) -> Trajectory:
             "verification_missing", "<reflect> must contain a non-empty Verification section"
         )
     return trajectory
-

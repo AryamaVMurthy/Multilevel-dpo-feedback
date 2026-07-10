@@ -81,7 +81,7 @@ def build_teacher_prompt(
     return f"""You are a teacher correcting a small language model's structured rollout.
 {privileged}
 The student must use:
-<plan>, <think>, <tool>, <reflect>, <final>.
+<plan>, <think branch="A">, optional <tool branch="A">, <reflect>, <final>.
 
 Your job:
 1. Give textual feedback.
@@ -91,6 +91,9 @@ Your job:
 5. Do not add unnecessary branches.
 6. Ensure <reflect> contains real verification.
 7. Ensure <final> contains only the final answer.
+8. Use the literal tag name <think branch="A"> and close it with </think>; do not use <thinking>.
+9. Inside <reflect>, include the literal non-empty heading `Verification:`. Do not rename it to
+   `Verification Step` or another variant.
 
 Domain:
 {domain}

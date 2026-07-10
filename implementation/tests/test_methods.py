@@ -3,8 +3,8 @@ import unittest
 from text_feedback_dpo.methods import build_exact_dpo_pairs, build_iterative_guidance_dpo_pairs
 
 
-WRONG = "<plan>x</plan><reflect>Verification: no</reflect><final>5</final>"
-RIGHT = "<plan>x</plan><reflect>Verification: 2 + 2 = 4</reflect><final>4</final>"
+WRONG = '<plan>x</plan><think branch="A">2 + 2 = 5</think><reflect>Verification: no</reflect><final>5</final>'
+RIGHT = '<plan>x</plan><think branch="A">2 + 2 = 4</think><reflect>Verification: 2 + 2 = 4</reflect><final>4</final>'
 
 
 class MethodPairBuilderTest(unittest.TestCase):
