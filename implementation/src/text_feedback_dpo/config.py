@@ -23,6 +23,7 @@ OPTIONAL_KEYS = {
     "evaluator_generation",
     "max_guidance_steps",
     "max_guidance_regenerations",
+    "benchmarks",
 }
 
 ALLOWED_KEYS = REQUIRED_KEYS | OPTIONAL_KEYS

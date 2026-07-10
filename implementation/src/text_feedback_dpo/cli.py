@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
+from text_feedback_dpo.benchmarks import load_benchmark_examples
 from text_feedback_dpo.io import read_jsonl, write_jsonl
 from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
@@ -403,10 +404,15 @@ def run_native_pipeline(
     logger = JsonlLogger(output / "events.jsonl", run_id=run_id)
     logger.event("run_start", stage="native_iterative_guidance", config_path=str(config_path))
 
-    examples_path = Path(str(config["examples_path"]))
-    if not examples_path.is_absolute():
-        examples_path = config_path.parent / examples_path
-    examples = read_jsonl(examples_path)
+    if "benchmarks" in config:
+        examples = load_benchmark_examples(config["benchmarks"])
+    else:
+        if "examples_path" not in config:
+            raise ValueError("native pipeline requires examples_path or benchmarks")
+        examples_path = Path(str(config["examples_path"]))
+        if not examples_path.is_absolute():
+            examples_path = config_path.parent / examples_path
+        examples = read_jsonl(examples_path)
     max_examples = int(config["max_examples"])
     if len(examples) < max_examples:
         raise ValueError(
