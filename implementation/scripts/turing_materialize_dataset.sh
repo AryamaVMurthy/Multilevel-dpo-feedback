@@ -33,11 +33,13 @@ export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
 cd "$PROJECT_DIR"
+export PYTHONPATH="$PROJECT_DIR/src"
 
 echo "job_id=${SLURM_JOB_ID} account=${TURING_ACCOUNT} host=$(hostname)"
 echo "scratch_before=$(df -h /scratch | tail -1)"
 cp "$CONFIG" "$SCRATCH_DIR/config.yaml"
-uv run --frozen python -m text_feedback_dpo.cli materialize-dataset \
+uv run --no-project --with 'pyyaml==6.0.3' --with 'zstandard==0.25.0' \
+  python -m text_feedback_dpo.cli materialize-dataset \
   --config "$SCRATCH_DIR/config.yaml" \
   --source-path "$SOURCE_PATH" \
   --output-dir "$OUTPUT_DIR"
