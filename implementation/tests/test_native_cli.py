@@ -9,7 +9,12 @@ from text_feedback_dpo.cli import run_native_pipeline
 class ScriptedProvider:
     def __init__(self):
         self.student_outputs = iter(["wrong answer", "wrong answer", "correct answer"])
-        self.teacher_outputs = iter(["Check the arithmetic operation.", "Recompute the operation."])
+        self.teacher_outputs = iter(
+            [
+                "Recheck how the quantities relate before answering fully.",
+                "Reconsider the relation between the given quantities before deciding.",
+            ]
+        )
         self.calls = []
 
     def generate(self, role, prompt, **kwargs):

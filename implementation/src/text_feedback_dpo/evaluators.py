@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any, Callable
 
-from text_feedback_dpo.prompts import build_native_student_prompt
+from text_feedback_dpo.answer_evaluation import evaluate_domain_answer
 
 
 class ModelOutputParseError(ValueError):
@@ -42,6 +42,8 @@ def parse_evaluator_output(raw: str) -> dict[str, Any]:
         raise ValueError("evaluator field correct must be boolean")
     if not isinstance(value["answer"], str):
         raise ValueError("evaluator field answer must be a string")
+    if not value["answer"].strip():
+        raise ValueError("evaluator field answer must be non-empty")
     if not isinstance(value["confidence"], (int, float)) or not 0 <= float(value["confidence"]) <= 1:
         raise ValueError("evaluator confidence must be between 0 and 1")
     if not isinstance(value["reason"], str) or not value["reason"].strip():
@@ -140,6 +142,43 @@ def make_model_evaluator(
             parsed = parse_evaluator_output(raw)
         except ValueError as exc:
             raise ModelOutputParseError(role="evaluator", raw=raw, message=str(exc)) from exc
+        actual_answer_type = parsed.get("answer_type", "unknown")
+        if not isinstance(actual_answer_type, str) or not actual_answer_type.strip():
+            raise ModelOutputParseError(
+                role="evaluator",
+                raw=raw,
+                message="evaluator field answer_type must be a non-empty string when supplied",
+            )
+        model_evidence_supported = parsed.get("evidence_supported")
+        if model_evidence_supported is not None and not isinstance(model_evidence_supported, bool):
+            raise ModelOutputParseError(
+                role="evaluator",
+                raw=raw,
+                message="evaluator field evidence_supported must be boolean when supplied",
+            )
+        try:
+            deterministic = evaluate_domain_answer(
+                domain=str(example["domain"]),
+                prediction=parsed["answer"],
+                example=example,
+                actual_answer_type=actual_answer_type,
+                evidence_supported=model_evidence_supported,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ModelOutputParseError(
+                role="evaluator",
+                raw=raw,
+                message=f"deterministic answer evaluation failed: {exc}",
+            ) from exc
+        model_correct = bool(parsed["correct"])
+        requires_model_judgment = bool(deterministic.get("requires_model_judgment"))
+        parsed["model_correct"] = model_correct
+        parsed["deterministic"] = deterministic
+        parsed["deterministic_correct"] = bool(deterministic["correct"])
+        parsed["requires_model_judgment"] = requires_model_judgment
+        # Deterministic checks act as a consistency gate for clear cases. Ambiguous cases remain
+        # under the evaluator model's judgment and are visible in the result for auditability.
+        parsed["correct"] = model_correct if requires_model_judgment else model_correct and bool(deterministic["correct"])
         parsed["raw_evaluator_output"] = raw
         parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
         parsed["generated_tokens_estimate"] = len(raw.split())

@@ -206,6 +206,8 @@ def _parse_dataset(value: object) -> DatasetConfig:
         if sum(validation_roles.values()) != splits["validation"]:
             raise ValueError("dataset.validation_roles must partition dataset.splits.validation")
     elif name == "searchqa8k":
+        if mapping["source"] != "nyu-dl/SearchQA":
+            raise ValueError("SearchQA paper config must use the original SearchQA release, not an MRQA mirror")
         if validation_roles:
             raise ValueError("dataset.validation_roles must be empty for SearchQA-8K")
         auxiliary_hparam = _count_mapping(

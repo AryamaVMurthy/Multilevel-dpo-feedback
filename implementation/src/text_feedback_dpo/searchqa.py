@@ -6,7 +6,7 @@ import json
 import re
 import zipfile
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 
 EXPECTED_OFFICIAL_COUNTS = {"train": 99820, "validation": 13393, "test": 27248}
@@ -104,17 +104,33 @@ def convert_original_searchqa_row(row: Mapping[str, Any], *, split: str, index: 
     evidence = _flatten_evidence(row.get("search_results", row.get("evidence")))
     if not evidence:
         raise ValueError(f"SearchQA {split} row {index} is missing controlled evidence")
-    source_id = str(row.get("id", row.get("qid", f"{split}:{index}")))
+    source_id = str(row.get("id", row.get("qid", index)))
+    aliases_value = row.get("answer_aliases", row.get("answers", [answer]))
+    if isinstance(aliases_value, str):
+        aliases = [aliases_value]
+    elif isinstance(aliases_value, list) and all(str(item).strip() for item in aliases_value):
+        aliases = [str(item).strip() for item in aliases_value]
+    else:
+        raise ValueError(f"SearchQA {split} row {index} has invalid answer aliases")
     return {
         "id": f"searchqa-{split}-{source_id}",
         "domain": "search_qa",
         "problem": question,
         "gold_answer": answer,
-        "answers": [answer],
+        "answers": aliases,
+        "answer_aliases": aliases,
         "answer_type": str(row.get("answer_type", "unknown")),
         "evidence": evidence,
         "context": "\n".join(evidence),
         "source": "nyu-dl/SearchQA",
+        "source_key": f"{split}:{source_id}",
+        "source_metadata": {
+            "category": row.get("category"),
+            "air_date": row.get("air_date"),
+            "value": row.get("value"),
+            "round": row.get("round"),
+            "show_number": row.get("show_number"),
+        },
         "source_split": split,
         "source_index": index,
     }

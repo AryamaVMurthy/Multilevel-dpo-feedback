@@ -3,6 +3,7 @@ import unittest
 from text_feedback_dpo.evaluators import (
     build_evaluator_prompt,
     build_guidance_guard_prompt,
+    make_model_evaluator,
     parse_guidance_guard_output,
     parse_evaluator_output,
 )
@@ -71,6 +72,24 @@ class NativePipelineTest(unittest.TestCase):
         )
         self.assertTrue(parsed["correct"])
 
+    def test_model_evaluator_attaches_domain_checks_without_hiding_model_judgment(self):
+        evaluator = make_model_evaluator(
+            generate=lambda *_args, **_kwargs: (
+                '{"correct": true, "answer": "4", "confidence": 0.98, '
+                '"reason": "matches"}'
+            ),
+            generation_kwargs={},
+        )
+        result = evaluator(
+            {"domain": "math", "problem": "What is 2 + 2?", "gold_answer": "4"},
+            "The result is four.",
+        )
+
+        self.assertTrue(result["correct"])
+        self.assertTrue(result["model_correct"])
+        self.assertTrue(result["deterministic"]["numeric_exact_match"])
+        self.assertEqual(result["deterministic"]["evaluator_source"], "deterministic_numeric")
+
     def test_structured_role_prompts_require_json_without_preceding_reasoning(self):
         example = {
             "domain": "math",
@@ -97,6 +116,7 @@ class NativePipelineTest(unittest.TestCase):
         ]
         outputs = iter([WRONG, WRONG, RIGHT])
         guidance_calls = []
+        guard_contexts = []
 
         def evaluate(_example, response):
             return {"correct": response == RIGHT, "confidence": 0.99, "reason": "test"}
@@ -108,14 +128,18 @@ class NativePipelineTest(unittest.TestCase):
             student_generate=lambda prompt: next(outputs),
             evaluate=evaluate,
             teacher_guidance=lambda _example, _rollout, _result, attempt: (
-                guidance_calls.append(attempt) or f"Recheck step {attempt}."
+                guidance_calls.append(attempt)
+                or "Recheck how the quantities relate before answering fully."
             ),
-            guidance_guard=lambda _example, guidance, _result, _attempt: {
-                "safe": True,
-                "reason": "does not reveal answer",
-                "confidence": 0.99,
-                "guidance": guidance,
-            },
+            guidance_guard=lambda _example, guidance, _result, _attempt: (
+                guard_contexts.append(guidance)
+                or {
+                    "safe": True,
+                    "reason": "does not reveal answer",
+                    "confidence": 0.99,
+                    "guidance": guidance,
+                }
+            ),
             max_guidance_steps=3,
             max_guidance_regenerations=1,
         )
@@ -125,6 +149,10 @@ class NativePipelineTest(unittest.TestCase):
         self.assertEqual(result["metrics"]["first_correct_attempt"], {"m1": 2})
         self.assertEqual(result["metrics"]["success_by_attempt"]["2"], 1)
         self.assertEqual(guidance_calls, [1, 2])
+        self.assertEqual(guard_contexts, [
+            "Recheck how the quantities relate before answering fully.",
+            "Recheck how the quantities relate before answering fully. Recheck how the quantities relate before answering fully.",
+        ])
         self.assertEqual(len(result["attempts"]), 3)
 
     def test_native_collector_does_not_create_pairs_after_unsafe_guidance(self):

@@ -89,11 +89,12 @@ def build_privileged_guidance_prompt(
 
 The teacher may inspect the gold answer, but the guidance sent to the student must never reveal
 the exact answer, an equivalent expression, a decisive entity, or any answer-bearing phrase.
-Give one short, actionable hint about the next reasoning step. Point out the type of mistake,
-missing relation, unsupported assumption, or verification that should be performed. Do not solve
-the problem for the student. Do not quote the gold answer. Do not use digits, numeric quantities,
-proper nouns, quoted text spans, or answer-bearing words from the problem or evidence. Refer only
-to an abstract operation, relation, answer type, or verification step.
+    Give exactly one sentence containing eight to fifteen words. Give one very slight, abstract hint
+    about the next reasoning step. Point out only a broad mistake, missing relation, unsupported
+    assumption, or verification location. Do not solve the problem for the student. Do not quote the
+    gold answer. Do not use digits, quantities, equations, explicit arithmetic operations, proper
+    nouns, answer initials, answer length, quoted text spans, or copied evidence. Refer only to an
+    abstract relation, answer type, or verification step.
 
 Domain: {domain}
 Problem:

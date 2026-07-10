@@ -61,6 +61,13 @@ class PaperExperimentConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"dataset\.revision.*required"):
             self._write_and_load(value)
 
+    def test_searchqa_mrqa_mirror_is_rejected(self):
+        value = self._load_mapping("configs/paper/searchqa8k.yaml")
+        value["dataset"]["source"] = "lucadiliello/searchqa"
+
+        with self.assertRaisesRegex(ValueError, "original SearchQA"):
+            self._write_and_load(value)
+
     def test_deprecated_warmup_ratio_fails_explicitly(self):
         value = self._load_mapping("configs/paper/gsm8k.yaml")
         value["optimizer"]["warmup_ratio"] = value["optimizer"].pop("warmup_fraction")

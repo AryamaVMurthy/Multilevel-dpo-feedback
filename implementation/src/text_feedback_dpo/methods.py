@@ -5,6 +5,7 @@ from typing import Any
 
 from text_feedback_dpo.prompts import build_student_prompt
 from text_feedback_dpo.scoring import evaluate_rollout
+from text_feedback_dpo.guidance_policy import validate_accumulated_guidance, validate_guidance_surface
 
 
 Example = dict[str, Any]
@@ -226,6 +227,7 @@ def build_native_iterative_guidance_pairs(
         base_prompt = base_prompt_builder(example)
         base_prompts[example_id] = base_prompt
         failed: list[tuple[int, str, dict[str, Any]]] = []
+        guidance_history: list[str] = []
         current_prompt = base_prompt
         attempt = 0
 
@@ -279,20 +281,45 @@ def build_native_iterative_guidance_pairs(
 
             guidance_attempts: list[dict[str, Any]] = []
             safe_guidance: str | None = None
+            safe_accumulated: str | None = None
             for regeneration in range(max_guidance_regenerations + 1):
                 guidance = teacher_guidance(example, response, result, attempt + 1)
                 if not isinstance(guidance, str) or not guidance.strip():
                     raise ValueError(f"teacher guidance for {example_id} attempt {attempt + 1} is empty")
-                guard_result = guidance_guard(example, guidance, result, attempt + 1)
+                surface_result = validate_guidance_surface(
+                    guidance,
+                    problem=str(example["problem"]),
+                    gold_answer=str(example["gold_answer"]),
+                    evidence=example.get("evidence", []),
+                )
+                candidate_history = [*guidance_history, guidance]
+                accumulated_result = validate_accumulated_guidance(
+                    candidate_history,
+                    problem=str(example["problem"]),
+                    gold_answer=str(example["gold_answer"]),
+                    evidence=example.get("evidence", []),
+                )
+                guard_result: dict[str, Any] | None = None
+                if bool(surface_result["valid"]) and bool(accumulated_result["valid"]):
+                    guard_result = guidance_guard(
+                        example,
+                        str(accumulated_result["accumulated"]),
+                        result,
+                        attempt + 1,
+                    )
                 guidance_attempts.append(
                     {
                         "regeneration": regeneration,
                         "guidance": guidance,
+                        "surface": surface_result,
+                        "accumulated": accumulated_result,
                         "guard": guard_result,
                     }
                 )
-                if bool(guard_result.get("safe")):
+                if guard_result is not None and bool(guard_result.get("safe")):
                     safe_guidance = guidance
+                    safe_accumulated = str(accumulated_result["accumulated"])
+                    guidance_history = candidate_history
                     break
             if safe_guidance is None:
                 failures.append(
@@ -307,7 +334,9 @@ def build_native_iterative_guidance_pairs(
                 break
 
             attempts[-1]["guidance_records"] = guidance_attempts
-            current_prompt = retry_prompt_builder(base_prompt, safe_guidance)
+            if safe_accumulated is None:
+                raise RuntimeError("safe guidance was missing after guidance policy acceptance")
+            current_prompt = retry_prompt_builder(base_prompt, safe_accumulated)
             attempt += 1
 
     unresolved = len(failures)

@@ -46,6 +46,9 @@ class SearchQALoaderTest(unittest.TestCase):
         self.assertEqual(row["gold_answer"], "A")
         self.assertEqual(row["evidence"], ["Evidence supports A."])
         self.assertEqual(row["source"], "nyu-dl/SearchQA")
+        self.assertEqual(row["source_key"], "train:0")
+        self.assertEqual(row["answer_aliases"], ["A"])
+        self.assertIn("air_date", row["source_metadata"])
         self.assertEqual(len(result["artifact_sha256"]), 64)
 
     def test_missing_split_fails_explicitly(self):
