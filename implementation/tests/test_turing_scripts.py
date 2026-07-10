@@ -5,6 +5,7 @@ from pathlib import Path
 class TuringScriptTest(unittest.TestCase):
     def test_paper_scripts_use_fail_fast_slurm_and_explicit_artifacts(self):
         for name in (
+            "turing_setup_environment.sh",
             "turing_download_dataset_source.sh",
             "turing_materialize_dataset.sh",
             "turing_collect_array.sh",
@@ -20,6 +21,9 @@ class TuringScriptTest(unittest.TestCase):
             self.assertIn("module load u22/cuda/12.4", text, name)
             self.assertNotIn("|| true", text, name)
             self.assertNotIn("/home/$USER/.cache", text, name)
+        setup = Path("scripts/turing_setup_environment.sh").read_text(encoding="utf-8")
+        self.assertIn("SHARED_UV_CACHE:?SHARED_UV_CACHE is required", setup)
+        self.assertIn("uv sync --frozen", setup)
         for name in (
             "turing_collect_array.sh",
             "turing_tune_paper.sh",

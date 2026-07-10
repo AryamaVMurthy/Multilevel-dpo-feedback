@@ -27,8 +27,8 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
 fi
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
-export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
-export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
+export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
