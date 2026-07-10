@@ -1,9 +1,9 @@
-run_id: qwen35-pair-validation-1x-r3
+run_id: qwen35-pair-validation-1x-r4
 student_model: Qwen/Qwen3.5-2B
 teacher_model: Qwen/Qwen3.5-9B
 teacher_mode: stronger_model
 max_examples: 1
-output_dir: runs/qwen35-pair-validation-1x-r3
+output_dir: runs/qwen35-pair-validation-1x-r4
 allow_missing_slurm_account_for_local: true
 
 generation:
