@@ -96,7 +96,8 @@ Surface-policy rejections were `explicit_operation=11`, `word_count=6`, and
 
 ## Mandatory Teacher-Free Baseline Gate
 
-Status: implementation verified locally; GPU execution has not started.
+Status: one-example functional micro passed; the audited 16-example gate has not run
+under the final observability commit.
 
 Before corrected collection or any training, evaluate the pinned Qwen3.5-2B base
 checkpoint without teacher guidance. The baseline protocol now includes:
@@ -110,9 +111,30 @@ checkpoint without teacher guidance. The baseline protocol now includes:
 - deterministic GPU shards, strict hash/ID-order merge, manual evaluator-agreement
   audit, HTML report, and one-time test markers.
 
-The execution order is a 16-example manually audited validation preflight, full
+The execution order is a one-example functional micro, a 16-example manually audited validation preflight, full
 747-example validation, then one-time 1,319-example official-test baseline. The base
 test result is descriptive and cannot affect prompts, collection, rewards,
 hyperparameters, stopping, or model selection. Collection R2 remains blocked until the
-baseline gate passes. The local suite passes 149 tests and the corrected source is ready
-for a commit-pinned Turing sync. Baseline GPU execution has not started.
+baseline gate passes. The local suite passes 150 tests.
+
+### Baseline Micro Execution
+
+- Commit `ea45bd7b1a47ea32c1a9dc3df330d593829da5ff` was used for the first GPU micro.
+- Job `12967` materialized the deterministic 16-example subset; job `12968` failed
+  fast because an abbreviated source SHA was supplied; job `12969` created the freeze
+  successfully with the full SHA.
+- Job `12970_0` was cancelled after 9 minutes 54 seconds when the 16-example run was
+  projected close to its wall-time limit. Its GPU telemetry is diagnostic only.
+- Job `12971` materialized deterministic micro ID `gsm8k-5703`.
+- Job `12972_0` completed the teacher-free one-example GPU micro in 1 minute 23 seconds.
+- Job `12973` strictly merged the shard in 2 seconds; Turing automatically added GPU
+  billing because the merge wrapper requested eight CPU cores. Both merge wrappers are
+  now limited to two cores to prevent that waste.
+
+Micro result: exact accuracy `1/1`; EOS termination `1/1`; truncation `0/1`; student
+prompt/generated tokens `105/3,058`; student latency `65.334` seconds; evaluator tokens
+`28`; evaluator latency `7.207` seconds. The raw response was correct but excessively
+verbose for a simple arithmetic problem. Ten-second GPU telemetry missed the short 9B
+evaluator peak, so paper GPU scripts now sample every second. Exact-token paper records
+no longer emit an additional word-count estimate. These observability changes require a
+new source commit and freeze before the 16-example baseline gate.

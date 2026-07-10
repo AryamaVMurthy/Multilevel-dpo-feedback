@@ -1,7 +1,7 @@
 #!/bin/bash
 # CPU-only strict merge of completed teacher-free evaluation shards.
 #SBATCH -p u22
-#SBATCH -n 8
+#SBATCH -n 2
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/slurm-%x-%j.out

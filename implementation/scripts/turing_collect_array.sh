@@ -48,7 +48,7 @@ export PYTHONPATH="$PROJECT_DIR/src"
 
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}_${SHARD_INDEX}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
-  --format=csv -l 10 > "$GPU_LOG" &
+  --format=csv -l 1 > "$GPU_LOG" &
 GPU_MONITOR_PID=$!
 cleanup() {
   if kill -0 "$GPU_MONITOR_PID" 2>/dev/null; then

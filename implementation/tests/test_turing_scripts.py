@@ -73,6 +73,15 @@ class TuringScriptTest(unittest.TestCase):
         merge_evaluations = Path("scripts/turing_merge_evaluations.sh").read_text(encoding="utf-8")
         self.assertIn("merge-evaluations", merge_evaluations)
         self.assertIn("EXPECTED_SHARDS:?EXPECTED_SHARDS is required", merge_evaluations)
+        self.assertIn("#SBATCH -n 2", merge_evaluations)
+        self.assertIn("#SBATCH -n 2", merge)
+        for name in (
+            "turing_collect_array.sh",
+            "turing_tune_paper.sh",
+            "turing_train_paper.sh",
+            "turing_evaluate_paper.sh",
+        ):
+            self.assertIn("--format=csv -l 1", (Path("scripts") / name).read_text(encoding="utf-8"))
         grpo_setup = Path("scripts/turing_setup_grpo_environment.sh").read_text(encoding="utf-8")
         self.assertIn("GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required", grpo_setup)
         self.assertIn("environments/grpo", grpo_setup)

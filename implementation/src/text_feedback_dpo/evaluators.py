@@ -297,7 +297,8 @@ def make_model_evaluator(
         parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
         exact_tokens = [record["generated_tokens"] for record in generation_records]
         parsed["generated_tokens"] = sum(exact_tokens) if all(value is not None for value in exact_tokens) else None
-        parsed["generated_tokens_estimate"] = sum(len(raw_output.split()) for raw_output in raw_outputs)
+        if parsed["generated_tokens"] is None:
+            parsed["generated_tokens_estimate"] = sum(len(raw_output.split()) for raw_output in raw_outputs)
         return parsed
 
     return evaluate
@@ -332,7 +333,8 @@ def make_model_guidance_guard(
         parsed["generation"] = asdict(generation)
         parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
         parsed["generated_tokens"] = generation.generated_tokens
-        parsed["generated_tokens_estimate"] = len(raw.split())
+        if generation.generated_tokens is None:
+            parsed["generated_tokens_estimate"] = len(raw.split())
         return parsed
 
     return guard

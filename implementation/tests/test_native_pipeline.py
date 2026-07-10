@@ -142,6 +142,30 @@ class NativePipelineTest(unittest.TestCase):
         self.assertEqual(result["evaluator_generations"][0]["prompt_tokens"], 90)
         self.assertEqual(result["evaluator_generations"][0]["generated_tokens"], 18)
         self.assertEqual(result["evaluator_generations"][0]["finish_reason"], "eos")
+        self.assertNotIn("generated_tokens_estimate", result)
+
+    def test_guidance_guard_omits_estimate_when_exact_token_count_exists(self):
+        guard = make_model_guidance_guard(
+            generate=lambda *_args, **_kwargs: ModelGeneration(
+                text="SAFE",
+                prompt_tokens=80,
+                generated_tokens=1,
+                terminated=True,
+                truncated=False,
+                finish_reason="eos",
+            ),
+            generation_kwargs={},
+        )
+
+        result = guard(
+            {"domain": "math", "problem": "Compute.", "gold_answer": "4"},
+            "Recheck the calculation.",
+            {},
+            0,
+        )
+
+        self.assertEqual(result["generated_tokens"], 1)
+        self.assertNotIn("generated_tokens_estimate", result)
 
     def test_native_student_prompt_allows_model_native_reasoning(self):
         prompt = build_native_student_prompt(

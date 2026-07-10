@@ -16,16 +16,16 @@ paper defaults.
 
 ## Current Execution State
 
-Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`. The last pushed plan commit is
-`bc1782c`; corrected R2 and baseline code is locally verified and awaiting its source
-freeze commit.
+Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`. Baseline/R2 protocol commit
+`ea45bd7b1a47ea32c1a9dc3df330d593829da5ff` passed a one-example GPU micro; the
+post-micro observability correction is locally verified and awaiting its source commit.
 
 | Scope | State | Evidence or next gate |
 | --- | --- | --- |
 | Tasks 1-12 | implemented | strict configs, data, collection, preference, LoRA, DPO/GRPO, held-out, observability, and Slurm surfaces exist |
-| Task 13 | verified locally | 149 tests pass in the locked local `.venv`; compile, lock, shell syntax, documentation integrity, and diff checks pass |
+| Task 13 | verified locally | 150 tests pass in the locked local `.venv`; compile, lock, shell syntax, documentation integrity, and diff checks pass |
 | Task 14 | complete | GSM8K manifest hash `61a7a7f82f0ff75491b7b363504f85b0543628a860084cc0be66a01cf6f9eb6c` with 6,726/747/1,319 and nested 500/247 roles |
-| Task 15 | ready for source freeze and GPU preflight | teacher-free base evaluation now precedes all collection and training |
+| Task 15 | one-example micro passed | correct, EOS-terminated 3,058-token response; final 16-example freeze/audit remains required |
 | Task 16 R1 | diagnostic complete, gate failed | 64 records across jobs `12948_0`, `12952_0`, and `12964_0`; mixed source protocols, unverified truncation, guidance failures, and one pair |
 | Tasks 17-27 | blocked | require a passing baseline gate, passing R2 collection preflight, and all later domain gates |
 
