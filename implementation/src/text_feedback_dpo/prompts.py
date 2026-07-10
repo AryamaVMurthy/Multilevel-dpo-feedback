@@ -18,43 +18,95 @@ def _domain_verification(domain: str) -> str:
     raise ValueError("domain must be math or search_qa")
 
 
+def trajectory_format_instructions(domain: str) -> str:
+    """Return the single format contract shared by every model role."""
+    return f"""Trajectory format contract:
+1. Emit one <plan> block, then one or more reasoning blocks using the exact tag <think branch="A">.
+2. Branch names must be unique uppercase letters starting at A; use at most the domain limit.
+3. A <tool branch="A"> block is optional and may contain only a supplied controlled observation.
+4. Emit exactly one <reflect> block after all reasoning and tool blocks.
+5. Emit exactly one <final> block after <reflect>.
+6. Inside <reflect>, include these literal non-empty headings: Branch comparison:, Evidence / derivation check:, Verification:, Decision:.
+7. Put only the answer in <final>; do not put reasoning, headings, or XML tags there.
+8. Use <think>, never <thinking>. Do not use <thinking>; close every block with its matching closing tag.
+9. Do not emit Markdown fences, placeholder text, TODO markers, or an ellipsis.
+10. {_domain_verification(domain)}"""
+
+
 def build_student_prompt(problem: str, domain: str) -> str:
     return f"""You are solving a problem using a structured reasoning policy.
 
-You must use this format:
-
-<plan>
-High-level meta-plan. Decide the route, number of branches, tools needed, and verification needed before final answer.
-</plan>
-
-<think branch="A">
-Local reasoning for branch A.
-</think>
-
-<tool branch="A">
-Optional tool call and observation.
-</tool>
-
-<reflect>
-Branch comparison:
-Evidence / derivation check:
-Verification:
-Decision:
-</reflect>
-
-<final>
-Final answer only.
-</final>
-
-Rules:
-1. Do not give <final> before <reflect>.
-2. <reflect> must contain verification.
-3. Use tools only when useful.
-4. The final answer must be concise.
-5. {_domain_verification(domain)}
+{trajectory_format_instructions(domain)}
 
 Problem:
 {problem}
+"""
+
+
+def build_native_student_prompt(
+    *,
+    problem: str,
+    domain: str,
+    guidance: str | None = None,
+    evidence: list[str] | None = None,
+) -> str:
+    if domain not in {"math", "search_qa"}:
+        raise ValueError("domain must be math or search_qa")
+    evidence_text = ""
+    if evidence:
+        evidence_text = (
+            "\nControlled evidence available for this question:\n"
+            + "\n".join(f"- {item}" for item in evidence)
+            + "\nUse only this evidence; do not invent searches.\n"
+        )
+    guidance_text = ""
+    if guidance:
+        guidance_text = (
+            "\nA teacher provided this guidance after an earlier attempt. "
+            "Use it to reconsider the problem, but solve it yourself:\n"
+            f"{guidance}\n"
+        )
+    return f"""Solve the following {domain.replace("_", " ")} problem.
+
+Reason in the style that is natural for you. Reconsider calculations, assumptions,
+evidence, and constraints as needed. Give a concise final answer after your reasoning.
+Do not discuss this instruction or the evaluation process.
+{evidence_text}{guidance_text}
+Problem:
+{problem}
+"""
+
+
+def build_privileged_guidance_prompt(
+    *,
+    problem: str,
+    gold_answer: str,
+    rollout: str,
+    result: dict,
+    domain: str,
+) -> str:
+    return f"""You are a privileged teacher helping a smaller model improve its next attempt.
+
+The teacher may inspect the gold answer, but the guidance sent to the student must never reveal
+the exact answer, an equivalent expression, a decisive entity, or any answer-bearing phrase.
+Give one short, actionable hint about the next reasoning step. Point out the type of mistake,
+missing relation, unsupported assumption, or verification that should be performed. Do not solve
+the problem for the student. Do not quote the gold answer.
+
+Domain: {domain}
+Problem:
+{problem}
+
+Gold answer (teacher-only):
+{gold_answer}
+
+Earlier student response:
+{rollout}
+
+Earlier evaluator result:
+{json.dumps(result, sort_keys=True)}
+
+Return only the short guidance message.
 """
 
 
@@ -80,9 +132,6 @@ def build_teacher_prompt(
 
     return f"""You are a teacher correcting a small language model's structured rollout.
 {privileged}
-The student must use:
-<plan>, <think branch="A">, optional <tool branch="A">, <reflect>, <final>.
-
 Your job:
 1. Give textual feedback.
 2. Explain what computation should change: planning, thinking, tool use, branching, reflection, verification.
@@ -91,9 +140,8 @@ Your job:
 5. Do not add unnecessary branches.
 6. Ensure <reflect> contains real verification.
 7. Ensure <final> contains only the final answer.
-8. Use the literal tag name <think branch="A"> and close it with </think>; do not use <thinking>.
-9. Inside <reflect>, include the literal non-empty heading `Verification:`. Do not rename it to
-   `Verification Step` or another variant.
+
+{trajectory_format_instructions(domain)}
 
 Domain:
 {domain}
@@ -110,31 +158,9 @@ Student rollout:
 Student result:
 {json.dumps(result, sort_keys=True)}
 
-Return exactly:
-
-<feedback>
-The specific repair the student needs, without repeating the gold answer.
-</feedback>
-
-<corrected_rollout>
-<plan>
-A concise corrected plan for this problem.
-</plan>
-<think branch="A">
-The corrected reasoning for the student's actual error.
-</think>
-<reflect>
-Branch comparison: compare the corrected route with the student's route.
-Evidence / derivation check: check the relevant derivation or evidence.
-Verification: perform a concrete verification for this problem.
-Decision: answer
-</reflect>
-<final>
-The answer to the problem, and nothing else.
-</final>
-</corrected_rollout>
-
-The lines above are a format example, not text to copy. Replace every instructional sentence with
-content specific to the supplied problem and rollout. Never output `...`, `TODO`, or instructional
-placeholder text.
+Return exactly two top-level blocks in this order: <feedback> followed by
+<corrected_rollout>. Put specific repair guidance in <feedback> without repeating the gold answer.
+Put one complete trajectory satisfying the shared contract inside <corrected_rollout>. Write content
+specific to the supplied problem and rollout. Never output instructional sentences, TODO markers, or
+placeholder text inside either block.
 """

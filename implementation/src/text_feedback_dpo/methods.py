@@ -9,6 +9,9 @@ from text_feedback_dpo.scoring import evaluate_rollout
 
 Example = dict[str, Any]
 Generate = Callable[[str], str]
+NativeEvaluate = Callable[[Example, str], dict[str, Any]]
+NativeGuidance = Callable[[Example, str, dict[str, Any], int], str]
+GuidanceGuard = Callable[[Example, str, dict[str, Any], int], dict[str, Any]]
 
 
 def _pair(*, example: Example, prompt: str, chosen: str, rejected: str, metadata: dict[str, Any]) -> dict:
@@ -187,5 +190,140 @@ def build_iterative_guidance_dpo_pairs(
             "first_correct_examples": first_correct_examples,
             "wrong_attempts": wrong_attempts,
             "unresolved_examples": len(failures),
+        },
+    }
+
+
+def build_native_iterative_guidance_pairs(
+    *,
+    examples: list[Example],
+    base_prompt_builder: Callable[[Example], str],
+    retry_prompt_builder: Callable[[str, str], str],
+    student_generate: Generate,
+    evaluate: NativeEvaluate,
+    teacher_guidance: NativeGuidance,
+    guidance_guard: GuidanceGuard,
+    max_guidance_steps: int,
+    max_guidance_regenerations: int,
+) -> dict[str, Any]:
+    """Collect native-thinking trajectories and all wrong-vs-first-correct pairs."""
+
+    if max_guidance_steps <= 0:
+        raise ValueError("max_guidance_steps must be positive")
+    if max_guidance_regenerations < 0:
+        raise ValueError("max_guidance_regenerations must be non-negative")
+
+    pairs: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    response_sft: list[dict[str, Any]] = []
+    base_prompts: dict[str, str] = {}
+    first_correct_attempt: dict[str, int] = {}
+    success_by_attempt: dict[str, int] = {}
+
+    for example in examples:
+        example_id = str(example["id"])
+        base_prompt = base_prompt_builder(example)
+        base_prompts[example_id] = base_prompt
+        failed: list[tuple[int, str, dict[str, Any]]] = []
+        current_prompt = base_prompt
+        attempt = 0
+
+        while True:
+            response = student_generate(current_prompt)
+            result = evaluate(example, response)
+            attempt_row = {
+                "id": example_id,
+                "attempt": attempt,
+                "prompt": current_prompt,
+                "response": response,
+                "result": result,
+            }
+            attempts.append(attempt_row)
+            if bool(result.get("correct")):
+                first_correct_attempt[example_id] = attempt
+                success_by_attempt[str(attempt)] = success_by_attempt.get(str(attempt), 0) + 1
+                if failed:
+                    for failed_attempt, failed_response, failed_result in failed:
+                        pairs.append(
+                            _pair(
+                                example=example,
+                                prompt=base_prompt,
+                                chosen=response,
+                                rejected=failed_response,
+                                metadata={
+                                    "method": "native_iterative_guidance_dpo",
+                                    "failed_attempt": failed_attempt,
+                                    "first_correct_attempt": attempt,
+                                    "failed_result": failed_result,
+                                    "chosen_result": result,
+                                },
+                            )
+                        )
+                    response_sft.append(
+                        _format_sft(example=example, prompt=base_prompt, completion=response)
+                    )
+                break
+
+            failed.append((attempt, response, result))
+            if attempt >= max_guidance_steps:
+                failures.append(
+                    {
+                        "id": example_id,
+                        "error_code": "no_correct_rollout_within_guidance_budget",
+                        "attempts": attempt + 1,
+                        "last_result": result,
+                    }
+                )
+                break
+
+            guidance_attempts: list[dict[str, Any]] = []
+            safe_guidance: str | None = None
+            for regeneration in range(max_guidance_regenerations + 1):
+                guidance = teacher_guidance(example, response, result, attempt + 1)
+                if not isinstance(guidance, str) or not guidance.strip():
+                    raise ValueError(f"teacher guidance for {example_id} attempt {attempt + 1} is empty")
+                guard_result = guidance_guard(example, guidance, result, attempt + 1)
+                guidance_attempts.append(
+                    {
+                        "regeneration": regeneration,
+                        "guidance": guidance,
+                        "guard": guard_result,
+                    }
+                )
+                if bool(guard_result.get("safe")):
+                    safe_guidance = guidance
+                    break
+            if safe_guidance is None:
+                failures.append(
+                    {
+                        "id": example_id,
+                        "error_code": "unsafe_guidance",
+                        "attempt": attempt,
+                        "guidance_attempts": len(guidance_attempts),
+                        "guidance_records": guidance_attempts,
+                    }
+                )
+                break
+
+            attempts[-1]["guidance_records"] = guidance_attempts
+            current_prompt = retry_prompt_builder(base_prompt, safe_guidance)
+            attempt += 1
+
+    unresolved = len(failures)
+    return {
+        "pairs": pairs,
+        "response_sft": response_sft,
+        "attempts": attempts,
+        "failures": failures,
+        "base_prompts": base_prompts,
+        "metrics": {
+            "examples_total": len(examples),
+            "accepted_pairs": len(pairs),
+            "first_correct_attempt": first_correct_attempt,
+            "success_by_attempt": success_by_attempt,
+            "unresolved_examples": unresolved,
+            "attempts_total": len(attempts),
+            "wrong_attempts": sum(1 for row in attempts if not row["result"].get("correct")),
         },
     }

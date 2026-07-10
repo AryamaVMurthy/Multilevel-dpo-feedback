@@ -6,9 +6,16 @@ from pathlib import Path
 
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.io import read_jsonl, write_jsonl
+from text_feedback_dpo.evaluators import make_model_evaluator, make_model_guidance_guard
+from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
-from text_feedback_dpo.prompts import build_student_prompt, build_teacher_prompt
+from text_feedback_dpo.prompts import (
+    build_native_student_prompt,
+    build_privileged_guidance_prompt,
+    build_student_prompt,
+    build_teacher_prompt,
+)
 from text_feedback_dpo.report import write_html_report
 from text_feedback_dpo.scoring import evaluate_rollout
 from text_feedback_dpo.validation import validate_run
@@ -370,6 +377,126 @@ def run_generate_pipeline(
     return metrics
 
 
+def run_native_pipeline(
+    *,
+    config_path: Path,
+    output_dir: Path | None = None,
+    model_provider: ModelProvider | None = None,
+    evaluator=None,
+    guidance_guard=None,
+) -> dict:
+    config = load_config(config_path)
+    run_id = str(config["run_id"])
+    output = output_dir or Path(str(config["output_dir"]))
+    output.mkdir(parents=True, exist_ok=True)
+    logger = JsonlLogger(output / "events.jsonl", run_id=run_id)
+    logger.event("run_start", stage="native_iterative_guidance", config_path=str(config_path))
+
+    examples_path = Path(str(config["examples_path"]))
+    if not examples_path.is_absolute():
+        examples_path = config_path.parent / examples_path
+    examples = read_jsonl(examples_path)
+    max_examples = int(config["max_examples"])
+    if len(examples) < max_examples:
+        raise ValueError(
+            f"examples file has {len(examples)} rows but max_examples={max_examples} was requested"
+        )
+    examples = examples[:max_examples]
+
+    provider = model_provider or TransformersModelProvider(
+        model_ids={
+            "student": str(config["student_model"]),
+            "teacher": str(config["teacher_model"]),
+            "evaluator": str(config.get("evaluator_model", config["teacher_model"])),
+        },
+    )
+    evaluator_fn = evaluator or make_model_evaluator(
+        generate=provider.generate,
+        generation_kwargs=dict(config["evaluator_generation"]),
+    )
+    guidance_guard_fn = guidance_guard or make_model_guidance_guard(
+        generate=provider.generate,
+        generation_kwargs=dict(config["evaluator_generation"]),
+    )
+    guidance_events: list[dict] = []
+
+    def base_prompt_builder(example: dict) -> str:
+        return build_native_student_prompt(
+            problem=str(example["problem"]),
+            domain=str(example["domain"]),
+            evidence=example.get("evidence"),
+        )
+
+    def retry_prompt_builder(base_prompt: str, guidance: str) -> str:
+        return (
+            f"{base_prompt}\n\nTeacher guidance for reconsideration:\n{guidance}\n"
+            "Solve the original problem again and provide your best answer."
+        )
+
+    def student_generate(prompt: str) -> str:
+        return provider.generate("student", prompt, **dict(config["generation"]))
+
+    def teacher_guidance(example: dict, rollout: str, result: dict, attempt: int) -> str:
+        prompt = build_privileged_guidance_prompt(
+            problem=str(example["problem"]),
+            gold_answer=str(example["gold_answer"]),
+            rollout=rollout,
+            result=result,
+            domain=str(example["domain"]),
+        )
+        guidance = provider.generate("teacher", prompt, **dict(config["teacher_generation"]))
+        guidance_events.append(
+            {
+                "id": str(example["id"]),
+                "attempt": attempt,
+                "prompt": prompt,
+                "guidance": guidance,
+                "teacher_model": config["teacher_model"],
+            }
+        )
+        return guidance
+
+    result = build_native_iterative_guidance_pairs(
+        examples=examples,
+        base_prompt_builder=base_prompt_builder,
+        retry_prompt_builder=retry_prompt_builder,
+        student_generate=student_generate,
+        evaluate=evaluator_fn,
+        teacher_guidance=teacher_guidance,
+        guidance_guard=guidance_guard_fn,
+        max_guidance_steps=int(config["max_guidance_steps"]),
+        max_guidance_regenerations=int(config["max_guidance_regenerations"]),
+    )
+    metrics = {
+        "run_id": run_id,
+        "method": "native_iterative_guidance_dpo",
+        "student_model": config["student_model"],
+        "teacher_model": config["teacher_model"],
+        "evaluator_model": config.get("evaluator_model", config["teacher_model"]),
+        "teacher_mode": config["teacher_mode"],
+        **result["metrics"],
+    }
+    write_jsonl(output / "examples.jsonl", examples)
+    write_jsonl(output / "attempts.jsonl", result["attempts"])
+    write_jsonl(output / "guidance.jsonl", guidance_events)
+    write_jsonl(output / "pairs.jsonl", result["pairs"])
+    write_jsonl(output / "response_sft.jsonl", result["response_sft"])
+    write_jsonl(output / "failures.jsonl", result["failures"])
+    (output / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+    write_html_report(output / "report.html", metrics)
+    for row in result["attempts"]:
+        logger.event(
+            "attempt_evaluated",
+            stage="native_iterative_guidance",
+            example_id=row["id"],
+            attempt=row["attempt"],
+            correct=bool(row["result"].get("correct")),
+            evaluator_confidence=row["result"].get("confidence"),
+        )
+    logger.event("run_end", stage="complete", **metrics)
+    return metrics
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -383,6 +510,9 @@ def main() -> None:
     generate.add_argument("--config", required=True, type=Path)
     generate.add_argument("--output-dir", type=Path)
     generate.add_argument("--fake-smoke", action="store_true")
+    native = subparsers.add_parser("native-pipeline")
+    native.add_argument("--config", required=True, type=Path)
+    native.add_argument("--output-dir", type=Path)
     validate = subparsers.add_parser("validate-run")
     validate.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
@@ -399,6 +529,11 @@ def main() -> None:
             config_path=args.config,
             output_dir=args.output_dir,
             fake_smoke=args.fake_smoke,
+        )
+    elif args.command == "native-pipeline":
+        result = run_native_pipeline(
+            config_path=args.config,
+            output_dir=args.output_dir,
         )
     elif args.command == "validate-run":
         result = validate_run(args.output_dir)

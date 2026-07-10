@@ -38,30 +38,52 @@ def _extract_tag(text: str, tag: str) -> str:
     duplicate = text.find(open_tag, start + len(open_tag))
     if duplicate >= 0 and duplicate < end:
         raise TrajectoryParseError(f"nested_{tag}", f"nested {open_tag} is not allowed")
-    return text[start + len(open_tag) : end].strip()
+    content = text[start + len(open_tag) : end].strip()
+    if not content:
+        raise TrajectoryParseError(f"empty_{tag}", f"{open_tag} must not be empty")
+    return content
 
 
 def _extract_thinks(text: str) -> list[str]:
     matches = list(re.finditer(r"<think(?:\s+[^>]*)?>(.*?)</think>", text, flags=re.DOTALL))
     if not matches:
         raise TrajectoryParseError("missing_think", "missing <think> or <think branch=\"...\"> block")
-    return [match.group(1).strip() for match in matches]
+    contents = [match.group(1).strip() for match in matches]
+    if any(not content for content in contents):
+        raise TrajectoryParseError("empty_think", "<think> blocks must not be empty")
+    return contents
 
 
 def parse_trajectory(text: str) -> Trajectory:
     if not text or not text.strip():
         raise TrajectoryParseError("empty_trajectory", "trajectory text is empty")
 
+    if "<thinking" in text:
+        raise TrajectoryParseError(
+            "legacy_thinking_tag", "legacy <thinking> tag is invalid; use <think branch=\"A\">"
+        )
+
     reflect_start = text.find("<reflect>")
     final_start = text.find("<final>")
+    plan_start = text.find("<plan>")
     if reflect_start < 0:
         raise TrajectoryParseError("missing_reflect", "missing <reflect>")
     if final_start < 0:
         raise TrajectoryParseError("missing_final", "missing <final>")
-    if final_start < reflect_start:
-        raise TrajectoryParseError("final_before_reflect", "<final> appears before <reflect>")
+    if plan_start < 0:
+        raise TrajectoryParseError("missing_plan", "missing <plan>")
     if text.find("<final>", final_start + len("<final>")) >= 0:
         raise TrajectoryParseError("duplicate_final", "duplicate <final> block")
+
+    think_matches = list(re.finditer(r"<think(?:\s+[^>]*)?>(.*?)</think>", text, flags=re.DOTALL))
+    first_think = think_matches[0].start() if think_matches else -1
+    if first_think < 0:
+        _extract_thinks(text)
+    if not (plan_start < first_think < reflect_start < final_start):
+        raise TrajectoryParseError(
+            "blocks_out_of_order",
+            "trajectory blocks are out of order; expected plan, think, reflect, final",
+        )
 
     trajectory = Trajectory(
         raw=text,

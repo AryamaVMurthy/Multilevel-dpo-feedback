@@ -1,6 +1,10 @@
 import unittest
 
-from text_feedback_dpo.prompts import build_student_prompt, build_teacher_prompt
+from text_feedback_dpo.prompts import (
+    build_student_prompt,
+    build_teacher_prompt,
+    trajectory_format_instructions,
+)
 
 
 class PromptTest(unittest.TestCase):
@@ -13,6 +17,8 @@ class PromptTest(unittest.TestCase):
         self.assertIn("substitution", prompt.lower())
         self.assertIn("constraint", prompt.lower())
         self.assertIn("at most 2 branches", prompt.lower())
+        self.assertIn("do not use <thinking>", prompt.lower())
+        self.assertNotIn("...", prompt)
 
     def test_search_qa_student_prompt_requires_evidence_verification(self):
         prompt = build_student_prompt("Who wrote Hamlet?", "search_qa")
@@ -38,8 +44,23 @@ class PromptTest(unittest.TestCase):
         self.assertIn("<feedback>", prompt)
         self.assertIn("<corrected_rollout>", prompt)
         self.assertIn("<think branch=\"A\">", prompt)
-        self.assertIn("do not use <thinking>", prompt)
+        self.assertIn("do not use <thinking>", prompt.lower())
         self.assertIn("Verification:", prompt)
+        self.assertNotIn("...", prompt)
+
+    def test_student_and_teacher_share_the_same_trajectory_contract(self):
+        contract = trajectory_format_instructions("search_qa")
+        student_prompt = build_student_prompt("Who wrote Hamlet?", "search_qa")
+        teacher_prompt = build_teacher_prompt(
+            problem="Who wrote Hamlet?",
+            gold_answer="William Shakespeare",
+            student_rollout="student",
+            result={"score": 0.0},
+            domain="search_qa",
+            teacher_mode="stronger_model",
+        )
+        self.assertIn(contract, student_prompt)
+        self.assertIn(contract, teacher_prompt)
 
     def test_privileged_teacher_prompt_marks_training_only_context(self):
         prompt = build_teacher_prompt(

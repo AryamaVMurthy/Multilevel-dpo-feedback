@@ -1,0 +1,2 @@
+{"id":"math-native-1","domain":"math","problem":"A box has 7 red balls and 5 blue balls. How many balls are in the box?","gold_answer":"12"}
+{"id":"searchqa-native-1","domain":"search_qa","problem":"Who wrote Hamlet?","gold_answer":"William Shakespeare","answer_type":"person","evidence":["Hamlet is a tragedy written by William Shakespeare.","The play is commonly dated to the early seventeenth century."]}
