@@ -4,10 +4,12 @@ import argparse
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.benchmarks import load_benchmark_examples
-from text_feedback_dpo.io import read_jsonl, write_jsonl
+from text_feedback_dpo.collection import collect_paper_shard, merge_paper_collection
+from text_feedback_dpo.io import read_jsonl, read_jsonl_zst, write_jsonl
 from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
     make_model_evaluator,
@@ -18,6 +20,7 @@ from text_feedback_dpo.experiment_config import load_paper_experiment, validate_
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
+from text_feedback_dpo.preference_data import build_preference_datasets
 from text_feedback_dpo.prompts import (
     build_native_student_prompt,
     build_privileged_guidance_prompt,
@@ -653,6 +656,110 @@ def run_materialize_dataset(config_path: Path, source_path: Path, output_dir: Pa
     return materialize_paper_dataset(config, source_path, output_dir)
 
 
+def run_collect_shard(
+    *,
+    config_path: Path,
+    dataset_dir: Path,
+    output_dir: Path,
+    split: str,
+    shard_index: int,
+    num_shards: int,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    rows_path = dataset_dir / f"{split}.jsonl.zst"
+    examples = read_jsonl_zst(rows_path)
+    return collect_paper_shard(
+        config=config,
+        config_path=config_path,
+        examples=examples,
+        dataset_dir=dataset_dir,
+        output_root=output_dir,
+        split=split,
+        shard_index=shard_index,
+        num_shards=num_shards,
+    )
+
+
+def run_merge_collection(
+    *,
+    config_path: Path,
+    dataset_dir: Path,
+    collection_dir: Path,
+    expected_shards: int,
+    output_path: Path,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    return merge_paper_collection(
+        config_path=config_path,
+        dataset_dir=dataset_dir,
+        collection_dir=collection_dir,
+        expected_shards=expected_shards,
+        output_path=output_path,
+    )
+
+
+def run_build_preferences(
+    *,
+    collection_path: Path,
+    dataset_path: Path,
+    output_dir: Path,
+    seed: int,
+) -> dict[str, Any]:
+    records = read_jsonl_zst(collection_path)
+    attempts: list[dict[str, Any]] = []
+    seen_groups: set[str] = set()
+    for record in records:
+        example_id = record.get("id")
+        if not isinstance(example_id, str) or not example_id:
+            raise ValueError("merged collection record is missing id")
+        if example_id in seen_groups:
+            raise ValueError(f"merged collection contains duplicate group: {example_id}")
+        seen_groups.add(example_id)
+        group_attempts = record.get("attempts")
+        if not isinstance(group_attempts, list):
+            raise ValueError(f"merged collection record {example_id} is missing attempts")
+        for attempt in group_attempts:
+            if not isinstance(attempt, dict):
+                raise ValueError(f"merged collection record {example_id} contains invalid attempt")
+            attempts.append({"id": example_id, **attempt})
+    examples = read_jsonl_zst(dataset_path)
+    datasets = build_preference_datasets(
+        attempts=attempts,
+        examples=examples,
+        seed=seed,
+        base_prompt_builder=lambda example: build_native_student_prompt(
+            problem=str(example["problem"]),
+            domain=str(example["domain"]),
+            evidence=example.get("evidence"),
+        ),
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for method in ("standard", "multilevel", "matched"):
+        path = output_dir / f"{method}.jsonl"
+        if path.exists():
+            raise FileExistsError(f"refusing to overwrite preference artifact: {path}")
+        write_jsonl(path, datasets[method])
+    (output_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper-preference-v1",
+                "seed": seed,
+                "source_collection": str(collection_path),
+                "source_dataset": str(dataset_path),
+                "metrics": datasets["metrics"],
+                "methods": {method: len(datasets[method]) for method in ("standard", "multilevel", "matched")},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return datasets["metrics"]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -683,6 +790,24 @@ def main() -> None:
     materialize.add_argument("--config", required=True, type=Path)
     materialize.add_argument("--source-path", required=True, type=Path)
     materialize.add_argument("--output-dir", required=True, type=Path)
+    collect = subparsers.add_parser("collect-shard")
+    collect.add_argument("--config", required=True, type=Path)
+    collect.add_argument("--dataset-dir", required=True, type=Path)
+    collect.add_argument("--output-dir", required=True, type=Path)
+    collect.add_argument("--split", required=True)
+    collect.add_argument("--shard-index", required=True, type=int)
+    collect.add_argument("--num-shards", required=True, type=int)
+    merge = subparsers.add_parser("merge-collection")
+    merge.add_argument("--config", required=True, type=Path)
+    merge.add_argument("--dataset-dir", required=True, type=Path)
+    merge.add_argument("--collection-dir", required=True, type=Path)
+    merge.add_argument("--expected-shards", required=True, type=int)
+    merge.add_argument("--output", required=True, type=Path)
+    preferences = subparsers.add_parser("build-preferences")
+    preferences.add_argument("--collection", required=True, type=Path)
+    preferences.add_argument("--dataset", required=True, type=Path)
+    preferences.add_argument("--output-dir", required=True, type=Path)
+    preferences.add_argument("--seed", required=True, type=int)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -717,6 +842,30 @@ def main() -> None:
         result = run_validate_paper_config(args.config)
     elif args.command == "materialize-dataset":
         result = run_materialize_dataset(args.config, args.source_path, args.output_dir)
+    elif args.command == "collect-shard":
+        result = run_collect_shard(
+            config_path=args.config,
+            dataset_dir=args.dataset_dir,
+            output_dir=args.output_dir,
+            split=args.split,
+            shard_index=args.shard_index,
+            num_shards=args.num_shards,
+        )
+    elif args.command == "merge-collection":
+        result = run_merge_collection(
+            config_path=args.config,
+            dataset_dir=args.dataset_dir,
+            collection_dir=args.collection_dir,
+            expected_shards=args.expected_shards,
+            output_path=args.output,
+        )
+    elif args.command == "build-preferences":
+        result = run_build_preferences(
+            collection_path=args.collection,
+            dataset_path=args.dataset,
+            output_dir=args.output_dir,
+            seed=args.seed,
+        )
     else:
         raise SystemExit(f"unknown command: {args.command}")
     print(json.dumps(result, sort_keys=True))
