@@ -10,6 +10,7 @@
 set -euo pipefail
 
 SOURCE_PATH="${SOURCE_PATH:?SOURCE_PATH is required}"
+DATASET_MANIFEST="${DATASET_MANIFEST:?DATASET_MANIFEST is required}"
 OUTPUT_PATH="${OUTPUT_PATH:?OUTPUT_PATH is required}"
 SUBSET_COUNT="${SUBSET_COUNT:?SUBSET_COUNT is required}"
 SUBSET_SEED="${SUBSET_SEED:?SUBSET_SEED is required}"
@@ -26,6 +27,10 @@ if [[ ! -f "$SOURCE_PATH" ]]; then
   echo "ERROR: source dataset does not exist: $SOURCE_PATH" >&2
   exit 1
 fi
+if [[ ! -f "$DATASET_MANIFEST" ]]; then
+  echo "ERROR: dataset manifest does not exist: $DATASET_MANIFEST" >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
@@ -39,3 +44,12 @@ uv run --frozen python -m text_feedback_dpo.cli materialize-preflight-subset \
   --output-path "$OUTPUT_PATH" \
   --count "$SUBSET_COUNT" \
   --seed "$SUBSET_SEED"
+
+OUTPUT_MANIFEST="$(dirname "$OUTPUT_PATH")/manifest.json"
+if [[ -e "$OUTPUT_MANIFEST" ]] && ! cmp -s "$DATASET_MANIFEST" "$OUTPUT_MANIFEST"; then
+  echo "ERROR: preflight output directory has a conflicting manifest: $OUTPUT_MANIFEST" >&2
+  exit 1
+fi
+if [[ ! -e "$OUTPUT_MANIFEST" ]]; then
+  cp "$DATASET_MANIFEST" "$OUTPUT_MANIFEST"
+fi
