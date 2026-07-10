@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -77,6 +78,105 @@ def build_distillation_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, st
     return output
 
 
+def materialize_warmup_steps(total_updates: int, warmup_fraction: float) -> int:
+    if isinstance(total_updates, bool) or not isinstance(total_updates, int) or total_updates <= 0:
+        raise ValueError("total_updates must be a positive integer")
+    if not 0 <= warmup_fraction <= 1:
+        raise ValueError("warmup_fraction must be between 0 and 1")
+    if warmup_fraction == 0:
+        return 0
+    return min(total_updates, max(1, math.ceil(total_updates * warmup_fraction)))
+
+
+def build_optimizer_profile(
+    *,
+    learning_rate: float,
+    weight_decay: float,
+    warmup_fraction: float,
+    total_updates: int,
+    scheduler: str,
+) -> dict[str, Any]:
+    if learning_rate <= 0:
+        raise ValueError("learning_rate must be positive")
+    if weight_decay < 0:
+        raise ValueError("weight_decay must be non-negative")
+    if scheduler not in {"linear", "cosine"}:
+        raise ValueError("scheduler must be linear or cosine")
+    return {
+        "optim": "adamw_torch_fused",
+        "learning_rate": learning_rate,
+        "adam_beta1": 0.9,
+        "adam_beta2": 0.999,
+        "adam_epsilon": 1e-8,
+        "weight_decay": weight_decay,
+        "max_grad_norm": 1.0,
+        "lr_scheduler_type": scheduler,
+        "warmup_steps": materialize_warmup_steps(total_updates, warmup_fraction),
+    }
+
+
+def build_paper_dpo_config_kwargs(
+    *,
+    output_dir: Any,
+    max_steps: int,
+    candidate: Any,
+    effective_global_batch: int,
+) -> dict[str, Any]:
+    if effective_global_batch <= 0:
+        raise ValueError("effective_global_batch must be positive")
+    profile = build_optimizer_profile(
+        learning_rate=float(candidate.learning_rate),
+        weight_decay=float(candidate.weight_decay),
+        warmup_fraction=float(candidate.warmup_fraction),
+        total_updates=max_steps,
+        scheduler=str(candidate.scheduler),
+    )
+    return {
+        "output_dir": str(output_dir),
+        "beta": float(candidate.beta),
+        "max_length": 2048,
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": effective_global_batch,
+        "max_steps": max_steps,
+        "logging_steps": 1,
+        "report_to": [],
+        "save_strategy": "no",
+        "remove_unused_columns": False,
+        "bf16": True,
+        **profile,
+    }
+
+
+def build_paper_grpo_config_kwargs(*, output_dir: Any, max_steps: int, candidate: Any) -> dict[str, Any]:
+    profile = build_optimizer_profile(
+        learning_rate=float(candidate.learning_rate),
+        weight_decay=0.01,
+        warmup_fraction=0.05,
+        total_updates=max_steps,
+        scheduler="cosine",
+    )
+    return {
+        "output_dir": str(output_dir),
+        "max_completion_length": 2048,
+        "num_generations": int(candidate.num_generations),
+        "generation_batch_size": int(candidate.num_generations),
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "max_steps": max_steps,
+        "logging_steps": 1,
+        "report_to": [],
+        "save_strategy": "no",
+        "bf16": True,
+        "beta": float(candidate.kl_beta),
+        "epsilon": float(candidate.epsilon),
+        "num_iterations": int(candidate.num_iterations),
+        "loss_type": str(candidate.loss_type),
+        "scale_rewards": "group",
+        "mask_truncated_completions": True,
+        **profile,
+    }
+
+
 def _load_model_and_tokenizer(model_id: str) -> tuple[Any, Any]:
     try:
         import torch
@@ -95,18 +195,23 @@ def _load_model_and_tokenizer(model_id: str) -> tuple[Any, Any]:
     return model, tokenizer
 
 
-def _lora_config() -> Any:
-    try:
-        from peft import LoraConfig
-    except ImportError as exc:
-        raise ImportError("peft is required for LoRA training") from exc
-    return LoraConfig(
-        r=8,
-        lora_alpha=16,
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+def _lora_config(model: Any, *, rank: int = 16, alpha: int = 32, dropout: float = 0.05) -> tuple[Any, Any]:
+    from text_feedback_dpo.lora_coverage import build_lora_config, discover_lora_coverage
+
+    coverage = discover_lora_coverage(
+        model,
+        rank=rank,
+        excluded_components=("vision", "multimodal_projector", "embeddings", "output_head"),
+    )
+    return (
+        build_lora_config(
+            model=model,
+            rank=rank,
+            alpha=alpha,
+            dropout=dropout,
+            excluded_components=("vision", "multimodal_projector", "embeddings", "output_head"),
+        ),
+        coverage,
     )
 
 
@@ -163,6 +268,7 @@ def run_dpo_training(
 
     rows = build_standard_dpo_pairs(pairs) if baseline else list(pairs)
     model, tokenizer = _load_model_and_tokenizer(model_id)
+    lora_config, coverage = _lora_config(model)
     args = DPOConfig(**build_dpo_config_kwargs(output_dir=output_dir, max_steps=max_steps))
     trainer = DPOTrainer(
         model=model,
@@ -170,7 +276,7 @@ def run_dpo_training(
         args=args,
         train_dataset=Dataset.from_list(rows),
         processing_class=tokenizer,
-        peft_config=_lora_config(),
+        peft_config=lora_config,
     )
     train_result = trainer.train()
     trainer.save_model(str(output_dir))
@@ -179,6 +285,8 @@ def run_dpo_training(
         "model_id": model_id,
         "pairs": len(rows),
         "max_steps": max_steps,
+        "lora_coverage_hash": coverage.coverage_hash,
+        "lora_target_modules": list(coverage.target_modules),
         "train_metrics": train_result.metrics,
         "history": trainer.state.log_history,
     }
@@ -197,6 +305,7 @@ def run_distillation_training(
     from trl import SFTConfig, SFTTrainer
 
     model, tokenizer = _load_model_and_tokenizer(model_id)
+    lora_config, coverage = _lora_config(model)
     args = SFTConfig(
         output_dir=str(output_dir),
         max_length=1024,
@@ -214,7 +323,7 @@ def run_distillation_training(
         args=args,
         train_dataset=Dataset.from_list(build_distillation_rows(rows)),
         processing_class=tokenizer,
-        peft_config=_lora_config(),
+        peft_config=lora_config,
     )
     train_result = trainer.train()
     trainer.save_model(str(output_dir))
@@ -223,6 +332,8 @@ def run_distillation_training(
         "model_id": model_id,
         "examples": len(rows),
         "max_steps": max_steps,
+        "lora_coverage_hash": coverage.coverage_hash,
+        "lora_target_modules": list(coverage.target_modules),
         "train_metrics": train_result.metrics,
         "history": trainer.state.log_history,
     }
@@ -234,6 +345,7 @@ def run_grpo_training(
     examples: list[dict[str, Any]],
     output_dir: Any,
     max_steps: int,
+    evaluator: Any | None = None,
 ) -> dict[str, Any]:
     if not examples:
         raise ValueError("GRPO dataset must not be empty")
@@ -241,29 +353,38 @@ def run_grpo_training(
         raise ValueError("max_steps must be positive")
     from datasets import Dataset
     from trl import GRPOConfig, GRPOTrainer
+    from text_feedback_dpo.rewards import build_grpo_reward_function
+
+    if evaluator is None:
+        raise ValueError("GRPO training requires an explicit evaluator callback; refusing substring reward fallback")
 
     model, tokenizer = _load_model_and_tokenizer(model_id)
+    lora_config, coverage = _lora_config(model)
     args = GRPOConfig(**build_grpo_config_kwargs(output_dir=output_dir, max_steps=max_steps))
 
-    def reward_func(completions: list[Any], gold_answer: list[str], **_: Any) -> list[float]:
-        rewards = []
-        for completion, gold in zip(completions, gold_answer):
-            if isinstance(completion, list):
-                response = str(completion[-1].get("content", ""))
-            else:
-                response = str(completion)
-            rewards.append(float(str(gold).strip().lower() in response.strip().lower()))
-        return rewards
+    examples_by_id = {str(row["id"]): dict(row) for row in examples}
+    if len(examples_by_id) != len(examples):
+        raise ValueError("GRPO examples must have unique ids")
+    domains = {str(row.get("domain")) for row in examples}
+    if len(domains) != 1:
+        raise ValueError("GRPO reward batch must contain exactly one domain")
+    reward_func = build_grpo_reward_function(
+        examples_by_id=examples_by_id,
+        evaluator=evaluator,
+        domain=next(iter(domains)),
+        mask_truncated_completions=True,
+        max_completion_tokens=2048,
+    )
 
     trainer = GRPOTrainer(
         model=model,
         reward_funcs=reward_func,
         args=args,
         train_dataset=Dataset.from_list(
-            [{"prompt": row["prompt"], "gold_answer": row["gold_answer"]} for row in examples]
+            [{"prompt": row["prompt"], "example_id": str(row["id"])} for row in examples]
         ),
         processing_class=tokenizer,
-        peft_config=_lora_config(),
+        peft_config=lora_config,
     )
     train_result = trainer.train()
     trainer.save_model(str(output_dir))
@@ -272,6 +393,8 @@ def run_grpo_training(
         "model_id": model_id,
         "examples": len(examples),
         "max_steps": max_steps,
+        "lora_coverage_hash": coverage.coverage_hash,
+        "lora_target_modules": list(coverage.target_modules),
         "train_metrics": train_result.metrics,
         "history": trainer.state.log_history,
     }
