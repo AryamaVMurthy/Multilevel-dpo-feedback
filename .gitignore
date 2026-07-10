@@ -6,6 +6,9 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# Local credentials must never enter version control.
+creds.txt
+
 # Large or machine-local experiment outputs.
 implementation/runs/*
 !implementation/runs/.gitkeep
