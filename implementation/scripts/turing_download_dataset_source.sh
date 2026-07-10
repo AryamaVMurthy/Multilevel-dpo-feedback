@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download a pinned Hugging Face source inside Slurm and persist only the small raw source.
 #SBATCH -p u22
-#SBATCH -n 8
+#SBATCH -n 2
 #SBATCH --mem=32G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/slurm-%x-%j.out
@@ -37,7 +37,7 @@ export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
 cd "$PROJECT_DIR"
 
-uv run --frozen python - <<'PY'
+uv run --no-project --with 'datasets==5.0.0' python - <<'PY'
 import json
 import os
 from pathlib import Path
