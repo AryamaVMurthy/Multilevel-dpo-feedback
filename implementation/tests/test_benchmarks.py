@@ -49,7 +49,7 @@ class BenchmarkConversionTest(unittest.TestCase):
                 "problem": "Compute.",
                 "solution": "Result: \\boxed{0}",
                 "level": "Level 5",
-                "type": "Counting and Probability",
+                "type": "Counting & Probability",
             },
             subject="counting_and_probability",
             source_split="train",

@@ -95,6 +95,9 @@ def convert_math_row(
     if isinstance(level, bool) or not isinstance(level, int) or level not in {1, 2, 3, 4, 5}:
         raise ValueError(f"MATH {subject}:{source_split}:{index} has invalid level")
     declared_subject = re.sub(r"[\s-]+", "_", str(row.get("type", subject)).strip().casefold())
+    declared_subject = {"counting_&_probability": "counting_and_probability"}.get(
+        declared_subject, declared_subject
+    )
     if declared_subject and declared_subject != subject:
         raise ValueError(
             f"MATH {subject}:{source_split}:{index} declares mismatched subject {declared_subject!r}"
