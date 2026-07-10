@@ -26,6 +26,12 @@ The student is not required to emit XML tags, hidden reasoning markers, branch n
 or a prescribed reflection format. The prompt asks Qwen to reason naturally and give
 a concise final answer. Raw model output is retained exactly.
 
+Role-level generation controls are explicit: the student keeps the configured native
+generation behavior, while teacher guidance and evaluator judgments use Qwen's
+supported non-thinking chat-template mode so short guidance and machine-readable
+judgments do not spend their entire output budget on internal reasoning. This is a
+serialization control for those roles, not a student-format constraint.
+
 Evaluation is a separate role. It returns a small structured judgment containing
 correctness, extracted answer, confidence, and reason. This structure belongs to the
 evaluator contract, not to the student's answer-generation contract.
@@ -82,3 +88,7 @@ This anchor must be logged separately from DPO loss.
 - Prompt-only run qwen35-native-smoke-r2 completed on one RTX 6000 Ada with both
   examples correct on attempt 0; it produced no pairs, so the next smoke uses four
   harder but still controlled examples to test the guidance loop.
+- Benchmark run qwen35-native-benchmark-smoke-r2 failed explicitly because the 9B
+  evaluator exhausted its reasoning budget before emitting JSON. The raw output is
+  preserved in `model_failures.jsonl`; the corrective change passes
+  `enable_thinking=false` through `chat_template_kwargs` for teacher/evaluator roles.

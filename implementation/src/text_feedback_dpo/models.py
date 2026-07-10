@@ -93,12 +93,23 @@ class TransformersModelProvider(ModelProvider):
                 "model tokenizer does not support apply_chat_template; refusing raw-text generation "
                 "because Qwen3.5 requires an explicit chat generation turn"
             )
+        chat_template_kwargs = {}
+        if "enable_thinking" in generation_kwargs:
+            enable_thinking = generation_kwargs["enable_thinking"]
+            if not isinstance(enable_thinking, bool):
+                raise ValueError("enable_thinking must be boolean when provided")
+            chat_template_kwargs["enable_thinking"] = enable_thinking
+        template_options = {
+            "add_generation_prompt": True,
+            "tokenize": True,
+            "return_dict": True,
+            "return_tensors": "pt",
+        }
+        if chat_template_kwargs:
+            template_options["chat_template_kwargs"] = chat_template_kwargs
         encoded = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
+            **template_options,
         )
         if hasattr(model, "device"):
             encoded = {key: value.to(model.device) for key, value in encoded.items()}

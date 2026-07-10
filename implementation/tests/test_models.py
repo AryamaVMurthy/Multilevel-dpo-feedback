@@ -118,6 +118,29 @@ class ModelProviderTest(unittest.TestCase):
         self.assertTrue(tokenizer.chat_template_calls[0][1]["tokenize"])
         self.assertTrue(tokenizer.chat_template_calls[0][1]["return_dict"])
 
+    def test_transformers_provider_forwards_qwen_chat_template_kwargs(self):
+        provider = TransformersModelProvider(
+            model_ids={"evaluator": "Qwen/Qwen3.5-9B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        tokenizer = FakeTokenizer()
+        provider._loaded["evaluator"] = (tokenizer, FakeModel())
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            provider.generate(
+                "evaluator",
+                "Return JSON.",
+                max_new_tokens=16,
+                enable_thinking=False,
+            )
+
+        self.assertEqual(
+            tokenizer.chat_template_calls[0][1]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
+
     def test_cached_model_load_does_not_import_torch(self):
         provider = TransformersModelProvider(
             model_ids={"student": "Qwen/Qwen3.5-2B"},
