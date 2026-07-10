@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from text_feedback_dpo.dataset_manifests import (
     canonical_row_hash,
     sample_searchqa8k,
+    split_gsm8k_validation_roles,
     split_gsm8k_train,
     validate_disjoint_splits,
     write_manifest_bundle,
@@ -113,6 +114,26 @@ class DatasetManifestTest(unittest.TestCase):
             self.assertTrue((Path(tmp) / "train.jsonl.zst").is_file())
             self.assertTrue((Path(tmp) / "validation.jsonl.zst").is_file())
             self.assertEqual(manifest["metadata"]["dataset"], "gsm8k")
+
+    def test_gsm_validation_roles_partition_validation_and_are_written_as_nested_artifacts(self):
+        rows = split_gsm8k_train(self._gsm_rows(6), seed=7, validation_count=3)
+        roles = split_gsm8k_validation_roles(rows["validation"], seed=7, tune_count=2)
+        self.assertEqual({key: len(value) for key, value in roles.items()}, {"tune": 2, "confirm": 1})
+        self.assertEqual(
+            {row["source_key"] for value in roles.values() for row in value},
+            {row["source_key"] for row in rows["validation"]},
+        )
+
+        with TemporaryDirectory() as tmp:
+            manifest = write_manifest_bundle(
+                Path(tmp),
+                rows,
+                metadata={"dataset": "gsm8k", "revision": "abc"},
+                nested_roles=roles,
+            )
+            self.assertEqual(manifest["nested_roles"], {"confirm": 1, "tune": 2})
+            self.assertTrue((Path(tmp) / "validation_tune.jsonl.zst").is_file())
+            self.assertTrue((Path(tmp) / "validation_confirm.jsonl.zst").is_file())
 
 
 if __name__ == "__main__":

@@ -60,6 +60,29 @@ def split_gsm8k_train(
     return {"train": train_rows, "validation": validation_rows}
 
 
+def split_gsm8k_validation_roles(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    seed: int,
+    tune_count: int,
+) -> dict[str, list[dict[str, Any]]]:
+    raw_rows = [dict(row) for row in rows]
+    if not raw_rows or tune_count <= 0 or tune_count >= len(raw_rows):
+        raise ValueError("GSM8K tune_count must be between one and validation_count minus one")
+    if any(not row.get("source_key") or not row.get("row_hash") for row in raw_rows):
+        raise ValueError("GSM8K validation rows must be annotated before nested splitting")
+    ordered = sorted(
+        raw_rows,
+        key=lambda row: hashlib.sha256(f"{seed}:gsm8k:validation:{row['row_hash']}".encode("utf-8")).hexdigest(),
+    )
+    tune_keys = {row["source_key"] for row in ordered[:tune_count]}
+    tune = [{**row, "dataset_role": "validation_tune"} for row in raw_rows if row["source_key"] in tune_keys]
+    confirm = [{**row, "dataset_role": "validation_confirm"} for row in raw_rows if row["source_key"] not in tune_keys]
+    if {row["source_key"] for row in tune} & {row["source_key"] for row in confirm}:
+        raise RuntimeError("GSM8K nested validation roles overlap")
+    return {"tune": tune, "confirm": confirm}
+
+
 def _answer_text(row: Mapping[str, Any]) -> str:
     answers = row.get("answers")
     if isinstance(answers, list) and answers:
@@ -230,6 +253,7 @@ def write_manifest_bundle(
     splits: Mapping[str, Iterable[Mapping[str, Any]]],
     *,
     metadata: Mapping[str, Any],
+    nested_roles: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     from pathlib import Path
 
@@ -242,10 +266,30 @@ def write_manifest_bundle(
         role: [str(row["row_hash"]) for row in rows]
         for role, rows in sorted(materialized.items())
     }
+    nested_materialized = {
+        role: [dict(row) for row in rows]
+        for role, rows in sorted((nested_roles or {}).items())
+    }
+    if nested_materialized:
+        if set(nested_materialized) != {"tune", "confirm"}:
+            raise ValueError("nested_roles must contain exactly tune and confirm")
+        if "validation" not in materialized:
+            raise ValueError("nested_roles requires a primary validation role")
+        validation_keys = {str(row["source_key"]) for row in materialized["validation"]}
+        nested_keys = [str(row["source_key"]) for rows in nested_materialized.values() for row in rows]
+        if len(nested_keys) != len(set(nested_keys)) or set(nested_keys) != validation_keys:
+            raise ValueError("nested validation roles must partition primary validation rows")
+    nested_counts = {role: len(rows) for role, rows in nested_materialized.items()}
+    nested_hashes = {
+        role: [str(row["row_hash"]) for row in rows]
+        for role, rows in nested_materialized.items()
+    }
     payload = {
         "metadata": dict(metadata),
         "roles": roles,
         "row_hashes": row_hashes,
+        "nested_roles": nested_counts,
+        "nested_row_hashes": nested_hashes,
     }
     manifest_path = output_path / "manifest.json"
     if manifest_path.exists():
@@ -258,12 +302,19 @@ def write_manifest_bundle(
         if artifact_path.exists():
             raise ValueError(f"refusing to overwrite existing manifest artifact: {artifact_path}")
         _write_compressed_jsonl(artifact_path, rows)
+    for role, rows in nested_materialized.items():
+        artifact_path = output_path / f"validation_{role}.jsonl.zst"
+        if artifact_path.exists():
+            raise ValueError(f"refusing to overwrite existing nested manifest artifact: {artifact_path}")
+        _write_compressed_jsonl(artifact_path, rows)
     manifest = {
         "schema": "paper-dataset-manifest-v1",
         "content": payload,
         "metadata": dict(metadata),
         "roles": roles,
         "row_hashes": row_hashes,
+        "nested_roles": nested_counts,
+        "nested_row_hashes": nested_hashes,
         "content_sha256": hashlib.sha256(
             json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
@@ -313,6 +364,7 @@ def materialize_paper_dataset(config: Any, source_path: Any, output_dir: Any) ->
     if not source.exists():
         raise FileNotFoundError(f"paper dataset source does not exist: {source}")
     dataset = config.dataset
+    nested_roles: dict[str, list[dict[str, Any]]] | None = None
     if dataset.name == "gsm8k":
         if not source.is_dir():
             raise ValueError("GSM8K materialization source must be a directory containing train and test JSON files")
@@ -336,6 +388,11 @@ def materialize_paper_dataset(config: Any, source_path: Any, output_dir: Any) ->
             {**_annotate(row, source_split="test", source_index=index), "dataset_role": "test", "stratum": "gsm8k:all"}
             for index, row in enumerate(converted_test)
         ]
+        nested_roles = split_gsm8k_validation_roles(
+            split_rows["validation"],
+            seed=dataset.seed,
+            tune_count=dataset.validation_roles["tune"],
+        )
         metadata = {
             "dataset": dataset.name,
             "source": dataset.source,
@@ -364,5 +421,10 @@ def materialize_paper_dataset(config: Any, source_path: Any, output_dir: Any) ->
         }
     else:
         raise ValueError(f"unsupported paper dataset: {dataset.name}")
-    manifest = write_manifest_bundle(output_dir, split_rows, metadata=metadata)
+    manifest = write_manifest_bundle(
+        output_dir,
+        split_rows,
+        metadata=metadata,
+        nested_roles=nested_roles,
+    )
     return {"manifest": manifest, "output_dir": str(output_dir)}
