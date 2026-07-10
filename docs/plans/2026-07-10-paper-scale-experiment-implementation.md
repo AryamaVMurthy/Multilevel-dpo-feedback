@@ -700,6 +700,7 @@ squeue -u "$USER"
 - Use: `implementation/scripts/turing_evaluate_paper.sh`
 - Use: `implementation/scripts/turing_merge_evaluations.sh`
 - Use: `implementation/scripts/turing_materialize_preflight_subset.sh`
+- Use: `implementation/scripts/turing_freeze_baseline.sh`
 - Use CLI: `materialize-preflight-subset`, `freeze-baseline`, `evaluate-paper`, `merge-evaluations`, and
   `audit-evaluation`
 

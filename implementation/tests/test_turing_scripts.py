@@ -9,6 +9,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_download_dataset_source.sh",
             "turing_materialize_dataset.sh",
             "turing_materialize_preflight_subset.sh",
+            "turing_freeze_baseline.sh",
             "turing_collect_array.sh",
             "turing_merge_collection.sh",
             "turing_tune_paper.sh",
@@ -33,6 +34,11 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("OUTPUT_PATH:?OUTPUT_PATH is required", preflight)
         self.assertIn("SUBSET_COUNT:?SUBSET_COUNT is required", preflight)
         self.assertIn("SUBSET_SEED:?SUBSET_SEED is required", preflight)
+        freeze_baseline = Path("scripts/turing_freeze_baseline.sh").read_text(encoding="utf-8")
+        self.assertIn("freeze-baseline", freeze_baseline)
+        self.assertIn("DATASET_MANIFEST:?DATASET_MANIFEST is required", freeze_baseline)
+        self.assertIn("SOURCE_COMMIT:?SOURCE_COMMIT is required", freeze_baseline)
+        self.assertIn("FREEZE_OUTPUT:?FREEZE_OUTPUT is required", freeze_baseline)
         for name in (
             "turing_collect_array.sh",
             "turing_tune_paper.sh",
