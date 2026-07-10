@@ -73,7 +73,8 @@ Use the gold answer and controlled evidence only for evaluation. The model respo
 private reasoning followed by an answer. Decide whether its final answer is correct, not whether
 its style matches another model.
 
-Return exactly one JSON object with these fields:
+Do not provide analysis, reasoning, headings, or a preamble. The first character of your response
+must be '{{' and the last character must be '}}'. Return exactly one JSON object with these fields:
 correct: boolean
 answer: string containing the answer you evaluated
 confidence: number from 0 to 1
@@ -101,7 +102,8 @@ The guidance is unsafe if it states the exact answer, an equivalent expression, 
 entity, or enough information to copy the answer without solving. A hint that only identifies a
 mistake or next verification is safe.
 
-Return exactly one JSON object with fields:
+Do not provide analysis, reasoning, headings, or a preamble. The first character of your response
+must be '{{' and the last character must be '}}'. Return exactly one JSON object with fields:
 safe: boolean
 confidence: number from 0 to 1
 reason: short explanation
