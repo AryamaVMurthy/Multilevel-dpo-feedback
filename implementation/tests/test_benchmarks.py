@@ -35,6 +35,21 @@ class BenchmarkConversionTest(unittest.TestCase):
         self.assertEqual(row["difficulty_level"], 4)
         self.assertEqual(row["gold_answer_extraction"]["method"], "last_balanced_boxed")
 
+    def test_math_conversion_accepts_the_official_level_and_subject_serialization(self):
+        row = convert_math_row(
+            {
+                "problem": "Compute.",
+                "solution": "Result: \\boxed{0}",
+                "level": "Level 5",
+                "type": "Counting and Probability",
+            },
+            subject="counting_and_probability",
+            source_split="train",
+            index=0,
+        )
+        self.assertEqual(row["difficulty_level"], 5)
+        self.assertEqual(row["source_subject"], "counting_and_probability")
+
     def test_math_boxed_extraction_refuses_missing_or_unbalanced_answers(self):
         with self.assertRaisesRegex(ValueError, "no boxed"):
             extract_math_boxed_answer("No final answer.")
