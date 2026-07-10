@@ -11,6 +11,7 @@ allow_missing_slurm_account_for_local: true
 
 benchmarks:
   - name: openai/gsm8k
+    config: main
     split: test
     count: 4
   - name: lucadiliello/searchqa

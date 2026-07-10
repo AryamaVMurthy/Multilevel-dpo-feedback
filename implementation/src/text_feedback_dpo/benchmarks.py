@@ -51,7 +51,11 @@ def load_benchmark_examples(specs: Iterable[dict[str, Any]]) -> list[dict[str, A
         count = int(spec["count"])
         if count <= 0:
             raise ValueError("benchmark count must be positive")
-        dataset = load_dataset(name, split=split, streaming=True)
+        config_name = spec.get("config")
+        if config_name:
+            dataset = load_dataset(name, str(config_name), split=split, streaming=True)
+        else:
+            dataset = load_dataset(name, split=split, streaming=True)
         for row_index, row in enumerate(dataset):
             if row_index >= count:
                 break
