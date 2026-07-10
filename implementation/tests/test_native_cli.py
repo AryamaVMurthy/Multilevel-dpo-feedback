@@ -87,6 +87,7 @@ class NativeCliTest(unittest.TestCase):
             self.assertEqual(len((root / "run" / "attempts.jsonl").read_text().splitlines()), 3)
             self.assertEqual(len((root / "run" / "pairs.jsonl").read_text().splitlines()), 2)
             self.assertTrue((root / "run" / "metrics.json").exists())
+            self.assertTrue((root / "run" / "generation_events.jsonl").exists())
             self.assertTrue(any(role == "teacher" for role, _, _ in provider.calls))
 
 

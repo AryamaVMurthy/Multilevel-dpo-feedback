@@ -79,3 +79,6 @@ This anchor must be logged separately from DPO loss.
 - Made answer-free teacher guidance a hard collection invariant.
 - Added a separate evaluator and guidance-guard role; roles may share the 9B weights.
 - Set the initial prompt-only smoke to two examples and at most three guidance steps.
+- Prompt-only run qwen35-native-smoke-r2 completed on one RTX 6000 Ada with both
+  examples correct on attempt 0; it produced no pairs, so the next smoke uses four
+  harder but still controlled examples to test the guidance loop.

@@ -40,6 +40,14 @@ class TuringScriptTest(unittest.TestCase):
         self.assertNotIn("train-dpo", text)
         self.assertNotIn("train-grpo", text)
 
+    def test_training_script_requires_explicit_method_and_one_gpu(self):
+        text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
+        self.assertIn('${TRAIN_METHOD:?TRAIN_METHOD is required}', text)
+        self.assertIn('${DATA_PATH:?DATA_PATH is required}', text)
+        self.assertIn("#SBATCH --nodes=1", text)
+        self.assertIn("#SBATCH --gres=gpu:1", text)
+        self.assertIn("train --method", text)
+
 
 if __name__ == "__main__":
     unittest.main()

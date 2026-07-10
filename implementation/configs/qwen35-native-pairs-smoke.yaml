@@ -1,0 +1,40 @@
+run_id: qwen35-native-pairs-smoke
+student_model: Qwen/Qwen3.5-2B
+teacher_model: Qwen/Qwen3.5-9B
+evaluator_model: Qwen/Qwen3.5-9B
+teacher_mode: stronger_model
+examples_path: ../examples/native_smoke/pairs_examples.jsonl
+max_examples: 4
+max_guidance_steps: 3
+max_guidance_regenerations: 1
+output_dir: runs/qwen35-native-pairs-smoke
+allow_missing_slurm_account_for_local: true
+
+generation:
+  max_new_tokens: 2048
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  presence_penalty: 1.5
+
+teacher_generation:
+  max_new_tokens: 4096
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  presence_penalty: 1.5
+
+evaluator_generation:
+  max_new_tokens: 1024
+  temperature: 0.2
+  top_p: 0.95
+  top_k: 20
+  presence_penalty: 0.0
+
+slurm:
+  account: null
+  partition: u22
+  cpus: 16
+  gpus: 1
+  mem_per_cpu: 4096
+  cuda_module: u22/cuda/12.4

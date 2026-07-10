@@ -1,0 +1,4 @@
+{"id":"math-hard-1","domain":"math","problem":"A farmer has 17 sheep. All but 9 die. How many sheep are left?","gold_answer":"9"}
+{"id":"math-hard-2","domain":"math","problem":"A price is 80. It increases by 25 percent and then decreases by 20 percent. What is the final price?","gold_answer":"80"}
+{"id":"searchqa-hard-1","domain":"search_qa","problem":"In which country was the author of Hamlet born?","gold_answer":"England","answer_type":"country","evidence":["Hamlet was written by William Shakespeare.","William Shakespeare was born in Stratford-upon-Avon.","Stratford-upon-Avon is in England."]}
+{"id":"searchqa-hard-2","domain":"search_qa","problem":"Which country contains the city where the Eiffel Tower is located?","gold_answer":"France","answer_type":"country","evidence":["The Eiffel Tower is located in Paris.","Paris is a city in France."]}

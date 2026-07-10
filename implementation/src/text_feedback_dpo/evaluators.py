@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable
 
 from text_feedback_dpo.prompts import build_native_student_prompt
@@ -122,12 +123,15 @@ def make_model_evaluator(
     generation_kwargs: dict[str, Any],
 ) -> Callable[[dict[str, Any], str], dict[str, Any]]:
     def evaluate(example: dict[str, Any], response: str) -> dict[str, Any]:
+        start = time.monotonic_ns()
         raw = generate("evaluator", build_evaluator_prompt(example=example, response=response), **generation_kwargs)
         try:
             parsed = parse_evaluator_output(raw)
         except ValueError as exc:
             raise ModelOutputParseError(role="evaluator", raw=raw, message=str(exc)) from exc
         parsed["raw_evaluator_output"] = raw
+        parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
+        parsed["generated_tokens_estimate"] = len(raw.split())
         return parsed
 
     return evaluate
@@ -144,6 +148,7 @@ def make_model_guidance_guard(
         _result: dict[str, Any],
         _attempt: int,
     ) -> dict[str, Any]:
+        start = time.monotonic_ns()
         raw = generate(
             "evaluator",
             build_guidance_guard_prompt(example=example, guidance=guidance),
@@ -155,6 +160,8 @@ def make_model_guidance_guard(
             raise ModelOutputParseError(role="guidance_guard", raw=raw, message=str(exc)) from exc
         parsed["guidance"] = guidance
         parsed["raw_guard_output"] = raw
+        parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
+        parsed["generated_tokens_estimate"] = len(raw.split())
         return parsed
 
     return guard

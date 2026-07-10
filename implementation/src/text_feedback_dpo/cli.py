@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
@@ -22,6 +23,12 @@ from text_feedback_dpo.prompts import (
 )
 from text_feedback_dpo.report import write_html_report
 from text_feedback_dpo.scoring import evaluate_rollout
+from text_feedback_dpo.training import (
+    load_training_rows,
+    run_distillation_training,
+    run_dpo_training,
+    run_grpo_training,
+)
 from text_feedback_dpo.validation import validate_run
 
 
@@ -423,6 +430,7 @@ def run_native_pipeline(
         generation_kwargs=dict(config["evaluator_generation"]),
     )
     guidance_events: list[dict] = []
+    generation_events: list[dict] = []
 
     def base_prompt_builder(example: dict) -> str:
         return build_native_student_prompt(
@@ -438,7 +446,16 @@ def run_native_pipeline(
         )
 
     def student_generate(prompt: str) -> str:
-        return provider.generate("student", prompt, **dict(config["generation"]))
+        start = time.monotonic_ns()
+        response = provider.generate("student", prompt, **dict(config["generation"]))
+        generation_events.append(
+            {
+                "role": "student",
+                "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
+                "generated_tokens_estimate": len(response.split()),
+            }
+        )
+        return response
 
     def teacher_guidance(example: dict, rollout: str, result: dict, attempt: int) -> str:
         prompt = build_privileged_guidance_prompt(
@@ -448,7 +465,17 @@ def run_native_pipeline(
             result=result,
             domain=str(example["domain"]),
         )
+        start = time.monotonic_ns()
         guidance = provider.generate("teacher", prompt, **dict(config["teacher_generation"]))
+        generation_events.append(
+            {
+                "role": "teacher",
+                "example_id": str(example["id"]),
+                "attempt": attempt,
+                "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
+                "generated_tokens_estimate": len(guidance.split()),
+            }
+        )
         guidance_events.append(
             {
                 "id": str(example["id"]),
@@ -498,11 +525,23 @@ def run_native_pipeline(
         "teacher_model": config["teacher_model"],
         "evaluator_model": config.get("evaluator_model", config["teacher_model"]),
         "teacher_mode": config["teacher_mode"],
+        "generation_events": len(generation_events),
+        "average_generated_tokens_estimate": (
+            sum(row["generated_tokens_estimate"] for row in generation_events) / len(generation_events)
+            if generation_events
+            else 0.0
+        ),
+        "average_generation_latency_ms": (
+            sum(row["latency_ms"] for row in generation_events) / len(generation_events)
+            if generation_events
+            else 0.0
+        ),
         **result["metrics"],
     }
     write_jsonl(output / "examples.jsonl", examples)
     write_jsonl(output / "attempts.jsonl", result["attempts"])
     write_jsonl(output / "guidance.jsonl", guidance_events)
+    write_jsonl(output / "generation_events.jsonl", generation_events)
     write_jsonl(output / "pairs.jsonl", result["pairs"])
     write_jsonl(output / "response_sft.jsonl", result["response_sft"])
     write_jsonl(output / "failures.jsonl", result["failures"])
@@ -518,6 +557,72 @@ def run_native_pipeline(
             evaluator_confidence=row["result"].get("confidence"),
         )
     logger.event("run_end", stage="complete", **metrics)
+    return metrics
+
+
+def run_training(
+    *,
+    method: str,
+    data_path: Path,
+    model_id: str,
+    output_dir: Path,
+    max_steps: int,
+) -> dict:
+    rows = load_training_rows(data_path)
+    if method == "dpo":
+        result = run_dpo_training(
+            model_id=model_id,
+            pairs=rows,
+            output_dir=output_dir,
+            max_steps=max_steps,
+            baseline=True,
+        )
+    elif method == "multilevel_dpo":
+        result = run_dpo_training(
+            model_id=model_id,
+            pairs=rows,
+            output_dir=output_dir,
+            max_steps=max_steps,
+            baseline=False,
+        )
+    elif method == "distill":
+        result = run_distillation_training(
+            model_id=model_id,
+            rows=rows,
+            output_dir=output_dir,
+            max_steps=max_steps,
+        )
+    elif method == "grpo":
+        examples = []
+        for row in rows:
+            if "problem" not in row or "gold_answer" not in row:
+                raise ValueError("GRPO data rows require problem and gold_answer")
+            examples.append(
+                {
+                    **row,
+                    "prompt": build_native_student_prompt(
+                        problem=str(row["problem"]),
+                        domain=str(row["domain"]),
+                        evidence=row.get("evidence"),
+                    ),
+                }
+            )
+        result = run_grpo_training(
+            model_id=model_id,
+            examples=examples,
+            output_dir=output_dir,
+            max_steps=max_steps,
+        )
+    else:
+        raise ValueError("method must be dpo, multilevel_dpo, distill, or grpo")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics = {key: value for key, value in result.items() if key != "history"}
+    (output_dir / "metrics.json").write_text(
+        json.dumps(metrics, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    write_jsonl(output_dir / "history.jsonl", result.get("history", []))
+    write_html_report(output_dir / "report.html", metrics, training_history=result.get("history", []))
     return metrics
 
 
@@ -537,6 +642,12 @@ def main() -> None:
     native = subparsers.add_parser("native-pipeline")
     native.add_argument("--config", required=True, type=Path)
     native.add_argument("--output-dir", type=Path)
+    train = subparsers.add_parser("train")
+    train.add_argument("--method", required=True, choices=["dpo", "multilevel_dpo", "distill", "grpo"])
+    train.add_argument("--data", required=True, type=Path)
+    train.add_argument("--model-id", required=True)
+    train.add_argument("--output-dir", required=True, type=Path)
+    train.add_argument("--max-steps", required=True, type=int)
     validate = subparsers.add_parser("validate-run")
     validate.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
@@ -558,6 +669,14 @@ def main() -> None:
         result = run_native_pipeline(
             config_path=args.config,
             output_dir=args.output_dir,
+        )
+    elif args.command == "train":
+        result = run_training(
+            method=args.method,
+            data_path=args.data,
+            model_id=args.model_id,
+            output_dir=args.output_dir,
+            max_steps=args.max_steps,
         )
     elif args.command == "validate-run":
         result = validate_run(args.output_dir)
