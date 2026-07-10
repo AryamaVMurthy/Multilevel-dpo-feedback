@@ -108,3 +108,12 @@ This anchor must be logged separately from DPO loss.
   three unresolved groups, and all rejected guidance contained answer-bearing numbers
   or entities. The teacher prompt now forbids digits, proper nouns, quoted spans, and
   answer-bearing words so safe abstract hints can be tested without relaxing the guard.
+- Collection r3 retry completed and passed native artifact validation: eight examples,
+  nine attempts, five correct at attempt zero, one correct at attempt one, two unsafe
+  guidance groups, one accepted pair, and no active Slurm jobs.
+- One-step training smokes completed on that real collection. Standard DPO and native
+  multilevel DPO each used one pair and both reported loss `0.693147`; on-policy
+  distillation reported loss `1.352725`; GRPO completed with loss `0.0` but reward
+  standard deviation `0.0` and all completions clipped at the configured limit, so
+  it is a runtime smoke only and not a gain claim. Aggregate artifacts are in
+  `runs/qwen35-method-comparison-r3/`.
