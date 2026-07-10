@@ -1,7 +1,7 @@
 # Paper-Scale Multilevel Feedback Experiment Design
 
-Status: approved and execution-ready; GSM8K collection preflight in progress on
-2026-07-10
+Status: approved and execution-ready; teacher-free GSM8K baseline is the next mandatory
+GPU gate on 2026-07-10
 
 The canonical optimizer and search protocol is
 `docs/design/training_hyperparameter_protocol.md`. If a historical smoke constant or
@@ -13,10 +13,13 @@ older plan conflicts with that document, the canonical protocol controls.
   and the pinned GSM8K manifest are complete.
 - The GSM8K manifest contains 6,726 train, 747 validation, and 1,319 official-test
   rows; validation is partitioned into 500 tuning and 247 confirmation rows.
-- The first 64-example GSM8K collection policy is running as an immutable R1
-  preflight. Its partial results are diagnostic only and cannot authorize training.
-- Full GSM8K collection, all training, official-test evaluation, and all SearchQA work
-  remain blocked until their preceding gates pass.
+- The first 64-example GSM8K R1 collection completed and failed its scientific gate.
+  Its results are diagnostic only and cannot authorize training.
+- Corrected R2 and baseline evaluation code pass 147 local tests. The immutable,
+  teacher-free base checkpoint must now pass validation preflight, full validation,
+  and one-time official-test evaluation before R2 collection starts.
+- Full GSM8K collection, all training, adapted-method test evaluation, and all
+  SearchQA work remain blocked until their preceding gates pass.
 - The exact operational sequence and current evidence are maintained in
   `docs/plans/2026-07-10-paper-scale-experiment-implementation.md`.
 
@@ -40,7 +43,7 @@ protocol?
 - Optional full-parameter ablation: one GSM8K seed for standard DPO and multilevel DPO.
 - No XML response format and no formatting loss.
 - Student sampling: temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5.
-- Student completion budget: 2048 tokens.
+- Student completion budget: 8192 tokens.
 - Original GRPO is the primary online-RL baseline; a DAPO-loss run is labeled only as
   a sensitivity analysis.
 
@@ -51,10 +54,11 @@ being evaluated. They are not silently reused for machine-readable control roles
 
 | Role | Thinking | Decoding | Maximum new tokens | Purpose |
 | --- | --- | --- | ---: | --- |
-| student | enabled | sampled: temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5 | 2048 | natural problem solving and retries |
+| student | enabled | sampled: temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5 | 8192 | natural problem solving and retries |
 | teacher | disabled | greedy | 64 | one very slight answer-free hint |
 | evaluator | disabled | greedy | 256 | structured answer extraction and judgment |
 | guidance guard | disabled | greedy | 8 | exact `SAFE` or `UNSAFE` verdict |
+| guidance critic | disabled | greedy | 8 | exact `VALID` or `INVALID` correctness verdict |
 
 Each role profile is explicit in the config and run manifest. Greedy roles do not
 receive ignored sampling parameters. Evaluator repair and teacher regeneration are
@@ -71,12 +75,15 @@ Use `openai/gsm8k`, configuration `main`, pinned to an explicit repository revis
 - Official train: 7,473 rows.
 - Deterministic paper train: 6,726 rows.
 - Deterministic validation: 747 rows sampled from official train.
-- Final test: all 1,319 official test rows, untouched until model selection is frozen.
+- Final test: all 1,319 official test rows. The immutable base checkpoint is evaluated
+  once before research under a frozen teacher-free protocol; adapted checkpoints remain
+  untouched until model selection is frozen.
 
 The train/validation split is defined by a checked-in manifest containing source row
-IDs, source revision, canonical row hashes, seed, and split. The official test split
-is never used for pair collection, prompt changes, hyperparameter selection, reward
-changes, or early stopping.
+IDs, source revision, canonical row hashes, seed, and split. Official test data is
+never used for pair collection, prompt changes, hyperparameter selection, reward
+changes, or early stopping. The pre-research base result is descriptive and cannot
+change any experimental choice.
 
 The 747 validation examples are deterministically divided into 500 tuning-development
 and 247 confirmation-development examples. Pilot training uses fixed subsets of the
@@ -116,12 +123,12 @@ It never writes a corrected rollout and never reveals the answer.
 
 Each hint must:
 
-- contain one sentence and 8 to 15 words;
-- identify only a broad error class or verification location;
-- contain no digits, quantities, equations, proper nouns, answer initials, answer
-  length, quoted evidence, or copied answer-bearing phrase;
-- avoid explicit operations such as add, subtract, multiply, or divide;
-- remain equally subtle on every retry; there is no final-step escalation.
+- contain one short sentence of 5 to 25 words;
+- identify only the earliest broad error, missing relation, constraint, or verification;
+- avoid directly disclosing the gold answer or an equivalent answer-bearing phrase;
+- avoid copying a long answer-bearing span from controlled evidence;
+- remain slight on every retry; quantities, operations, or proper nouns are permitted
+  only when the separate semantic leakage guard judges that they do not reveal the answer.
 
 Allowed examples:
 
@@ -198,7 +205,7 @@ extraction. SearchQA reward is frozen before preflight as:
 `0.55 * exact_match + 0.25 * token_f1 + 0.10 * evidence_support + 0.10 * answer_type_correct`
 
 Original GRPO uses four generations per prompt, one policy iteration per generation
-batch, clipping epsilon `0.2`, within-group reward scaling, a 2048-token completion
+batch, clipping epsilon `0.2`, within-group reward scaling, an 8192-token completion
 limit, the same sampling settings as collection, and the shared domain evaluator
 semantics. Truncated completions are masked. A full GRPO run cannot start if the pilot
 has more than 50% zero-variance groups or more than 5% truncated completions. A
@@ -206,6 +213,14 @@ one-seed DAPO-loss sensitivity run is reported separately and never substituted 
 the original-GRPO baseline.
 
 ## Evaluation and Statistics
+
+Before any teacher-guidance collection or training, evaluate the pinned base
+Qwen3.5-2B checkpoint teacher-free. First run and manually audit a validation
+micro-preflight, then evaluate all 747 validation examples, and finally evaluate all
+1,319 official test examples once. The baseline freeze binds source, dataset, student,
+evaluator, prompt, sampling profile, and seed. Full evaluation is sharded and merged by
+hash and canonical ID order. Any later student-prompt or inference-profile change
+invalidates the baseline and blocks research until the baseline is rerun.
 
 Primary metrics:
 

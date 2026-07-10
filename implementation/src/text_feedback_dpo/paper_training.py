@@ -121,6 +121,7 @@ def train_paper_dpo(
             max_steps=max_steps,
             candidate=candidate,
             effective_global_batch=effective_batch,
+            max_length=int(config.training["max_sequence_tokens"]),
         ),
         seed=seed,
     )
@@ -204,6 +205,7 @@ def train_paper_grpo(
             output_dir=output_dir,
             max_steps=max_steps,
             candidate=effective_candidate,
+            max_completion_length=config.generation.roles["student"].max_new_tokens,
         ),
         seed=seed,
     )
@@ -213,6 +215,7 @@ def train_paper_grpo(
         evaluator=evaluator,
         domain=str(examples[0]["domain"]),
         mask_truncated_completions=True,
+        max_completion_tokens=config.generation.roles["student"].max_new_tokens,
     )
     train_rows = [
         {

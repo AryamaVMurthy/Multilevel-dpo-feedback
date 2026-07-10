@@ -23,12 +23,19 @@ class DatasetConfig:
 
 
 @dataclass(frozen=True)
+class RoleGenerationConfig:
+    enable_thinking: bool
+    do_sample: bool
+    max_new_tokens: int
+    temperature: float | None
+    top_p: float | None
+    top_k: int | None
+    presence_penalty: float | None
+
+
+@dataclass(frozen=True)
 class GenerationConfig:
-    temperature: float
-    top_p: float
-    top_k: int
-    presence_penalty: float
-    max_completion_tokens: int
+    roles: dict[str, RoleGenerationConfig]
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,7 @@ class PaperExperimentConfig:
     dpo_search: DpoSearchConfig
     grpo_search: GrpoSearchConfig
     training: dict[str, Any]
+    evaluation: dict[str, Any]
     slurm: dict[str, Any]
     require_freeze_manifest_for_test: bool
 
@@ -129,6 +137,12 @@ def _number(value: object, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path} must be numeric")
     return float(value)
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{path} must be boolean")
+    return value
 
 
 def _number_tuple(value: object, path: str) -> tuple[float, ...]:
@@ -253,21 +267,71 @@ def _parse_models(value: object) -> dict[str, dict[str, str]]:
 
 def _parse_generation(value: object) -> GenerationConfig:
     mapping = _mapping(value, "generation")
-    required = {"temperature", "top_p", "top_k", "presence_penalty", "max_completion_tokens"}
+    required = {"student", "teacher", "evaluator", "guidance_guard", "guidance_critic"}
     _strict_keys(mapping, "generation", required)
-    max_tokens = _positive_int(mapping["max_completion_tokens"], "generation.max_completion_tokens")
-    if max_tokens != 2048:
-        raise ValueError("generation.max_completion_tokens must be exactly 2048")
-    config = GenerationConfig(
-        temperature=_number(mapping["temperature"], "generation.temperature"),
-        top_p=_number(mapping["top_p"], "generation.top_p"),
-        top_k=_positive_int(mapping["top_k"], "generation.top_k"),
-        presence_penalty=_number(mapping["presence_penalty"], "generation.presence_penalty"),
-        max_completion_tokens=max_tokens,
-    )
-    if (config.temperature, config.top_p, config.top_k, config.presence_penalty) != (1.0, 0.95, 20, 1.5):
-        raise ValueError("generation must use temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5")
-    return config
+    parsed: dict[str, RoleGenerationConfig] = {}
+    for role in sorted(required):
+        path = f"generation.{role}"
+        role_mapping = _mapping(mapping[role], path)
+        if role == "student":
+            keys = {
+                "enable_thinking",
+                "do_sample",
+                "max_new_tokens",
+                "temperature",
+                "top_p",
+                "top_k",
+                "presence_penalty",
+            }
+            _strict_keys(role_mapping, path, keys)
+            profile = RoleGenerationConfig(
+                enable_thinking=_boolean(role_mapping["enable_thinking"], f"{path}.enable_thinking"),
+                do_sample=_boolean(role_mapping["do_sample"], f"{path}.do_sample"),
+                max_new_tokens=_positive_int(role_mapping["max_new_tokens"], f"{path}.max_new_tokens"),
+                temperature=_number(role_mapping["temperature"], f"{path}.temperature"),
+                top_p=_number(role_mapping["top_p"], f"{path}.top_p"),
+                top_k=_positive_int(role_mapping["top_k"], f"{path}.top_k"),
+                presence_penalty=_number(role_mapping["presence_penalty"], f"{path}.presence_penalty"),
+            )
+            if profile.max_new_tokens != 8192:
+                raise ValueError("generation.student.max_new_tokens must be exactly 8192")
+            actual = (
+                profile.enable_thinking,
+                profile.do_sample,
+                profile.temperature,
+                profile.top_p,
+                profile.top_k,
+                profile.presence_penalty,
+            )
+            if actual != (True, True, 1.0, 0.95, 20, 1.5):
+                raise ValueError(
+                    "generation.student must use thinking and sampled temperature=1.0, "
+                    "top_p=0.95, top_k=20, presence_penalty=1.5"
+                )
+        else:
+            keys = {"enable_thinking", "do_sample", "max_new_tokens"}
+            _strict_keys(role_mapping, path, keys)
+            profile = RoleGenerationConfig(
+                enable_thinking=_boolean(role_mapping["enable_thinking"], f"{path}.enable_thinking"),
+                do_sample=_boolean(role_mapping["do_sample"], f"{path}.do_sample"),
+                max_new_tokens=_positive_int(role_mapping["max_new_tokens"], f"{path}.max_new_tokens"),
+                temperature=None,
+                top_p=None,
+                top_k=None,
+                presence_penalty=None,
+            )
+            expected_tokens = {
+                "teacher": 64,
+                "evaluator": 256,
+                "guidance_guard": 8,
+                "guidance_critic": 8,
+            }[role]
+            if profile.enable_thinking or profile.do_sample or profile.max_new_tokens != expected_tokens:
+                raise ValueError(
+                    f"{path} must use non-thinking greedy decoding with max_new_tokens={expected_tokens}"
+                )
+        parsed[role] = profile
+    return GenerationConfig(roles=parsed)
 
 
 def _parse_lora(value: object) -> LoraConfig:
@@ -426,6 +490,7 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         "dpo_search",
         "grpo_search",
         "training",
+        "evaluation",
         "slurm",
         "require_freeze_manifest_for_test",
     }
@@ -434,17 +499,56 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
     _strict_keys(
         collection,
         "collection",
-        {"max_guidance_steps", "max_guidance_regenerations", "shard_size", "artifact_schema"},
+        {
+            "max_guidance_steps",
+            "max_guidance_regenerations",
+            "shard_size",
+            "artifact_schema",
+            "prompt_protocol",
+        },
     )
     for field in ("max_guidance_steps", "max_guidance_regenerations", "shard_size"):
         _positive_int(collection[field], f"collection.{field}")
+    if collection["artifact_schema"] != "paper-v2":
+        raise ValueError("collection.artifact_schema must be paper-v2")
+    if collection["prompt_protocol"] != "qwen-native-r2":
+        raise ValueError("collection.prompt_protocol must be qwen-native-r2")
     training = _mapping(value["training"], "training")
-    _strict_keys(training, "training", {"final_seeds", "max_epochs", "checkpoint_fractions"})
+    _strict_keys(
+        training,
+        "training",
+        {"final_seeds", "max_epochs", "checkpoint_fractions", "max_sequence_tokens"},
+    )
     _int_tuple(training["final_seeds"], "training.final_seeds")
     if len(training["final_seeds"]) != 3:
         raise ValueError("training.final_seeds must contain exactly three seeds")
     _number(training["max_epochs"], "training.max_epochs")
     _number_tuple(training["checkpoint_fractions"], "training.checkpoint_fractions")
+    if _positive_int(training["max_sequence_tokens"], "training.max_sequence_tokens") != 10240:
+        raise ValueError("training.max_sequence_tokens must be exactly 10240")
+    evaluation = _mapping(value["evaluation"], "evaluation")
+    _strict_keys(
+        evaluation,
+        "evaluation",
+        {
+            "baseline_before_training",
+            "generation_seed",
+            "max_truncation_rate",
+            "minimum_evaluator_audit_agreement",
+        },
+    )
+    if _boolean(evaluation["baseline_before_training"], "evaluation.baseline_before_training") is not True:
+        raise ValueError("evaluation.baseline_before_training must be true")
+    _positive_int(evaluation["generation_seed"], "evaluation.generation_seed")
+    max_truncation_rate = _number(evaluation["max_truncation_rate"], "evaluation.max_truncation_rate")
+    if not 0 <= max_truncation_rate <= 1:
+        raise ValueError("evaluation.max_truncation_rate must be between 0 and 1")
+    agreement = _number(
+        evaluation["minimum_evaluator_audit_agreement"],
+        "evaluation.minimum_evaluator_audit_agreement",
+    )
+    if not 0 <= agreement <= 1:
+        raise ValueError("evaluation.minimum_evaluator_audit_agreement must be between 0 and 1")
     slurm = _mapping(value["slurm"], "slurm")
     _strict_keys(slurm, "slurm", {"account", "partition", "gpus_per_job", "max_walltime", "memory_limit_fraction"})
     if not str(slurm["account"]) or not str(slurm["partition"]):
@@ -465,13 +569,14 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         dpo_search=_parse_dpo_search(value["dpo_search"]),
         grpo_search=_parse_grpo_search(value["grpo_search"]),
         training=dict(training),
+        evaluation=dict(evaluation),
         slurm=dict(slurm),
         require_freeze_manifest_for_test=freeze_required,
     )
 
 
 def validate_paper_experiment(config: PaperExperimentConfig) -> None:
-    if config.schema_version != 1:
-        raise ValueError("schema_version must be 1")
+    if config.schema_version != 3:
+        raise ValueError("schema_version must be 3")
     if not config.experiment_id.strip():
         raise ValueError("experiment_id must be non-empty")

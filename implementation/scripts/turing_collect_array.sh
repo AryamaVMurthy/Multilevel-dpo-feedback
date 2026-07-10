@@ -19,6 +19,7 @@ SPLIT="${SPLIT:?SPLIT is required}"
 NUM_SHARDS="${NUM_SHARDS:?NUM_SHARDS is required}"
 SHARD_INDEX="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+SOURCE_COMMIT="${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -69,5 +70,6 @@ uv run --frozen python -m text_feedback_dpo.cli collect-shard \
   --output-dir "$OUTPUT_DIR" \
   --split "$SPLIT" \
   --shard-index "$SHARD_INDEX" \
-  --num-shards "$NUM_SHARDS"
+  --num-shards "$NUM_SHARDS" \
+  --source-commit "$SOURCE_COMMIT"
 echo "scratch_after=$(df -h /scratch | tail -1)"

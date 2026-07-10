@@ -29,6 +29,7 @@ class ShardingTest(unittest.TestCase):
                 path,
                 config_hash="config-a",
                 dataset_manifest_hash="dataset-a",
+                protocol_hash="protocol-a",
                 shard_index=1,
                 num_shards=3,
                 last_completed_local_index=4,
@@ -42,6 +43,7 @@ class ShardingTest(unittest.TestCase):
                     path,
                     config_hash="config-b",
                     dataset_manifest_hash="dataset-a",
+                    protocol_hash="protocol-a",
                     shard_index=1,
                     num_shards=3,
                     last_completed_local_index=5,
@@ -62,6 +64,7 @@ class ShardingTest(unittest.TestCase):
                     shard_dir / "progress.json",
                     config_hash="config-a",
                     dataset_manifest_hash="dataset-a",
+                    protocol_hash="protocol-a",
                     shard_index=index,
                     num_shards=2,
                     last_completed_local_index=0,
@@ -71,6 +74,7 @@ class ShardingTest(unittest.TestCase):
                     shard_dir,
                     config_hash="config-a",
                     dataset_manifest_hash="dataset-a",
+                    protocol_hash="protocol-a",
                     shard_index=index,
                     num_shards=2,
                     expected_records=1,
@@ -82,6 +86,7 @@ class ShardingTest(unittest.TestCase):
                 expected_shards=2,
                 config_hash="config-a",
                 dataset_manifest_hash="dataset-a",
+                protocol_hash="protocol-a",
             )
             self.assertEqual([row["id"] for row in merged], ["row-0", "row-1"])
             (root / "shard-0001" / "complete.json").unlink()
@@ -91,6 +96,33 @@ class ShardingTest(unittest.TestCase):
                     expected_shards=2,
                     config_hash="config-a",
                     dataset_manifest_hash="dataset-a",
+                    protocol_hash="protocol-a",
+                )
+
+    def test_resume_rejects_a_protocol_or_source_change(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "progress.json"
+            write_progress(
+                path,
+                config_hash="config-a",
+                dataset_manifest_hash="dataset-a",
+                protocol_hash="protocol-commit-a",
+                shard_index=0,
+                num_shards=1,
+                last_completed_local_index=0,
+                records_written=1,
+            )
+
+            with self.assertRaisesRegex(ValueError, "protocol hash"):
+                write_progress(
+                    path,
+                    config_hash="config-a",
+                    dataset_manifest_hash="dataset-a",
+                    protocol_hash="protocol-commit-b",
+                    shard_index=0,
+                    num_shards=1,
+                    last_completed_local_index=1,
+                    records_written=2,
                 )
 
 

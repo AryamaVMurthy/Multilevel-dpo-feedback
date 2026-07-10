@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
 from typing import Any, Callable
 
 from text_feedback_dpo.answer_evaluation import evaluate_domain_answer
+from text_feedback_dpo.models import normalize_model_generation
 
 
 class ModelOutputParseError(ValueError):
@@ -86,6 +88,17 @@ def parse_guidance_guard_output(raw: str) -> dict[str, Any]:
     return value
 
 
+def parse_guidance_critic_output(raw: str) -> dict[str, Any]:
+    token = raw.strip().upper()
+    if token not in {"VALID", "INVALID"}:
+        raise ValueError("guidance critic output must be exactly VALID or INVALID")
+    return {
+        "valid": token == "VALID",
+        "reason": "explicit single-token guidance correctness verdict",
+        "serialization": "single_token",
+    }
+
+
 def build_evaluator_prompt(*, example: dict[str, Any], response: str) -> str:
     evidence = example.get("evidence", [])
     evidence_text = "\n".join(f"- {item}" for item in evidence) if evidence else "(none supplied)"
@@ -142,14 +155,53 @@ The guidance is unsafe if it states the exact answer, an equivalent expression, 
 entity, or enough information to copy the answer without solving. A hint that only identifies a
 mistake or next verification is safe.
 
+A useful broad relation-level correction is SAFE when the student must still solve the problem.
+SAFE example: Recheck which hours receive the special rate before finding the total.
+SAFE example: Verify whether the duration describes one leg or the full trip.
+UNSAFE example: The correct result is seven.
+UNSAFE example: Use the named person who appears in the gold answer.
+
 Do not provide analysis, reasoning, headings, or a preamble. Return exactly one token: SAFE or UNSAFE.
-Return SAFE only when the guidance cannot disclose the answer; otherwise return UNSAFE.
+Judge disclosure, not usefulness or mathematical correctness; a separate critic handles those.
 
 Problem:
 {example["problem"]}
 
 Gold answer:
 {example["gold_answer"]}
+
+Teacher guidance:
+{guidance}
+"""
+
+
+def build_guidance_critic_prompt(
+    *,
+    example: dict[str, Any],
+    response: str,
+    result: dict[str, Any],
+    guidance: str,
+) -> str:
+    return f"""Check whether a teacher hint is directionally correct and relevant.
+
+Use the problem, gold answer, failed response, and evaluator result as privileged review context.
+Return VALID only if the hint points toward an actual error or useful verification and does not
+reinforce a false interpretation. Return INVALID if it is mathematically wrong, irrelevant,
+unsupported, or points away from the gold solution. Do not judge answer leakage in this role.
+
+Do not provide analysis, reasoning, headings, or a preamble. Return exactly one token: VALID or INVALID.
+
+Problem:
+{example["problem"]}
+
+Gold answer:
+{example["gold_answer"]}
+
+Failed student response:
+{response}
+
+Evaluator result:
+{json.dumps(result, sort_keys=True)}
 
 Teacher guidance:
 {guidance}
@@ -170,11 +222,14 @@ def make_model_evaluator(
         original_prompt = build_evaluator_prompt(example=example, response=response)
         prompt = original_prompt
         raw_outputs: list[str] = []
+        generation_records: list[dict[str, Any]] = []
         parse_failures: list[str] = []
         parsed: dict[str, Any] | None = None
         for generation_attempt in range(max_regenerations + 1):
-            raw = generate("evaluator", prompt, **generation_kwargs)
+            generation = normalize_model_generation(generate("evaluator", prompt, **generation_kwargs))
+            raw = generation.text
             raw_outputs.append(raw)
+            generation_records.append(asdict(generation))
             try:
                 candidate = parse_evaluator_output(raw)
                 actual_answer_type = candidate.get("answer_type", "unknown")
@@ -238,7 +293,10 @@ def make_model_evaluator(
         parsed["raw_evaluator_outputs"] = raw_outputs
         parsed["evaluator_parse_failures"] = parse_failures
         parsed["evaluator_regenerations"] = len(raw_outputs) - 1
+        parsed["evaluator_generations"] = generation_records
         parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
+        exact_tokens = [record["generated_tokens"] for record in generation_records]
+        parsed["generated_tokens"] = sum(exact_tokens) if all(value is not None for value in exact_tokens) else None
         parsed["generated_tokens_estimate"] = sum(len(raw_output.split()) for raw_output in raw_outputs)
         return parsed
 
@@ -257,19 +315,69 @@ def make_model_guidance_guard(
         _attempt: int,
     ) -> dict[str, Any]:
         start = time.monotonic_ns()
-        raw = generate(
-            "evaluator",
-            build_guidance_guard_prompt(example=example, guidance=guidance),
-            **generation_kwargs,
+        generation = normalize_model_generation(
+            generate(
+                "guidance_guard",
+                build_guidance_guard_prompt(example=example, guidance=guidance),
+                **generation_kwargs,
+            )
         )
+        raw = generation.text
         try:
             parsed = parse_guidance_guard_output(raw)
         except ValueError as exc:
             raise ModelOutputParseError(role="guidance_guard", raw=raw, message=str(exc)) from exc
         parsed["guidance"] = guidance
         parsed["raw_guard_output"] = raw
+        parsed["generation"] = asdict(generation)
         parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
+        parsed["generated_tokens"] = generation.generated_tokens
         parsed["generated_tokens_estimate"] = len(raw.split())
         return parsed
 
     return guard
+
+
+def make_model_guidance_critic(
+    *,
+    generate: Callable[..., str],
+    generation_kwargs: dict[str, Any],
+) -> Callable[[dict[str, Any], str, dict[str, Any], int], dict[str, Any]]:
+    def critic(
+        example: dict[str, Any],
+        guidance: str,
+        result: dict[str, Any],
+        _attempt: int,
+    ) -> dict[str, Any]:
+        start = time.monotonic_ns()
+        response = result.get("response")
+        if not isinstance(response, str) or not response:
+            raise ValueError("guidance critic requires the failed student response")
+        generation = normalize_model_generation(
+            generate(
+                "guidance_critic",
+                build_guidance_critic_prompt(
+                    example=example,
+                    response=response,
+                    result=result,
+                    guidance=guidance,
+                ),
+                **generation_kwargs,
+            )
+        )
+        try:
+            parsed = parse_guidance_critic_output(generation.text)
+        except ValueError as exc:
+            raise ModelOutputParseError(
+                role="guidance_critic",
+                raw=generation.text,
+                message=str(exc),
+            ) from exc
+        parsed["guidance"] = guidance
+        parsed["raw_critic_output"] = generation.text
+        parsed["generation"] = asdict(generation)
+        parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
+        parsed["generated_tokens"] = generation.generated_tokens
+        return parsed
+
+    return critic

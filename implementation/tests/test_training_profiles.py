@@ -1,5 +1,9 @@
 import unittest
+from pathlib import Path
+from unittest import mock
 
+from text_feedback_dpo.cli import _paper_evaluator
+from text_feedback_dpo.experiment_config import load_paper_experiment
 from text_feedback_dpo.hyperparameter_search import build_dpo_candidates, build_grpo_candidates
 from text_feedback_dpo.training import (
     build_paper_dpo_config_kwargs,
@@ -10,6 +14,18 @@ from text_feedback_dpo.training import (
 
 
 class TrainingProfileTest(unittest.TestCase):
+    def test_paper_evaluator_uses_the_explicit_greedy_role_profile(self):
+        config = load_paper_experiment(Path("configs/paper/gsm8k.yaml"))
+        with mock.patch("text_feedback_dpo.cli.TransformersModelProvider") as provider_class:
+            with mock.patch("text_feedback_dpo.cli.make_model_evaluator", return_value="evaluator") as make:
+                result = _paper_evaluator(config)
+
+        self.assertEqual(result, "evaluator")
+        self.assertIs(make.call_args.kwargs["generate"], provider_class.return_value.generate_result)
+        self.assertEqual(
+            make.call_args.kwargs["generation_kwargs"],
+            {"enable_thinking": False, "do_sample": False, "max_new_tokens": 256},
+        )
     def test_optimizer_profile_materializes_integer_warmup_and_fused_adamw(self):
         self.assertEqual(materialize_warmup_steps(19, 0.05), 1)
         self.assertEqual(materialize_warmup_steps(100, 0.05), 5)
@@ -40,8 +56,9 @@ class TrainingProfileTest(unittest.TestCase):
             max_steps=10,
             candidate=dpo_candidate,
             effective_global_batch=16,
+            max_length=10240,
         )
-        self.assertEqual(dpo["max_length"], 2048)
+        self.assertEqual(dpo["max_length"], 10240)
         self.assertEqual(dpo["gradient_accumulation_steps"], 16)
         self.assertTrue(dpo["bf16"])
         self.assertEqual(dpo["beta"], 0.1)
@@ -52,13 +69,21 @@ class TrainingProfileTest(unittest.TestCase):
             output_dir="out",
             max_steps=10,
             candidate=grpo_candidate,
+            max_completion_length=8192,
         )
+        self.assertEqual(grpo["max_completion_length"], 8192)
         self.assertEqual(grpo["num_generations"], 4)
         self.assertEqual(grpo["generation_batch_size"], 4)
         self.assertEqual(grpo["epsilon"], 0.2)
         self.assertEqual(grpo["loss_type"], "grpo")
         self.assertEqual(grpo["beta"], 0.01)
         self.assertTrue(grpo["mask_truncated_completions"])
+        self.assertEqual(grpo["temperature"], 1.0)
+        self.assertEqual(grpo["top_p"], 0.95)
+        self.assertEqual(grpo["top_k"], 20)
+        self.assertTrue(grpo["use_vllm"])
+        self.assertEqual(grpo["vllm_mode"], "colocate")
+        self.assertEqual(grpo["generation_kwargs"], {"presence_penalty": 1.5})
 
 
 if __name__ == "__main__":

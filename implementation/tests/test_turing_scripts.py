@@ -8,11 +8,14 @@ class TuringScriptTest(unittest.TestCase):
             "turing_setup_environment.sh",
             "turing_download_dataset_source.sh",
             "turing_materialize_dataset.sh",
+            "turing_materialize_preflight_subset.sh",
             "turing_collect_array.sh",
             "turing_merge_collection.sh",
             "turing_tune_paper.sh",
             "turing_train_paper.sh",
             "turing_evaluate_paper.sh",
+            "turing_merge_evaluations.sh",
+            "turing_setup_grpo_environment.sh",
         ):
             text = Path("scripts" / Path(name)).read_text(encoding="utf-8")
             self.assertIn("set -euo pipefail", text, name)
@@ -24,6 +27,12 @@ class TuringScriptTest(unittest.TestCase):
         setup = Path("scripts/turing_setup_environment.sh").read_text(encoding="utf-8")
         self.assertIn("SHARED_UV_CACHE:?SHARED_UV_CACHE is required", setup)
         self.assertIn("uv sync --frozen", setup)
+        preflight = Path("scripts/turing_materialize_preflight_subset.sh").read_text(encoding="utf-8")
+        self.assertIn("materialize-preflight-subset", preflight)
+        self.assertIn("SOURCE_PATH:?SOURCE_PATH is required", preflight)
+        self.assertIn("OUTPUT_PATH:?OUTPUT_PATH is required", preflight)
+        self.assertIn("SUBSET_COUNT:?SUBSET_COUNT is required", preflight)
+        self.assertIn("SUBSET_SEED:?SUBSET_SEED is required", preflight)
         for name in (
             "turing_collect_array.sh",
             "turing_tune_paper.sh",
@@ -37,11 +46,35 @@ class TuringScriptTest(unittest.TestCase):
         collect = Path("scripts/turing_collect_array.sh").read_text(encoding="utf-8")
         self.assertIn("SLURM_ARRAY_TASK_ID", collect)
         self.assertIn("collect-shard", collect)
+        self.assertIn("SOURCE_COMMIT:?SOURCE_COMMIT is required", collect)
+        self.assertIn('source-commit "$SOURCE_COMMIT"', collect)
         merge = Path("scripts/turing_merge_collection.sh").read_text(encoding="utf-8")
         self.assertIn("merge-collection", merge)
+        self.assertIn("SOURCE_COMMIT:?SOURCE_COMMIT is required", merge)
+        self.assertIn('source-commit "$SOURCE_COMMIT"', merge)
         for name in ("turing_tune_paper.sh", "turing_train_paper.sh", "turing_evaluate_paper.sh"):
             text = Path("scripts" / Path(name)).read_text(encoding="utf-8")
             self.assertIn("trap cleanup EXIT", text, name)
+        evaluate = Path("scripts/turing_evaluate_paper.sh").read_text(encoding="utf-8")
+        self.assertIn("CHECKPOINT_KIND:?CHECKPOINT_KIND is required", evaluate)
+        self.assertIn("SOURCE_COMMIT:?SOURCE_COMMIT is required", evaluate)
+        self.assertIn('--checkpoint-kind "$CHECKPOINT_KIND"', evaluate)
+        self.assertIn('--source-commit "$SOURCE_COMMIT"', evaluate)
+        self.assertIn("SLURM_ARRAY_TASK_ID", evaluate)
+        self.assertIn("NUM_SHARDS:?NUM_SHARDS is required", evaluate)
+        self.assertIn('--shard-index "$SHARD_INDEX"', evaluate)
+        self.assertIn('--num-shards "$NUM_SHARDS"', evaluate)
+        merge_evaluations = Path("scripts/turing_merge_evaluations.sh").read_text(encoding="utf-8")
+        self.assertIn("merge-evaluations", merge_evaluations)
+        self.assertIn("EXPECTED_SHARDS:?EXPECTED_SHARDS is required", merge_evaluations)
+        grpo_setup = Path("scripts/turing_setup_grpo_environment.sh").read_text(encoding="utf-8")
+        self.assertIn("GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required", grpo_setup)
+        self.assertIn("environments/grpo", grpo_setup)
+        self.assertIn("uv sync --project", grpo_setup)
+        for name in ("turing_tune_paper.sh", "turing_train_paper.sh"):
+            text = (Path("scripts") / name).read_text(encoding="utf-8")
+            self.assertIn("GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required", text)
+            self.assertIn('uv run --project "$PROJECT_DIR/environments/grpo" --frozen --no-sync', text)
     def test_model_load_smoke_script_has_required_gpu_checks(self):
         text = Path("scripts/turing_model_load_smoke.sh").read_text(encoding="utf-8")
         self.assertIn("#SBATCH -p u22", text)

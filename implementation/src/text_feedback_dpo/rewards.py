@@ -75,12 +75,14 @@ def build_grpo_reward_function(
     evaluator: Callable[[dict[str, Any], str], Mapping[str, Any]],
     domain: str,
     mask_truncated_completions: bool,
-    max_completion_tokens: int = 2048,
+    max_completion_tokens: int,
 ) -> Callable[..., list[float]]:
     if not examples_by_id:
         raise ValueError("examples_by_id must not be empty")
     if domain not in {"math", "search_qa"}:
         raise ValueError("domain must be math or search_qa")
+    if max_completion_tokens <= 0:
+        raise ValueError("max_completion_tokens must be positive")
 
     def reward_func(
         completions: Sequence[Any],

@@ -25,10 +25,29 @@ class PaperExperimentConfigTest(unittest.TestCase):
     def test_gsm8k_config_freezes_optimizer_search_and_nested_validation(self):
         config = load_paper_experiment(Path("configs/paper/gsm8k.yaml"))
 
+        self.assertEqual(config.schema_version, 3)
         self.assertEqual(config.dataset.revision, "740312add88f781978c0658806c59bc2815b9866")
         self.assertEqual(config.dataset.splits, {"train": 6726, "validation": 747, "test": 1319})
         self.assertEqual(config.dataset.validation_roles, {"tune": 500, "confirm": 247})
-        self.assertEqual(config.generation.max_completion_tokens, 2048)
+        student = config.generation.roles["student"]
+        self.assertTrue(student.enable_thinking)
+        self.assertTrue(student.do_sample)
+        self.assertEqual(student.max_new_tokens, 8192)
+        self.assertEqual(
+            (student.temperature, student.top_p, student.top_k, student.presence_penalty),
+            (1.0, 0.95, 20, 1.5),
+        )
+        for role, max_new_tokens in {
+            "teacher": 64,
+            "evaluator": 256,
+            "guidance_guard": 8,
+            "guidance_critic": 8,
+        }.items():
+            profile = config.generation.roles[role]
+            self.assertFalse(profile.enable_thinking)
+            self.assertFalse(profile.do_sample)
+            self.assertEqual(profile.max_new_tokens, max_new_tokens)
+            self.assertIsNone(profile.temperature)
         self.assertEqual(config.optimizer.name, "adamw_torch_fused")
         self.assertEqual(config.optimizer.adam_betas, (0.9, 0.999))
         self.assertEqual(config.optimizer.weight_decay, 0.01)
@@ -38,6 +57,11 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.grpo_search.kl_betas, (0.0, 0.001, 0.01, 0.04))
         self.assertEqual(config.lora.rank, 16)
         self.assertEqual(config.lora.target_policy, "qwen35_text_linear")
+        self.assertEqual(config.training["max_sequence_tokens"], 10240)
+        self.assertTrue(config.evaluation["baseline_before_training"])
+        self.assertEqual(config.evaluation["generation_seed"], 20260710)
+        self.assertEqual(config.evaluation["max_truncation_rate"], 0.05)
+        self.assertEqual(config.evaluation["minimum_evaluator_audit_agreement"], 0.95)
         self.assertTrue(config.require_freeze_manifest_for_test)
 
     def test_searchqa_config_has_disjoint_auxiliary_hparam_roles(self):
@@ -75,11 +99,25 @@ class PaperExperimentConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"optimizer\.warmup_ratio.*deprecated"):
             self._write_and_load(value)
 
-    def test_non_2048_completion_budget_fails(self):
+    def test_non_8192_student_completion_budget_fails(self):
         value = self._load_mapping("configs/paper/gsm8k.yaml")
-        value["generation"]["max_completion_tokens"] = 1024
+        value["generation"]["student"]["max_new_tokens"] = 2048
 
-        with self.assertRaisesRegex(ValueError, r"generation\.max_completion_tokens.*2048"):
+        with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*8192"):
+            self._write_and_load(value)
+
+    def test_missing_role_generation_profile_fails_explicitly(self):
+        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        del value["generation"]["guidance_critic"]
+
+        with self.assertRaisesRegex(ValueError, r"generation\.guidance_critic.*required"):
+            self._write_and_load(value)
+
+    def test_greedy_role_rejects_silent_sampling_parameters(self):
+        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        value["generation"]["teacher"]["temperature"] = 1.0
+
+        with self.assertRaisesRegex(ValueError, r"generation\.teacher\.temperature.*unknown"):
             self._write_and_load(value)
 
     def test_overlap_prone_searchqa_auxiliary_counts_fail(self):

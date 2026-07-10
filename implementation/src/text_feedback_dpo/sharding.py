@@ -43,18 +43,23 @@ def _context_matches(
     *,
     config_hash: str,
     dataset_manifest_hash: str,
+    protocol_hash: str,
     shard_index: int,
     num_shards: int,
 ) -> None:
     expected = {
         "config_hash": config_hash,
         "dataset_manifest_hash": dataset_manifest_hash,
+        "protocol_hash": protocol_hash,
         "shard_index": shard_index,
         "num_shards": num_shards,
     }
     mismatches = [key for key, value in expected.items() if payload.get(key) != value]
     if mismatches:
-        labels = ["config hash" if key == "config_hash" else key for key in mismatches]
+        labels = [
+            "config hash" if key == "config_hash" else "protocol hash" if key == "protocol_hash" else key
+            for key in mismatches
+        ]
         raise ValueError(f"shard metadata context mismatch in {', '.join(labels)}")
 
 
@@ -63,6 +68,7 @@ def write_progress(
     *,
     config_hash: str,
     dataset_manifest_hash: str,
+    protocol_hash: str,
     shard_index: int,
     num_shards: int,
     last_completed_local_index: int,
@@ -84,6 +90,7 @@ def write_progress(
                 previous,
                 config_hash=config_hash,
                 dataset_manifest_hash=dataset_manifest_hash,
+                protocol_hash=protocol_hash,
                 shard_index=shard_index,
                 num_shards=num_shards,
             )
@@ -98,6 +105,7 @@ def write_progress(
         {
             "config_hash": config_hash,
             "dataset_manifest_hash": dataset_manifest_hash,
+            "protocol_hash": protocol_hash,
             "shard_index": shard_index,
             "num_shards": num_shards,
             "last_completed_local_index": last_completed_local_index,
@@ -111,6 +119,7 @@ def next_local_index(
     *,
     config_hash: str,
     dataset_manifest_hash: str,
+    protocol_hash: str,
     shard_index: int,
     num_shards: int,
 ) -> int:
@@ -121,6 +130,7 @@ def next_local_index(
         payload,
         config_hash=config_hash,
         dataset_manifest_hash=dataset_manifest_hash,
+        protocol_hash=protocol_hash,
         shard_index=shard_index,
         num_shards=num_shards,
     )
@@ -132,6 +142,7 @@ def complete_shard(
     *,
     config_hash: str,
     dataset_manifest_hash: str,
+    protocol_hash: str,
     shard_index: int,
     num_shards: int,
     expected_records: int,
@@ -146,6 +157,7 @@ def complete_shard(
         progress,
         config_hash=config_hash,
         dataset_manifest_hash=dataset_manifest_hash,
+        protocol_hash=protocol_hash,
         shard_index=shard_index,
         num_shards=num_shards,
     )
@@ -163,6 +175,7 @@ def complete_shard(
         {
             "config_hash": config_hash,
             "dataset_manifest_hash": dataset_manifest_hash,
+            "protocol_hash": protocol_hash,
             "shard_index": shard_index,
             "num_shards": num_shards,
             "expected_records": expected_records,
@@ -177,6 +190,7 @@ def merge_completed_shards(
     expected_shards: int,
     config_hash: str,
     dataset_manifest_hash: str,
+    protocol_hash: str,
 ) -> list[dict[str, Any]]:
     if expected_shards <= 0:
         raise ValueError("expected_shards must be positive")
@@ -189,6 +203,7 @@ def merge_completed_shards(
             marker,
             config_hash=config_hash,
             dataset_manifest_hash=dataset_manifest_hash,
+            protocol_hash=protocol_hash,
             shard_index=shard_index,
             num_shards=expected_shards,
         )

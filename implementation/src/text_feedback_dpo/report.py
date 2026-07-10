@@ -101,6 +101,20 @@ def write_html_report(
         "success_by_attempt",
         {str(key): float(value) for key, value in metrics.get("success_by_attempt", {}).items()},
     )
+    evaluation_rate_fields = (
+        "common.final_answer_accuracy",
+        "common.truncation_rate",
+        "common.nonempty_response_rate",
+        "common.evaluator_confidence",
+    )
+    charts += _bar_chart(
+        "evaluation_rates",
+        {
+            key.removeprefix("common."): float(metrics[key])
+            for key in evaluation_rate_fields
+            if isinstance(metrics.get(key), (int, float))
+        },
+    )
     charts += _line_chart("training_loss", training_history or [])
     charts += _field_line_chart("reward_margin", training_history or [], "reward_margin")
     charts += _field_line_chart("training_accuracy", training_history or [], "accuracy")

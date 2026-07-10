@@ -41,6 +41,22 @@ class ReportTest(unittest.TestCase):
             self.assertIn("reward_margin", html)
             self.assertIn("training_accuracy", html)
 
+    def test_checkpoint_report_contains_accuracy_and_truncation_chart(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "baseline.html"
+            write_html_report(
+                path,
+                {
+                    "common.final_answer_accuracy": 0.72,
+                    "common.truncation_rate": 0.03,
+                    "common.nonempty_response_rate": 1.0,
+                },
+            )
+            html = path.read_text(encoding="utf-8")
+            self.assertIn("evaluation_rates", html)
+            self.assertIn("final_answer_accuracy", html)
+            self.assertIn("truncation_rate", html)
+
 
 if __name__ == "__main__":
     unittest.main()

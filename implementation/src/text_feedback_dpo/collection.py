@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from text_feedback_dpo.evaluators import ModelOutputParseError, make_model_evaluator, make_model_guidance_guard
+from text_feedback_dpo.evaluators import (
+    ModelOutputParseError,
+    make_model_evaluator,
+    make_model_guidance_critic,
+    make_model_guidance_guard,
+)
+from text_feedback_dpo.experiment_config import load_paper_experiment
 from text_feedback_dpo.io import append_jsonl_zst, read_jsonl, read_jsonl_zst, write_json_atomic, write_jsonl
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
@@ -36,18 +44,61 @@ def _manifest_hash(dataset_dir: Path) -> str:
     return content_hash
 
 
-def paper_generation_kwargs(config: Any, *, role: str) -> dict[str, Any]:
-    if role not in {"student", "teacher", "evaluator"}:
-        raise ValueError(f"unsupported paper generation role: {role}")
-    return {
-        "max_new_tokens": config.generation.max_completion_tokens,
-        "temperature": config.generation.temperature,
-        "top_p": config.generation.top_p,
-        "top_k": config.generation.top_k,
-        "presence_penalty": config.generation.presence_penalty,
-        # Student thinking remains model-native; structured roles use concise outputs.
-        "enable_thinking": role == "student",
+def _build_protocol_manifest(
+    *,
+    config: Any,
+    config_hash: str,
+    dataset_manifest_hash: str,
+    source_commit: str,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("source_commit must be an immutable 40-character lowercase Git SHA")
+    payload = {
+        "schema": "paper-collection-protocol-v2",
+        "source_commit": source_commit,
+        "config_hash": config_hash,
+        "dataset_manifest_hash": dataset_manifest_hash,
+        "artifact_schema": config.collection["artifact_schema"],
+        "prompt_protocol": config.collection["prompt_protocol"],
+        "models": config.models,
+        "role_generation": {
+            role: asdict(profile) for role, profile in sorted(config.generation.roles.items())
+        },
     }
+    protocol_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {**payload, "protocol_hash": protocol_hash}
+
+
+def _ensure_protocol(path: Path, expected: dict[str, Any]) -> None:
+    if path.exists():
+        actual = json.loads(path.read_text(encoding="utf-8"))
+        if actual != expected:
+            raise ValueError(
+                "collection protocol mismatch; use a new output directory for a different source commit or policy"
+            )
+        return
+    write_json_atomic(path, expected)
+
+
+def paper_generation_kwargs(config: Any, *, role: str) -> dict[str, Any]:
+    if role not in config.generation.roles:
+        raise ValueError(f"unsupported paper generation role: {role}")
+    profile = config.generation.roles[role]
+    kwargs: dict[str, Any] = {
+        "enable_thinking": profile.enable_thinking,
+        "do_sample": profile.do_sample,
+        "max_new_tokens": profile.max_new_tokens,
+    }
+    if profile.do_sample:
+        kwargs.update(
+            temperature=profile.temperature,
+            top_p=profile.top_p,
+            top_k=profile.top_k,
+            presence_penalty=profile.presence_penalty,
+        )
+    return kwargs
 
 
 def collect_paper_shard(
@@ -60,9 +111,11 @@ def collect_paper_shard(
     split: str,
     shard_index: int,
     num_shards: int,
+    source_commit: str,
     model_provider: ModelProvider | None = None,
     evaluator: Any | None = None,
     guidance_guard: Any | None = None,
+    guidance_critic: Any | None = None,
 ) -> dict[str, Any]:
     if not examples:
         raise ValueError("collection examples must not be empty")
@@ -73,12 +126,21 @@ def collect_paper_shard(
     selected = shard_rows(examples, shard_index=shard_index, num_shards=num_shards)
     shard_dir = output_root / f"shard-{shard_index:04d}"
     shard_dir.mkdir(parents=True, exist_ok=True)
+    protocol = _build_protocol_manifest(
+        config=config,
+        config_hash=config_digest,
+        dataset_manifest_hash=manifest_digest,
+        source_commit=source_commit,
+    )
+    _ensure_protocol(shard_dir / "protocol.json", protocol)
+    protocol_digest = str(protocol["protocol_hash"])
     records_path = shard_dir / "records.jsonl.zst"
     progress_path = shard_dir / "progress.json"
     start_index = next_local_index(
         progress_path,
         config_hash=config_digest,
         dataset_manifest_hash=manifest_digest,
+        protocol_hash=protocol_digest,
         shard_index=shard_index,
         num_shards=num_shards,
     )
@@ -89,17 +151,33 @@ def collect_paper_shard(
         )
 
     provider = model_provider or TransformersModelProvider(
-        model_ids={role: config.models[role]["id"] for role in ("student", "teacher", "evaluator")},
-        model_revisions={role: config.models[role]["revision"] for role in ("student", "teacher", "evaluator")},
+        model_ids={
+            "student": config.models["student"]["id"],
+            "teacher": config.models["teacher"]["id"],
+            "evaluator": config.models["evaluator"]["id"],
+            "guidance_guard": config.models["evaluator"]["id"],
+            "guidance_critic": config.models["evaluator"]["id"],
+        },
+        model_revisions={
+            "student": config.models["student"]["revision"],
+            "teacher": config.models["teacher"]["revision"],
+            "evaluator": config.models["evaluator"]["revision"],
+            "guidance_guard": config.models["evaluator"]["revision"],
+            "guidance_critic": config.models["evaluator"]["revision"],
+        },
     )
     evaluate = evaluator or make_model_evaluator(
-        generate=provider.generate,
+        generate=provider.generate_result,
         generation_kwargs=paper_generation_kwargs(config, role="evaluator"),
         max_regenerations=int(config.collection["max_guidance_regenerations"]),
     )
     guard = guidance_guard or make_model_guidance_guard(
-        generate=provider.generate,
-        generation_kwargs=paper_generation_kwargs(config, role="evaluator"),
+        generate=provider.generate_result,
+        generation_kwargs=paper_generation_kwargs(config, role="guidance_guard"),
+    )
+    critic = guidance_critic or make_model_guidance_critic(
+        generate=provider.generate_result,
+        generation_kwargs=paper_generation_kwargs(config, role="guidance_critic"),
     )
     logger = JsonlLogger(shard_dir / "events.jsonl", run_id=f"{config.experiment_id}:{split}:{shard_index}")
     logger.event(
@@ -112,6 +190,8 @@ def collect_paper_shard(
         expected_records=len(selected),
         config_hash=config_digest,
         dataset_manifest_hash=manifest_digest,
+        protocol_hash=protocol_digest,
+        source_commit=source_commit,
     )
 
     for local_index in range(start_index, len(selected)):
@@ -119,34 +199,53 @@ def collect_paper_shard(
         generation_events: list[dict[str, Any]] = []
         guidance_events: list[dict[str, Any]] = []
 
-        def student_generate(prompt: str) -> str:
+        def student_generate(prompt: str) -> Any:
             start = time.monotonic_ns()
-            result = provider.generate("student", prompt, **paper_generation_kwargs(config, role="student"))
-            generation_events.append({
-                "role": "student",
-                "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
-                "generated_tokens_estimate": len(result.split()),
-            })
-            return result
+            generation = provider.generate_result(
+                "student", prompt, **paper_generation_kwargs(config, role="student")
+            )
+            generation_events.append(
+                {
+                    "role": "student",
+                    "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
+                    **asdict(generation),
+                }
+            )
+            return generation
 
-        def teacher_guidance(example_row: dict[str, Any], rollout: str, result: dict[str, Any], attempt: int) -> str:
+        def teacher_guidance(
+            example_row: dict[str, Any],
+            rollout: str,
+            result: dict[str, Any],
+            attempt: int,
+            regeneration: int,
+            prior_reviews: list[dict[str, Any]],
+        ) -> str:
             prompt = build_privileged_guidance_prompt(
                 problem=str(example_row["problem"]),
                 gold_answer=str(example_row["gold_answer"]),
                 rollout=rollout,
                 result=result,
                 domain=str(example_row["domain"]),
+                prior_reviews=prior_reviews,
             )
             start = time.monotonic_ns()
-            guidance = provider.generate("teacher", prompt, **paper_generation_kwargs(config, role="teacher"))
-            generation_events.append({
-                "role": "teacher",
-                "attempt": attempt,
-                "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
-                "generated_tokens_estimate": len(guidance.split()),
-            })
+            generation = provider.generate_result(
+                "teacher", prompt, **paper_generation_kwargs(config, role="teacher")
+            )
+            guidance = generation.text
+            generation_events.append(
+                {
+                    "role": "teacher",
+                    "attempt": attempt,
+                    "regeneration": regeneration,
+                    "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
+                    **asdict(generation),
+                }
+            )
             guidance_events.append({
                 "attempt": attempt,
+                "regeneration": regeneration,
                 "raw_teacher_output": guidance,
                 "teacher_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
                 "teacher_model": config.models["teacher"]["id"],
@@ -172,6 +271,7 @@ def collect_paper_shard(
                 evaluate=evaluate,
                 teacher_guidance=teacher_guidance,
                 guidance_guard=guard,
+                guidance_critic=critic,
                 max_guidance_steps=int(config.collection["max_guidance_steps"]),
                 max_guidance_regenerations=int(config.collection["max_guidance_regenerations"]),
             )
@@ -188,6 +288,8 @@ def collect_paper_shard(
                     "raw_output": exc.raw,
                     "raw_outputs": exc.raw_outputs,
                     "parse_failures": exc.parse_failures,
+                    "source_commit": source_commit,
+                    "protocol_hash": protocol_digest,
                 }
             )
             write_jsonl(failure_path, failures)
@@ -204,6 +306,8 @@ def collect_paper_shard(
             "split": split,
             "local_index": local_index,
             "source_key": example.get("source_key"),
+            "source_commit": source_commit,
+            "protocol_hash": protocol_digest,
             "attempts": [
                 {key: value for key, value in attempt.items() if key != "prompt"}
                 for attempt in result["attempts"]
@@ -220,6 +324,7 @@ def collect_paper_shard(
             progress_path,
             config_hash=config_digest,
             dataset_manifest_hash=manifest_digest,
+            protocol_hash=protocol_digest,
             shard_index=shard_index,
             num_shards=num_shards,
             last_completed_local_index=local_index,
@@ -239,6 +344,7 @@ def collect_paper_shard(
         shard_dir,
         config_hash=config_digest,
         dataset_manifest_hash=manifest_digest,
+        protocol_hash=protocol_digest,
         shard_index=shard_index,
         num_shards=num_shards,
         expected_records=len(selected),
@@ -254,14 +360,24 @@ def merge_paper_collection(
     collection_dir: Path,
     expected_shards: int,
     output_path: Path,
+    source_commit: str,
 ) -> dict[str, Any]:
     config_digest = _config_hash(config_path)
     manifest_digest = _manifest_hash(dataset_dir)
+    config = load_paper_experiment(config_path)
+    protocol = _build_protocol_manifest(
+        config=config,
+        config_hash=config_digest,
+        dataset_manifest_hash=manifest_digest,
+        source_commit=source_commit,
+    )
+    protocol_digest = str(protocol["protocol_hash"])
     records = merge_completed_shards(
         collection_dir,
         expected_shards=expected_shards,
         config_hash=config_digest,
         dataset_manifest_hash=manifest_digest,
+        protocol_hash=protocol_digest,
     )
     if output_path.exists():
         raise FileExistsError(f"refusing to overwrite merged collection: {output_path}")
@@ -271,7 +387,9 @@ def merge_paper_collection(
     write_json_atomic(
         output_path.with_suffix(".manifest.json"),
         {
-            "schema": "paper-collection-v1",
+            "schema": "paper-collection-v2",
+            "source_commit": source_commit,
+            "protocol_hash": protocol_digest,
             "config_hash": config_digest,
             "dataset_manifest_hash": manifest_digest,
             "expected_shards": expected_shards,

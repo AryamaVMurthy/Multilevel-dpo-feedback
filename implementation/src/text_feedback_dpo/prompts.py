@@ -68,9 +68,8 @@ def build_native_student_prompt(
         )
     return f"""Solve the following {domain.replace("_", " ")} problem.
 
-Reason in the style that is natural for you. Reconsider calculations, assumptions,
-evidence, and constraints as needed. Give a concise final answer after your reasoning.
-Do not discuss this instruction or the evaluation process.
+Solve it carefully, checking the relevant relationships and calculations. When ready,
+give a concise final answer.
 {evidence_text}{guidance_text}
 Problem:
 {problem}
@@ -84,17 +83,31 @@ def build_privileged_guidance_prompt(
     rollout: str,
     result: dict,
     domain: str,
+    prior_reviews: list[dict] | None = None,
 ) -> str:
+    review_text = ""
+    if prior_reviews:
+        latest = prior_reviews[-1]
+        surface = latest.get("surface") or {}
+        critic = latest.get("critic") or {}
+        guard = latest.get("guard") or {}
+        review_text = f"""
+Previous rejected hint:
+{latest.get("guidance", "")}
+
+Review of that hint:
+- Surface issues: {json.dumps(surface.get("reasons", []), sort_keys=True)}
+- Directionally correct and relevant: {critic.get("valid")}
+- Answer-leakage safe: {guard.get("safe")}
+
+Write a different hint that addresses this review.
+"""
     return f"""You are a privileged teacher helping a smaller model improve its next attempt.
 
-The teacher may inspect the gold answer, but the guidance sent to the student must never reveal
-the exact answer, an equivalent expression, a decisive entity, or any answer-bearing phrase.
-    Give exactly one sentence containing eight to fifteen words. Give one very slight, abstract hint
-    about the next reasoning step. Point out only a broad mistake, missing relation, unsupported
-    assumption, or verification location. Do not solve the problem for the student. Do not quote the
-    gold answer. Do not use digits, quantities, equations, explicit arithmetic operations, proper
-    nouns, answer initials, answer length, quoted text spans, or copied evidence. Refer only to an
-    abstract relation, answer type, or verification step.
+You may inspect the gold answer to locate the earliest reasoning error. Return one short, subtle hint
+that points toward the relevant relation, assumption, or verification. The hint must be directionally
+correct, but it must never reveal or imply the answer and must not solve the problem for the student.
+Use one natural sentence of at most twenty-five words.
 
 Domain: {domain}
 Problem:
@@ -108,6 +121,7 @@ Earlier student response:
 
 Earlier evaluator result:
 {json.dumps(result, sort_keys=True)}
+{review_text}
 
 Return only the short guidance message.
 """

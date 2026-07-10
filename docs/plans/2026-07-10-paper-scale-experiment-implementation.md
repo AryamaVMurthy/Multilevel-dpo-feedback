@@ -16,20 +16,22 @@ paper defaults.
 
 ## Current Execution State
 
-Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`, verified implementation commit
-`c1701e2`.
+Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`. The last pushed plan commit is
+`bc1782c`; corrected R2 and baseline code is locally verified and awaiting its source
+freeze commit.
 
 | Scope | State | Evidence or next gate |
 | --- | --- | --- |
 | Tasks 1-12 | implemented | strict configs, data, collection, preference, LoRA, DPO/GRPO, held-out, observability, and Slurm surfaces exist |
-| Task 13 | verified | 119 tests pass in the locked local `.venv`; compile, shell syntax, documentation integrity, and diff checks pass |
+| Task 13 | verified locally | 149 tests pass in the locked local `.venv`; compile, lock, shell syntax, documentation integrity, and diff checks pass |
 | Task 14 | complete | GSM8K manifest hash `61a7a7f82f0ff75491b7b363504f85b0543628a860084cc0be66a01cf6f9eb6c` with 6,726/747/1,319 and nested 500/247 roles |
-| Task 15 R1 | running | Slurm `12964_0`; immutable 64-example fixed-policy preflight on `node04` |
-| Tasks 16-26 | blocked | require a passing Task 15 preflight and all later domain gates |
+| Task 15 | ready for source freeze and GPU preflight | teacher-free base evaluation now precedes all collection and training |
+| Task 16 R1 | diagnostic complete, gate failed | 64 records across jobs `12948_0`, `12952_0`, and `12964_0`; mixed source protocols, unverified truncation, guidance failures, and one pair |
+| Tasks 17-27 | blocked | require a passing baseline gate, passing R2 collection preflight, and all later domain gates |
 
-Partial R1 observations are not results and must not be used to start training. The R1
-policy is allowed to finish unchanged. If it fails a gate, its artifacts remain intact
-and the corrected protocol runs from example zero under a new R2 path and hash.
+R1 observations are not results and must not be used to start training. Its artifacts
+remain intact, and the corrected protocol runs from example zero under a new R2 path,
+source commit, and protocol hash.
 
 ## Canonical Paths
 
@@ -50,7 +52,13 @@ source files.
 - Follow test-driven development for every behavior change.
 - Commit after each task; push only verified commits.
 - Never run ML imports, dataset processing, inference, or training on the Turing login node.
-- Never use the official test split for pair collection or model selection.
+- Never use the official test split for pair collection, prompt changes, reward changes,
+  hyperparameter selection, stopping, or model selection. The immutable base checkpoint
+  is evaluated once before research after its evaluation protocol freezes; its test
+result cannot change any later experimental decision.
+- The frozen baseline student prompt and inference profile are shared by every later
+  checkpoint. Any later change to either invalidates the baseline and requires a new
+  freeze and complete baseline rerun before research resumes.
 - Never use SearchQA auxiliary tuning rows in final SearchQA-8K training or reporting.
 - Never merge a missing or failed shard as an empty shard.
 - Do not start SearchQA until the GSM8K completion gate passes.
@@ -59,8 +67,9 @@ source files.
 - Before every phase, record `df`, `du`, Slurm accounting, node-local cache identity,
   and projected output size. Require at least 8 GB free and less than 85% persistent
   storage utilization before submission.
-- Student, teacher, evaluator, and guard generation profiles are separate immutable
-  config objects. No role inherits another role's decoding settings implicitly.
+- Student, teacher, evaluator, leakage-guard, and guidance-critic generation profiles
+  are separate immutable config objects. No role inherits another role's decoding
+  settings implicitly.
 
 ## Task 1: Add Paper Experiment Configuration Schema
 
@@ -78,7 +87,7 @@ seeds, architecture-audited LoRA settings, optimizer fields, deterministic candi
 matrix, promotion budgets, nested validation partitions, generation settings, shard
 size, retry budget, and final-test freeze flag. Test that unknown keys, missing
 revisions, overlap-prone split settings, deprecated warmup fields, implicit optimizer
-defaults, and a non-2048 completion budget fail explicitly.
+defaults, and a non-8192 completion budget fail explicitly.
 
 **Step 2: Verify the tests fail**
 
@@ -511,7 +520,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_rewards.py'
 **Step 3: Implement shared reward functions**
 
 Use the same evaluation result schema as held-out scoring. Configure four generations,
-generation batch divisibility, max completion length 2048, temperature 1.0, top-p 0.95,
+generation batch divisibility, max completion length 8192, temperature 1.0, top-p 0.95,
 top-k 20, presence penalty 1.5 through supported generation kwargs, completion logging,
 and truncated-completion masking. Configure the primary baseline explicitly as original
 `loss_type="grpo"`, one policy iteration, clipping epsilon `0.2`, and within-group reward
@@ -684,17 +693,79 @@ sacct -j <jobid> --format=JobID,State,Elapsed,AllocTRES,MaxRSS,NodeList
 squeue -u "$USER"
 ```
 
-## Task 15: Run GSM8K Collection Preflight
+## Task 15: Freeze and Evaluate the Teacher-Free GSM8K Baseline
+
+**Files/Artifacts:**
+- Create remotely: `runs/paper/gsm8k/baseline/`
+- Use: `implementation/scripts/turing_evaluate_paper.sh`
+- Use: `implementation/scripts/turing_merge_evaluations.sh`
+- Use: `implementation/scripts/turing_materialize_preflight_subset.sh`
+- Use CLI: `materialize-preflight-subset`, `freeze-baseline`, `evaluate-paper`, `merge-evaluations`, and
+  `audit-evaluation`
+
+**Step 1: Freeze the baseline evaluation identity**
+
+After the corrected evaluation code is committed and synced, write a
+`baseline-evaluation-freeze-v1` manifest. It binds source commit, full config hash,
+dataset-manifest hash, Qwen3.5-2B revision, Qwen3.5-9B evaluator revision, native
+student prompt protocol, role-specific generation profiles, and generation seed.
+Teacher generation is disabled. A mismatched source, model, config, dataset, prompt,
+or decoding profile is a hard error.
+The paper config is schema v3; schema v2 files are rejected because they do not bind
+the mandatory baseline protocol or the 8,192/10,240-token contracts.
+
+**Step 2: Run a small validation preflight and manually audit every response**
+
+Materialize 16 hash-selected validation IDs with the frozen evaluation seed and retain
+the subset manifest, source/output hashes, and exact selected IDs. Run that immutable
+subset through the base checkpoint. Store raw responses,
+exact prompt and generated token counts, EOS/length finish reasons, truncation,
+generation/evaluator latency, evaluator raw turns, failure ledger, GPU telemetry, and
+Slurm accounting. Manually label all 16 evaluator decisions. Require 100% artifact
+coverage, no missing metadata, no teacher/gold prompt context, no unexplained failures,
+at least 95% evaluator/manual agreement, at most 5% truncation, and peak memory below
+90%. If this fails, revise the evaluation protocol under a new freeze before any full
+baseline or collection job.
+
+**Step 3: Run and merge the full 747-example validation baseline**
+
+Choose the validation shard count from measured 8,192-token preflight throughput, with
+at least 25% wall-time headroom; six shards of approximately 125 examples are only the
+initial estimate. Merge only complete
+shards whose prediction hashes, freeze hash, checkpoint identity, seed, split, and
+canonical ID order match. Audit at least 64 stratified validation predictions and
+enforce the same agreement, truncation, metadata, teacher-free, memory, and failure
+gates. Report exact numerical accuracy, evaluator confidence, response lengths,
+finish reasons, latency, throughput, peak GPU memory, wall time, and GPU-hours.
+
+**Step 4: Run the base checkpoint once on all 1,319 official test examples**
+
+Only after Steps 1-3 pass, choose the test shard count from measured throughput (11
+shards is the initial estimate) and merge them under the same freeze. This is the one
+pre-research exception to delayed test execution because
+the base checkpoint and evaluation policy are immutable. The baseline test result is
+descriptive only and is prohibited from changing prompts, collection policy, rewards,
+search spaces, promotion, stopping, or model selection. Preserve the one-time test
+markers; do not regenerate the base test predictions later.
+
+**Step 5: Publish the baseline artifacts before preference collection**
+
+Write JSON/CSV metrics, per-example predictions, audit labels and disagreements, GPU
+telemetry, Slurm accounting, plots, and an HTML report. Record hashes in the living
+execution log. No teacher-guidance collection or training job may start until this
+baseline gate passes.
+
+## Task 16: Run the Corrected GSM8K Collection Preflight
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/collection-preflight/`
 
-**Step 1: Finish immutable R1 collection**
+**Step 1: Preserve and classify immutable R1 as diagnostic**
 
-Use the first deterministic 64 training examples and allow three slight-hint rounds.
-Do not change prompts, decoding, parsing, safety policy, or retry behavior while R1 is
-running. Preserve Slurm job `12964_0`, raw outputs, model failures, progress, telemetry,
-and accounting even if a gate fails.
+R1 already completed on the first deterministic 64 training examples with three
+slight-hint rounds and failed its paper gate. Preserve jobs `12948`, `12952`, and
+`12964`, raw outputs, model failures, progress, telemetry, accounting, and local archive.
+Never append corrected records to R1 or use its one preference pair for training.
 
 **Step 2: Inspect every raw attempt and hint**
 
@@ -731,7 +802,7 @@ permit full collection or training.
 - Modify: `implementation/tests/test_guidance_policy.py`
 
 Write failing tests proving that the student alone uses thinking plus sampled
-`1.0/0.95/20/1.5` decoding and 2,048 tokens. Require teacher greedy non-thinking
+`1.0/0.95/20/1.5` decoding and 8,192 tokens. Require teacher greedy non-thinking
 decoding with 64 tokens, evaluator greedy non-thinking decoding with 256 tokens, and
 guard greedy non-thinking decoding with eight tokens. Greedy profiles must omit
 temperature, top-p, top-k, and presence penalty instead of passing ignored values.
@@ -754,7 +825,7 @@ test-first failure workflow under R3 rather than relaxing a gate. When a preflig
 passes, freeze its config, prompts, role profiles, evaluator, guard, package lock,
 model revisions, and artifact schema hashes for full GSM8K collection.
 
-## Task 16: Run Full GSM8K Collection and Merge
+## Task 17: Run Full GSM8K Collection and Merge
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/collection/`
@@ -792,7 +863,7 @@ hash, dataset hash, expected shard count, and raw artifact schema.
 Generate standard, multilevel, and matched rows. Report group count, pair count, pair
 yield, attempt distribution, unresolved rate, and unsafe-guidance rate.
 
-## Task 17: Train and Select GSM8K DPO Models
+## Task 18: Train and Select GSM8K DPO Models
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/{standard_dpo,multilevel_dpo,multilevel_matched}/`
@@ -833,7 +904,7 @@ tuned primary results.
 
 No test job starts until every selected run and validation prediction artifact passes.
 
-## Task 18: Run GSM8K GRPO
+## Task 19: Run GSM8K GRPO
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/grpo/`
@@ -843,6 +914,12 @@ No test job starts until every selected run and validation prediction artifact p
 Generate four completions per prompt with original `loss_type="grpo"`, one policy
 iteration, clipping epsilon `0.2`, within-group scaling, and truncation masking. Audit
 every completion, reward, optimizer field, and gradient update.
+Use the isolated frozen vLLM environment so presence penalty `1.5` is actually applied;
+temperature `1.0`, top-p `0.95`, top-k `20`, and the 8,192-token ceiling are explicit.
+Start with colocated vLLM at 25% device memory. If and only if the measured preflight
+fails the memory gate, run the documented two-GPU server-mode profile and then use that
+same profile for all GRPO candidates and seeds. Never omit presence penalty as a hidden
+Transformers fallback.
 
 **Step 2: Enforce GRPO gates**
 
@@ -866,7 +943,7 @@ and GPU-hours.
 Run one seed with the frozen GRPO optimizer profile but `loss_type="dapo"`. Store it
 under `runs/paper/gsm8k/dapo_sensitivity/`; never substitute it for an invalid GRPO run.
 
-## Task 19: Run the Frozen GSM8K Test Evaluation
+## Task 20: Run the Frozen GSM8K Adapted-Method Test Evaluation
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/test/`
@@ -875,9 +952,10 @@ under `runs/paper/gsm8k/dapo_sensitivity/`; never substitute it for an invalid G
 
 **Step 2: Generate full 1,319-example predictions**
 
-Evaluate base, standard DPO, multilevel DPO, matched DPO, and original GRPO for every
-primary seed. Evaluate the one-seed DAPO sensitivity in a separately labeled artifact.
-Teacher guidance is disabled.
+Reuse the already frozen base predictions from Task 15 without regenerating them.
+Evaluate standard DPO, multilevel DPO, matched DPO, and original GRPO for every primary
+seed. Evaluate the one-seed DAPO sensitivity in a separately labeled artifact. Teacher
+guidance is disabled.
 
 **Step 3: Score and validate**
 
@@ -886,9 +964,9 @@ no duplicates, no teacher/gold prompt leakage, and adapter/config hashes.
 
 **Step 4: Mark GSM8K complete**
 
-SearchQA work remains blocked until GSM statistics and report pass Task 20.
+SearchQA work remains blocked until GSM statistics and report pass Task 21.
 
-## Task 20: Produce GSM8K Statistics and Paper Report
+## Task 21: Produce GSM8K Statistics and Paper Report
 
 **Files:**
 - Create: `implementation/src/text_feedback_dpo/statistics.py`
@@ -916,13 +994,20 @@ compute table, and exact reproduction commands.
 
 Only after report validation may SearchQA begin.
 
-## Task 21: Materialize and Preflight SearchQA-8K
+## Task 22: Materialize, Baseline, and Preflight SearchQA-8K
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/searchqa8k/data/`
 - Create remotely: `runs/paper/searchqa8k/collection-preflight/`
 
 **Step 1: Materialize official-source manifests under Slurm**
+
+**Step 2: Freeze and run the teacher-free SearchQA-8K baseline before collection**
+
+Apply Task 15 to SearchQA-8K: first a manually audited validation micro-preflight,
+then full 1,000-example validation and one-time 2,000-example test inference under a
+SearchQA-specific freeze. The test result remains descriptive and cannot influence
+SearchQA prompts, rewards, collection, tuning, or model selection.
 
 Expected sample counts: 5,000 train, 1,000 validation, 2,000 test. Validate source
 split membership, stratification, disjointness, hashes, evidence packaging, answer
@@ -933,38 +1018,38 @@ hyperparameter-validation rows from otherwise unused original official rows. Val
 that both auxiliary roles are disjoint from every SearchQA-8K role and are rejected by
 final-training and final-evaluation commands.
 
-**Step 2: Run 64-example collection preflight**
+**Step 3: Run 64-example collection preflight**
 
 Audit every response, slight hint, accumulated guard decision, evidence package, and
 evaluator result.
 
-**Step 3: Enforce the same gates plus evidence coverage**
+**Step 4: Enforce the same gates plus evidence coverage**
 
 Require answer-alias evidence coverage and report any deterministic truncation. Verify
 the already frozen `0.55/0.25/0.10/0.10` SearchQA reward implementation during
 preflight; do not tune reward weights from preflight outcomes.
 
-## Task 22: Run Full SearchQA-8K Collection
+## Task 23: Run Full SearchQA-8K Collection
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/searchqa8k/collection/`
 
-Repeat Task 16 with 5,000 training examples. Start with 250 examples per shard and 20
+Repeat Task 17 with 5,000 training examples. Start with 250 examples per shard and 20
 shards, then adjust only from measured preflight throughput. Merge only complete shards,
 validate all IDs, and build standard, multilevel, and matched preference datasets.
 
-## Task 23: Train SearchQA-8K DPO and GRPO
+## Task 24: Train SearchQA-8K DPO and GRPO
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/searchqa8k/{standard_dpo,multilevel_dpo,multilevel_matched,grpo}/`
 
-Repeat Tasks 17 and 18 using SearchQA exact match, token F1, answer type, and evidence
+Repeat Tasks 18 and 19 using SearchQA exact match, token F1, answer type, and evidence
 support. Use the approved composite GRPO reward. Keep the same LoRA architecture and
 three-seed policy. Run tuning pilots on the disjoint 2,000/500 auxiliary pool, then
 evaluate the chosen configuration once on the main 1,000-example validation split
 before freezing it. Final training uses only the main 5,000-example training split.
 
-## Task 24: Run Frozen SearchQA-8K Test and Statistics
+## Task 25: Run Frozen SearchQA-8K Adapted-Method Test and Statistics
 
 **Files/Artifacts:**
 - Create remotely: `runs/paper/searchqa8k/test/`
@@ -975,7 +1060,7 @@ coverage and hashes, then report EM, token F1, answer type, evidence support, bo
 confidence intervals, paired bootstrap differences, compute, and failures. Label every
 artifact and table as `SearchQA-8K`.
 
-## Task 25: Optional One-Seed GSM8K Full-Fine-Tuning Ablation
+## Task 26: Optional One-Seed GSM8K Full-Fine-Tuning Ablation
 
 **Files:**
 - Create: `implementation/configs/paper/gsm8k-fullft-standard.yaml`
@@ -992,7 +1077,7 @@ rather than use asymmetric settings.
 This task is non-blocking and is not part of the paper completion definition. The main
 study is LoRA because full fine-tuning would change the compute and optimization budget.
 
-## Task 26: Final Cross-Domain Report and Completion Audit
+## Task 27: Final Cross-Domain Report and Completion Audit
 
 **Files/Artifacts:**
 - Create remotely: `reports/paper/cross-domain/`

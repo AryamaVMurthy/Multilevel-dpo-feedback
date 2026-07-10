@@ -2,7 +2,12 @@ import unittest
 from types import ModuleType
 from unittest import mock
 
-from text_feedback_dpo.models import FakeModelProvider, PresencePenaltyLogitsProcessor, TransformersModelProvider
+from text_feedback_dpo.models import (
+    FakeModelProvider,
+    ModelGeneration,
+    PresencePenaltyLogitsProcessor,
+    TransformersModelProvider,
+)
 
 
 class FakeTensor:
@@ -22,6 +27,7 @@ class FakeEncoded(dict):
 class FakeTokenizer:
     def __init__(self):
         self.chat_template_calls = []
+        self.eos_token_id = 3
 
     def __call__(self, _prompt, return_tensors):
         return FakeEncoded({"input_ids": FakeTensor()})
@@ -99,6 +105,81 @@ class ModelProviderTest(unittest.TestCase):
         self.assertEqual(len(processors), 1)
         self.assertIsInstance(processors[0], PresencePenaltyLogitsProcessor)
         self.assertEqual(processors[0].penalty, 1.5)
+
+    def test_transformers_provider_returns_exact_generation_metadata(self):
+        provider = TransformersModelProvider(
+            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        provider._loaded["student"] = (FakeTokenizer(), FakeModel())
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            result = provider.generate_result(
+                "student",
+                "prompt",
+                max_new_tokens=4,
+                do_sample=False,
+                enable_thinking=True,
+            )
+
+        self.assertIsInstance(result, ModelGeneration)
+        self.assertEqual(result.text, "decoded")
+        self.assertEqual(result.prompt_tokens, 2)
+        self.assertEqual(result.generated_tokens, 1)
+        self.assertTrue(result.terminated)
+        self.assertFalse(result.truncated)
+        self.assertEqual(result.finish_reason, "eos")
+
+    def test_length_limited_generation_is_explicitly_truncated(self):
+        provider = TransformersModelProvider(
+            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 99
+        model = FakeModel()
+        provider._loaded["student"] = (tokenizer, model)
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            result = provider.generate_result(
+                "student",
+                "prompt",
+                max_new_tokens=1,
+                do_sample=False,
+            )
+
+        self.assertFalse(result.terminated)
+        self.assertTrue(result.truncated)
+        self.assertEqual(result.finish_reason, "length")
+
+    def test_greedy_generation_omits_sampling_only_kwargs(self):
+        provider = TransformersModelProvider(
+            model_ids={"evaluator": "Qwen/Qwen3.5-9B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        model = FakeModel()
+        provider._loaded["evaluator"] = (FakeTokenizer(), model)
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            provider.generate_result(
+                "evaluator",
+                "Return JSON.",
+                max_new_tokens=16,
+                do_sample=False,
+                enable_thinking=False,
+            )
+
+        self.assertFalse(model.generate_kwargs["do_sample"])
+        self.assertNotIn("temperature", model.generate_kwargs)
+        self.assertNotIn("top_p", model.generate_kwargs)
+        self.assertNotIn("top_k", model.generate_kwargs)
+        self.assertNotIn("logits_processor", model.generate_kwargs)
 
     def test_transformers_provider_uses_a_chat_generation_turn(self):
         provider = TransformersModelProvider(

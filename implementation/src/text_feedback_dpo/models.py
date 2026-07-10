@@ -3,6 +3,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+@dataclass(frozen=True)
+class ModelGeneration:
+    text: str
+    prompt_tokens: int | None
+    generated_tokens: int | None
+    terminated: bool | None
+    truncated: bool | None
+    finish_reason: str
+
+
+def normalize_model_generation(value: str | ModelGeneration) -> ModelGeneration:
+    if isinstance(value, ModelGeneration):
+        return value
+    if isinstance(value, str):
+        return ModelGeneration(
+            text=value,
+            prompt_tokens=None,
+            generated_tokens=None,
+            terminated=None,
+            truncated=None,
+            finish_reason="unavailable",
+        )
+    raise TypeError("model generation must be text or ModelGeneration")
+
+
 class PresencePenaltyLogitsProcessor:
     """Subtract a fixed penalty from tokens already present in each sequence."""
 
@@ -21,9 +46,106 @@ class PresencePenaltyLogitsProcessor:
         return scores
 
 
+def generate_model_result(
+    *,
+    tokenizer: object,
+    model: object,
+    prompt: str,
+    generation_kwargs: dict[str, object],
+) -> ModelGeneration:
+    try:
+        from transformers import LogitsProcessorList
+    except ImportError as exc:
+        raise ImportError("transformers is required for model generation") from exc
+
+    if not hasattr(tokenizer, "apply_chat_template"):
+        raise RuntimeError(
+            "model tokenizer does not support apply_chat_template; refusing raw-text generation "
+            "because Qwen3.5 requires an explicit chat generation turn"
+        )
+    template_options = {
+        "add_generation_prompt": True,
+        "tokenize": True,
+        "return_dict": True,
+        "return_tensors": "pt",
+    }
+    if "enable_thinking" in generation_kwargs:
+        enable_thinking = generation_kwargs["enable_thinking"]
+        if not isinstance(enable_thinking, bool):
+            raise ValueError("enable_thinking must be boolean when provided")
+        template_options["enable_thinking"] = enable_thinking
+    encoded = tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        **template_options,
+    )
+    if hasattr(model, "device"):
+        encoded = {key: value.to(model.device) for key, value in encoded.items()}
+    max_new_tokens = int(generation_kwargs.get("max_new_tokens", 128))
+    temperature = float(generation_kwargs.get("temperature", 0.0))
+    do_sample_value = generation_kwargs.get("do_sample", temperature > 0.0)
+    if not isinstance(do_sample_value, bool):
+        raise ValueError("do_sample must be boolean when provided")
+    model_generation_kwargs: dict[str, object] = {
+        **encoded,
+        "max_new_tokens": max_new_tokens,
+        "do_sample": do_sample_value,
+    }
+    if do_sample_value:
+        if temperature <= 0:
+            raise ValueError("sampled generation requires a positive temperature")
+        presence_penalty = float(generation_kwargs.get("presence_penalty", 0.0))
+        logits_processor = LogitsProcessorList()
+        if presence_penalty:
+            logits_processor.append(PresencePenaltyLogitsProcessor(presence_penalty))
+        model_generation_kwargs.update(
+            temperature=temperature,
+            top_p=float(generation_kwargs.get("top_p", 1.0)),
+            top_k=int(generation_kwargs.get("top_k", 50)),
+            logits_processor=logits_processor,
+        )
+    output_ids = model.generate(**model_generation_kwargs)
+    prompt_tokens = int(encoded["input_ids"].shape[-1])
+    generated = output_ids[0][prompt_tokens:]
+    generated_tokens = len(generated)
+    eos_value = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    if eos_value is None:
+        eos_value = getattr(tokenizer, "eos_token_id", None)
+    if isinstance(eos_value, int):
+        eos_ids = {eos_value}
+    elif isinstance(eos_value, (list, tuple, set)):
+        eos_ids = {int(value) for value in eos_value}
+    else:
+        eos_ids = set()
+    last_token: int | None = None
+    if generated_tokens:
+        raw_last = generated[-1]
+        last_token = int(raw_last.item()) if hasattr(raw_last, "item") else int(raw_last)
+    terminated = last_token in eos_ids if last_token is not None else False
+    truncated = generated_tokens >= max_new_tokens and not terminated
+    finish_reason = "eos" if terminated else ("length" if truncated else "other")
+    return ModelGeneration(
+        text=tokenizer.decode(generated, skip_special_tokens=True),
+        prompt_tokens=prompt_tokens,
+        generated_tokens=generated_tokens,
+        terminated=terminated,
+        truncated=truncated,
+        finish_reason=finish_reason,
+    )
+
+
 class ModelProvider:
     def generate(self, role: str, prompt: str, **generation_kwargs: object) -> str:
         raise NotImplementedError
+
+    def generate_result(self, role: str, prompt: str, **generation_kwargs: object) -> ModelGeneration:
+        return ModelGeneration(
+            text=self.generate(role, prompt, **generation_kwargs),
+            prompt_tokens=None,
+            generated_tokens=None,
+            terminated=None,
+            truncated=None,
+            finish_reason="unavailable",
+        )
 
 
 @dataclass
@@ -88,47 +210,13 @@ class TransformersModelProvider(ModelProvider):
         return self._loaded[model_id]
 
     def generate(self, role: str, prompt: str, **generation_kwargs: object) -> str:
-        tokenizer, model = self._load(role)
-        try:
-            from transformers import LogitsProcessorList
-        except ImportError as exc:
-            raise ImportError("transformers is required for TransformersModelProvider") from exc
+        return self.generate_result(role, prompt, **generation_kwargs).text
 
-        if not hasattr(tokenizer, "apply_chat_template"):
-            raise RuntimeError(
-                "model tokenizer does not support apply_chat_template; refusing raw-text generation "
-                "because Qwen3.5 requires an explicit chat generation turn"
-            )
-        template_options = {
-            "add_generation_prompt": True,
-            "tokenize": True,
-            "return_dict": True,
-            "return_tensors": "pt",
-        }
-        if "enable_thinking" in generation_kwargs:
-            enable_thinking = generation_kwargs["enable_thinking"]
-            if not isinstance(enable_thinking, bool):
-                raise ValueError("enable_thinking must be boolean when provided")
-            template_options["enable_thinking"] = enable_thinking
-        encoded = tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            **template_options,
+    def generate_result(self, role: str, prompt: str, **generation_kwargs: object) -> ModelGeneration:
+        tokenizer, model = self._load(role)
+        return generate_model_result(
+            tokenizer=tokenizer,
+            model=model,
+            prompt=prompt,
+            generation_kwargs=dict(generation_kwargs),
         )
-        if hasattr(model, "device"):
-            encoded = {key: value.to(model.device) for key, value in encoded.items()}
-        temperature = float(generation_kwargs.get("temperature", 0.0))
-        presence_penalty = float(generation_kwargs.get("presence_penalty", 0.0))
-        logits_processor = LogitsProcessorList()
-        if presence_penalty:
-            logits_processor.append(PresencePenaltyLogitsProcessor(presence_penalty))
-        output_ids = model.generate(
-            **encoded,
-            max_new_tokens=int(generation_kwargs.get("max_new_tokens", 128)),
-            do_sample=temperature > 0.0,
-            temperature=temperature or None,
-            top_p=float(generation_kwargs.get("top_p", 1.0)),
-            top_k=int(generation_kwargs.get("top_k", 50)),
-            logits_processor=logits_processor,
-        )
-        generated = output_ids[0][encoded["input_ids"].shape[-1] :]
-        return tokenizer.decode(generated, skip_special_tokens=True)

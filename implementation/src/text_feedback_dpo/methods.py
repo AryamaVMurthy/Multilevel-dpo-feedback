@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
 from typing import Any
 
 from text_feedback_dpo.prompts import build_student_prompt
 from text_feedback_dpo.scoring import evaluate_rollout
 from text_feedback_dpo.guidance_policy import validate_accumulated_guidance, validate_guidance_surface
+from text_feedback_dpo.models import ModelGeneration, normalize_model_generation
 
 
 Example = dict[str, Any]
-Generate = Callable[[str], str]
+Generate = Callable[[str], str | ModelGeneration]
 NativeEvaluate = Callable[[Example, str], dict[str, Any]]
-NativeGuidance = Callable[[Example, str, dict[str, Any], int], str]
+NativeGuidance = Callable[[Example, str, dict[str, Any], int, int, list[dict[str, Any]]], str]
 GuidanceGuard = Callable[[Example, str, dict[str, Any], int], dict[str, Any]]
+GuidanceCritic = Callable[[Example, str, dict[str, Any], int], dict[str, Any]]
 
 
 def _pair(*, example: Example, prompt: str, chosen: str, rejected: str, metadata: dict[str, Any]) -> dict:
@@ -206,6 +209,7 @@ def build_native_iterative_guidance_pairs(
     guidance_guard: GuidanceGuard,
     max_guidance_steps: int,
     max_guidance_regenerations: int,
+    guidance_critic: GuidanceCritic | None = None,
 ) -> dict[str, Any]:
     """Collect native-thinking trajectories and all wrong-vs-first-correct pairs."""
 
@@ -232,14 +236,23 @@ def build_native_iterative_guidance_pairs(
         attempt = 0
 
         while True:
-            response = student_generate(current_prompt)
+            generation = normalize_model_generation(student_generate(current_prompt))
+            response = generation.text
             result = evaluate(example, response)
+            if generation.truncated is True:
+                result = {
+                    **result,
+                    "correct": False,
+                    "student_truncation_override": True,
+                    "student_finish_reason": generation.finish_reason,
+                }
             attempt_row = {
                 "id": example_id,
                 "attempt": attempt,
                 "prompt": current_prompt,
                 "response": response,
                 "result": result,
+                "generation": asdict(generation),
             }
             attempts.append(attempt_row)
             if bool(result.get("correct")):
@@ -283,7 +296,14 @@ def build_native_iterative_guidance_pairs(
             safe_guidance: str | None = None
             safe_accumulated: str | None = None
             for regeneration in range(max_guidance_regenerations + 1):
-                guidance = teacher_guidance(example, response, result, attempt + 1)
+                guidance = teacher_guidance(
+                    example,
+                    response,
+                    result,
+                    attempt + 1,
+                    regeneration,
+                    guidance_attempts,
+                )
                 if not isinstance(guidance, str) or not guidance.strip():
                     raise ValueError(f"teacher guidance for {example_id} attempt {attempt + 1} is empty")
                 surface_result = validate_guidance_surface(
@@ -300,11 +320,20 @@ def build_native_iterative_guidance_pairs(
                     evidence=example.get("evidence", []),
                 )
                 guard_result: dict[str, Any] | None = None
+                critic_result: dict[str, Any] | None = None
                 if bool(surface_result["valid"]) and bool(accumulated_result["valid"]):
+                    review_result = {**result, "response": response}
+                    if guidance_critic is not None:
+                        critic_result = guidance_critic(
+                            example,
+                            str(accumulated_result["accumulated"]),
+                            review_result,
+                            attempt + 1,
+                        )
                     guard_result = guidance_guard(
                         example,
                         str(accumulated_result["accumulated"]),
-                        result,
+                        review_result,
                         attempt + 1,
                     )
                 guidance_attempts.append(
@@ -313,19 +342,35 @@ def build_native_iterative_guidance_pairs(
                         "guidance": guidance,
                         "surface": surface_result,
                         "accumulated": accumulated_result,
+                        "critic": critic_result,
                         "guard": guard_result,
                     }
                 )
-                if guard_result is not None and bool(guard_result.get("safe")):
+                critic_valid = critic_result is None or bool(critic_result.get("valid"))
+                if guard_result is not None and bool(guard_result.get("safe")) and critic_valid:
                     safe_guidance = guidance
                     safe_accumulated = str(accumulated_result["accumulated"])
                     guidance_history = candidate_history
                     break
             if safe_guidance is None:
+                critic_rejected = any(
+                    record.get("critic") is not None and not bool(record["critic"].get("valid"))
+                    for record in guidance_attempts
+                )
+                guard_rejected = any(
+                    record.get("guard") is not None and not bool(record["guard"].get("safe"))
+                    for record in guidance_attempts
+                )
+                if critic_rejected and not guard_rejected:
+                    error_code = "invalid_guidance"
+                elif guard_rejected:
+                    error_code = "unsafe_guidance"
+                else:
+                    error_code = "invalid_guidance_surface"
                 failures.append(
                     {
                         "id": example_id,
-                        "error_code": "unsafe_guidance",
+                        "error_code": error_code,
                         "attempt": attempt,
                         "guidance_attempts": len(guidance_attempts),
                         "guidance_records": guidance_attempts,

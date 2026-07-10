@@ -9,14 +9,15 @@ from typing import Any
 
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.benchmarks import load_benchmark_examples
-from text_feedback_dpo.collection import collect_paper_shard, merge_paper_collection
-from text_feedback_dpo.io import read_jsonl, read_jsonl_zst, write_jsonl
+from text_feedback_dpo.collection import collect_paper_shard, merge_paper_collection, paper_generation_kwargs
+from text_feedback_dpo.io import read_jsonl, read_jsonl_zst, write_json_atomic, write_jsonl
 from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
     make_model_evaluator,
     make_model_guidance_guard,
 )
-from text_feedback_dpo.dataset_manifests import materialize_paper_dataset
+from text_feedback_dpo.evaluation_audit import audit_checkpoint_evaluation
+from text_feedback_dpo.dataset_manifests import materialize_paper_dataset, materialize_preflight_subset
 from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
@@ -32,7 +33,12 @@ from text_feedback_dpo.hyperparameter_search import (
     promote_stage,
     register_observation,
 )
-from text_feedback_dpo.heldout import build_transformers_checkpoint_generator, evaluate_checkpoint
+from text_feedback_dpo.heldout import (
+    build_baseline_evaluation_freeze,
+    build_transformers_checkpoint_generator,
+    evaluate_checkpoint,
+    merge_checkpoint_evaluations,
+)
 from text_feedback_dpo.preference_data import build_preference_datasets
 from text_feedback_dpo.prompts import (
     build_native_student_prompt,
@@ -49,6 +55,7 @@ from text_feedback_dpo.training import (
     run_grpo_training,
 )
 from text_feedback_dpo.validation import validate_run
+from text_feedback_dpo.sharding import shard_rows
 
 
 FAKE_STUDENT_ROLLOUT = """<plan>
@@ -481,13 +488,21 @@ def run_native_pipeline(
         )
         return response
 
-    def teacher_guidance(example: dict, rollout: str, result: dict, attempt: int) -> str:
+    def teacher_guidance(
+        example: dict,
+        rollout: str,
+        result: dict,
+        attempt: int,
+        regeneration: int,
+        prior_reviews: list[dict[str, Any]],
+    ) -> str:
         prompt = build_privileged_guidance_prompt(
             problem=str(example["problem"]),
             gold_answer=str(example["gold_answer"]),
             rollout=rollout,
             result=result,
             domain=str(example["domain"]),
+            prior_reviews=prior_reviews,
         )
         start = time.monotonic_ns()
         guidance = provider.generate("teacher", prompt, **dict(config["teacher_generation"]))
@@ -496,6 +511,7 @@ def run_native_pipeline(
                 "role": "teacher",
                 "example_id": str(example["id"]),
                 "attempt": attempt,
+                "regeneration": regeneration,
                 "latency_ms": (time.monotonic_ns() - start) // 1_000_000,
                 "generated_tokens_estimate": len(guidance.split()),
             }
@@ -504,6 +520,7 @@ def run_native_pipeline(
             {
                 "id": str(example["id"]),
                 "attempt": attempt,
+                "regeneration": regeneration,
                 "prompt": prompt,
                 "guidance": guidance,
                 "teacher_model": config["teacher_model"],
@@ -669,6 +686,21 @@ def run_materialize_dataset(config_path: Path, source_path: Path, output_dir: Pa
     return materialize_paper_dataset(config, source_path, output_dir)
 
 
+def run_materialize_preflight_subset(
+    *,
+    source_path: Path,
+    output_path: Path,
+    count: int,
+    seed: int,
+) -> dict[str, Any]:
+    return materialize_preflight_subset(
+        source_path=source_path,
+        output_path=output_path,
+        count=count,
+        seed=seed,
+    )
+
+
 def run_collect_shard(
     *,
     config_path: Path,
@@ -677,6 +709,7 @@ def run_collect_shard(
     split: str,
     shard_index: int,
     num_shards: int,
+    source_commit: str,
 ) -> dict[str, Any]:
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
@@ -691,6 +724,7 @@ def run_collect_shard(
         split=split,
         shard_index=shard_index,
         num_shards=num_shards,
+        source_commit=source_commit,
     )
 
 
@@ -701,6 +735,7 @@ def run_merge_collection(
     collection_dir: Path,
     expected_shards: int,
     output_path: Path,
+    source_commit: str,
 ) -> dict[str, Any]:
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
@@ -710,6 +745,7 @@ def run_merge_collection(
         collection_dir=collection_dir,
         expected_shards=expected_shards,
         output_path=output_path,
+        source_commit=source_commit,
     )
 
 
@@ -863,15 +899,8 @@ def _paper_evaluator(config: Any):
         model_revisions={"evaluator": config.models["evaluator"]["revision"]},
     )
     return make_model_evaluator(
-        generate=provider.generate,
-        generation_kwargs={
-            "max_new_tokens": config.generation.max_completion_tokens,
-            "temperature": config.generation.temperature,
-            "top_p": config.generation.top_p,
-            "top_k": config.generation.top_k,
-            "presence_penalty": config.generation.presence_penalty,
-            "enable_thinking": False,
-        },
+        generate=provider.generate_result,
+        generation_kwargs=paper_generation_kwargs(config, role="evaluator"),
         max_regenerations=int(config.collection["max_guidance_regenerations"]),
     )
 
@@ -938,12 +967,7 @@ def run_tune_paper(
     generator = build_transformers_checkpoint_generator(
         model_id=config.models["student"]["id"],
         revision=config.models["student"]["revision"],
-        generation_kwargs={
-            "max_new_tokens": config.generation.max_completion_tokens,
-            "temperature": config.generation.temperature,
-            "top_p": config.generation.top_p,
-            "top_k": config.generation.top_k,
-        },
+        generation_kwargs=paper_generation_kwargs(config, role="student"),
         adapter_dir=output_dir / "train",
         adapter_base_revision=config.models["student"]["revision"],
         adapter_lora_coverage_hash=adapter_manifest["lora"]["coverage_hash"],
@@ -1014,42 +1038,182 @@ def run_train_paper(
 def run_evaluate_paper(
     *,
     config_path: Path,
-    checkpoint: Path,
+    checkpoint: Path | None,
+    checkpoint_kind: str,
     data_path: Path,
     split: str,
     output_dir: Path,
     freeze_manifest: Path | None,
+    source_commit: str,
+    shard_index: int,
+    num_shards: int,
 ) -> dict[str, Any]:
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
     test = split == "test"
-    if test and freeze_manifest is None:
-        raise FileNotFoundError("test evaluation requires --freeze-manifest")
-    adapter_manifest = json.loads((checkpoint / "adapter_manifest.json").read_text(encoding="utf-8"))
+    if freeze_manifest is None or not freeze_manifest.exists():
+        raise FileNotFoundError("paper evaluation requires an existing --freeze-manifest")
+    if checkpoint_kind not in {"base", "adapter"}:
+        raise ValueError("checkpoint_kind must be base or adapter")
+    adapter_manifest: dict[str, Any] | None = None
+    if checkpoint_kind == "base":
+        if checkpoint is not None:
+            raise ValueError("base evaluation must not receive an adapter checkpoint path")
+        expected_freeze = _build_baseline_freeze_from_paths(
+            config_path=config_path,
+            dataset_manifest_path=data_path.parent / "manifest.json",
+            source_commit=source_commit,
+        )
+        actual_freeze = json.loads(freeze_manifest.read_text(encoding="utf-8"))
+        if actual_freeze != expected_freeze:
+            raise ValueError(
+                "baseline freeze manifest does not match the source, config, dataset, models, or evaluation protocol"
+            )
+    else:
+        if checkpoint is None:
+            raise ValueError("adapter evaluation requires --checkpoint")
+        adapter_manifest_path = checkpoint / "adapter_manifest.json"
+        if not adapter_manifest_path.exists():
+            raise FileNotFoundError(f"adapter manifest does not exist: {adapter_manifest_path}")
+        adapter_manifest = json.loads(adapter_manifest_path.read_text(encoding="utf-8"))
     generator = build_transformers_checkpoint_generator(
         model_id=config.models["student"]["id"],
         revision=config.models["student"]["revision"],
-        generation_kwargs={
-            "max_new_tokens": config.generation.max_completion_tokens,
-            "temperature": config.generation.temperature,
-            "top_p": config.generation.top_p,
-            "top_k": config.generation.top_k,
-        },
-        adapter_dir=checkpoint,
-        adapter_base_revision=config.models["student"]["revision"],
-        adapter_lora_coverage_hash=adapter_manifest["lora"]["coverage_hash"],
+        generation_kwargs=paper_generation_kwargs(config, role="student"),
+        adapter_dir=checkpoint if checkpoint_kind == "adapter" else None,
+        adapter_base_revision=(
+            config.models["student"]["revision"] if checkpoint_kind == "adapter" else None
+        ),
+        adapter_lora_coverage_hash=(
+            adapter_manifest["lora"]["coverage_hash"] if adapter_manifest is not None else None
+        ),
     )
+    examples = _read_rows_for_paper(data_path)
+    evaluation_rows = shard_rows(examples, shard_index=shard_index, num_shards=num_shards)
     return evaluate_checkpoint(
-        examples=_read_rows_for_paper(data_path),
+        examples=evaluation_rows,
         generate=generator,
         evaluator=_paper_evaluator(config),
         output_dir=output_dir,
-        checkpoint_kind="adapter",
+        checkpoint_kind=checkpoint_kind,
         base_model_revision=config.models["student"]["revision"],
-        seed=config.dataset.seed,
+        seed=int(config.evaluation["generation_seed"]),
         test=test,
         freeze_manifest=freeze_manifest,
         adapter_manifest=adapter_manifest,
+        require_generation_metadata=True,
+        shard_index=shard_index,
+        num_shards=num_shards,
+    )
+
+
+def _build_baseline_freeze_from_paths(
+    *,
+    config_path: Path,
+    dataset_manifest_path: Path,
+    source_commit: str,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    if not dataset_manifest_path.exists():
+        raise FileNotFoundError(f"dataset manifest does not exist: {dataset_manifest_path}")
+    return build_baseline_evaluation_freeze(
+        experiment_id=config.experiment_id,
+        source_commit=source_commit,
+        config_sha256=hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        dataset_manifest_sha256=hashlib.sha256(dataset_manifest_path.read_bytes()).hexdigest(),
+        student_model=config.models["student"],
+        evaluator_model=config.models["evaluator"],
+        prompt_protocol=str(config.collection["prompt_protocol"]),
+        student_generation=paper_generation_kwargs(config, role="student"),
+        evaluator_generation=paper_generation_kwargs(config, role="evaluator"),
+        generation_seed=int(config.evaluation["generation_seed"]),
+    )
+
+
+def run_freeze_baseline(
+    *,
+    config_path: Path,
+    dataset_manifest_path: Path,
+    source_commit: str,
+    output_path: Path,
+) -> dict[str, Any]:
+    if output_path.exists():
+        raise FileExistsError(f"refusing to overwrite baseline freeze manifest: {output_path}")
+    freeze = _build_baseline_freeze_from_paths(
+        config_path=config_path,
+        dataset_manifest_path=dataset_manifest_path,
+        source_commit=source_commit,
+    )
+    write_json_atomic(output_path, freeze)
+    return freeze
+
+
+def run_merge_evaluations(
+    *,
+    config_path: Path,
+    data_path: Path,
+    split: str,
+    shard_root: Path,
+    expected_shards: int,
+    output_dir: Path,
+    checkpoint_kind: str,
+    freeze_manifest: Path,
+    source_commit: str,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    if checkpoint_kind == "base":
+        expected_freeze = _build_baseline_freeze_from_paths(
+            config_path=config_path,
+            dataset_manifest_path=data_path.parent / "manifest.json",
+            source_commit=source_commit,
+        )
+        actual_freeze = json.loads(freeze_manifest.read_text(encoding="utf-8"))
+        if actual_freeze != expected_freeze:
+            raise ValueError("baseline freeze manifest does not match the merge protocol")
+    metrics = merge_checkpoint_evaluations(
+        examples=_read_rows_for_paper(data_path),
+        shard_root=shard_root,
+        expected_shards=expected_shards,
+        output_dir=output_dir,
+        checkpoint_kind=checkpoint_kind,
+        base_model_revision=config.models["student"]["revision"],
+        seed=int(config.evaluation["generation_seed"]),
+        test=split == "test",
+        freeze_manifest=freeze_manifest,
+    )
+    report_metrics: dict[str, Any] = {
+        "checkpoint_kind": checkpoint_kind,
+        "split": split,
+        "generation_seed": int(config.evaluation["generation_seed"]),
+    }
+    for section, values in metrics.items():
+        if section == "per_example" or not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            report_metrics[f"{section}.{key}"] = value
+    write_html_report(output_dir / "report.html", report_metrics)
+    return metrics
+
+
+def run_audit_evaluation(
+    *,
+    config_path: Path,
+    predictions_path: Path,
+    labels_path: Path,
+    output_dir: Path,
+    minimum_labels: int,
+) -> dict[str, Any]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    return audit_checkpoint_evaluation(
+        predictions_path=predictions_path,
+        labels_path=labels_path,
+        output_dir=output_dir,
+        minimum_labels=minimum_labels,
+        minimum_agreement=float(config.evaluation["minimum_evaluator_audit_agreement"]),
+        max_truncation_rate=float(config.evaluation["max_truncation_rate"]),
     )
 
 
@@ -1083,6 +1247,11 @@ def main() -> None:
     materialize.add_argument("--config", required=True, type=Path)
     materialize.add_argument("--source-path", required=True, type=Path)
     materialize.add_argument("--output-dir", required=True, type=Path)
+    preflight_subset = subparsers.add_parser("materialize-preflight-subset")
+    preflight_subset.add_argument("--source-path", required=True, type=Path)
+    preflight_subset.add_argument("--output-path", required=True, type=Path)
+    preflight_subset.add_argument("--count", required=True, type=int)
+    preflight_subset.add_argument("--seed", required=True, type=int)
     collect = subparsers.add_parser("collect-shard")
     collect.add_argument("--config", required=True, type=Path)
     collect.add_argument("--dataset-dir", required=True, type=Path)
@@ -1090,12 +1259,14 @@ def main() -> None:
     collect.add_argument("--split", required=True)
     collect.add_argument("--shard-index", required=True, type=int)
     collect.add_argument("--num-shards", required=True, type=int)
+    collect.add_argument("--source-commit", required=True)
     merge = subparsers.add_parser("merge-collection")
     merge.add_argument("--config", required=True, type=Path)
     merge.add_argument("--dataset-dir", required=True, type=Path)
     merge.add_argument("--collection-dir", required=True, type=Path)
     merge.add_argument("--expected-shards", required=True, type=int)
     merge.add_argument("--output", required=True, type=Path)
+    merge.add_argument("--source-commit", required=True)
     preferences = subparsers.add_parser("build-preferences")
     preferences.add_argument("--collection", required=True, type=Path)
     preferences.add_argument("--dataset", required=True, type=Path)
@@ -1114,6 +1285,11 @@ def main() -> None:
     freeze.add_argument("--candidate-id", required=True)
     freeze.add_argument("--stage", required=True, type=int)
     freeze.add_argument("--output", required=True, type=Path)
+    baseline_freeze = subparsers.add_parser("freeze-baseline")
+    baseline_freeze.add_argument("--config", required=True, type=Path)
+    baseline_freeze.add_argument("--dataset-manifest", required=True, type=Path)
+    baseline_freeze.add_argument("--source-commit", required=True)
+    baseline_freeze.add_argument("--output", required=True, type=Path)
     tune = subparsers.add_parser("tune-paper")
     tune.add_argument("--config", required=True, type=Path)
     tune.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo"])
@@ -1132,11 +1308,31 @@ def main() -> None:
     paper_train.add_argument("--output-dir", required=True, type=Path)
     paper_eval = subparsers.add_parser("evaluate-paper")
     paper_eval.add_argument("--config", required=True, type=Path)
-    paper_eval.add_argument("--checkpoint", required=True, type=Path)
+    paper_eval.add_argument("--checkpoint", type=Path)
+    paper_eval.add_argument("--checkpoint-kind", required=True, choices=["base", "adapter"])
     paper_eval.add_argument("--data", required=True, type=Path)
     paper_eval.add_argument("--split", required=True, choices=["validation", "test"])
     paper_eval.add_argument("--output-dir", required=True, type=Path)
     paper_eval.add_argument("--freeze-manifest", type=Path)
+    paper_eval.add_argument("--source-commit", required=True)
+    paper_eval.add_argument("--shard-index", required=True, type=int)
+    paper_eval.add_argument("--num-shards", required=True, type=int)
+    merge_eval = subparsers.add_parser("merge-evaluations")
+    merge_eval.add_argument("--config", required=True, type=Path)
+    merge_eval.add_argument("--data", required=True, type=Path)
+    merge_eval.add_argument("--split", required=True, choices=["validation", "test"])
+    merge_eval.add_argument("--shard-root", required=True, type=Path)
+    merge_eval.add_argument("--expected-shards", required=True, type=int)
+    merge_eval.add_argument("--output-dir", required=True, type=Path)
+    merge_eval.add_argument("--checkpoint-kind", required=True, choices=["base", "adapter"])
+    merge_eval.add_argument("--freeze-manifest", required=True, type=Path)
+    merge_eval.add_argument("--source-commit", required=True)
+    audit_eval = subparsers.add_parser("audit-evaluation")
+    audit_eval.add_argument("--config", required=True, type=Path)
+    audit_eval.add_argument("--predictions", required=True, type=Path)
+    audit_eval.add_argument("--labels", required=True, type=Path)
+    audit_eval.add_argument("--output-dir", required=True, type=Path)
+    audit_eval.add_argument("--minimum-labels", required=True, type=int)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -1171,6 +1367,13 @@ def main() -> None:
         result = run_validate_paper_config(args.config)
     elif args.command == "materialize-dataset":
         result = run_materialize_dataset(args.config, args.source_path, args.output_dir)
+    elif args.command == "materialize-preflight-subset":
+        result = run_materialize_preflight_subset(
+            source_path=args.source_path,
+            output_path=args.output_path,
+            count=args.count,
+            seed=args.seed,
+        )
     elif args.command == "collect-shard":
         result = run_collect_shard(
             config_path=args.config,
@@ -1179,6 +1382,7 @@ def main() -> None:
             split=args.split,
             shard_index=args.shard_index,
             num_shards=args.num_shards,
+            source_commit=args.source_commit,
         )
     elif args.command == "merge-collection":
         result = run_merge_collection(
@@ -1187,6 +1391,7 @@ def main() -> None:
             collection_dir=args.collection_dir,
             expected_shards=args.expected_shards,
             output_path=args.output,
+            source_commit=args.source_commit,
         )
     elif args.command == "build-preferences":
         result = run_build_preferences(
@@ -1209,6 +1414,13 @@ def main() -> None:
             ledger_path=args.ledger,
             candidate_id=args.candidate_id,
             stage=args.stage,
+            output_path=args.output,
+        )
+    elif args.command == "freeze-baseline":
+        result = run_freeze_baseline(
+            config_path=args.config,
+            dataset_manifest_path=args.dataset_manifest,
+            source_commit=args.source_commit,
             output_path=args.output,
         )
     elif args.command == "tune-paper":
@@ -1235,10 +1447,34 @@ def main() -> None:
         result = run_evaluate_paper(
             config_path=args.config,
             checkpoint=args.checkpoint,
+            checkpoint_kind=args.checkpoint_kind,
             data_path=args.data,
             split=args.split,
             output_dir=args.output_dir,
             freeze_manifest=args.freeze_manifest,
+            source_commit=args.source_commit,
+            shard_index=args.shard_index,
+            num_shards=args.num_shards,
+        )
+    elif args.command == "merge-evaluations":
+        result = run_merge_evaluations(
+            config_path=args.config,
+            data_path=args.data,
+            split=args.split,
+            shard_root=args.shard_root,
+            expected_shards=args.expected_shards,
+            output_dir=args.output_dir,
+            checkpoint_kind=args.checkpoint_kind,
+            freeze_manifest=args.freeze_manifest,
+            source_commit=args.source_commit,
+        )
+    elif args.command == "audit-evaluation":
+        result = run_audit_evaluation(
+            config_path=args.config,
+            predictions_path=args.predictions,
+            labels_path=args.labels,
+            output_dir=args.output_dir,
+            minimum_labels=args.minimum_labels,
         )
     else:
         raise SystemExit(f"unknown command: {args.command}")

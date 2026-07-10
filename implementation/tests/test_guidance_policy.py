@@ -24,8 +24,11 @@ class GuidancePolicyTest(unittest.TestCase):
         self.assertEqual(result["word_count"], 10)
         self.assertEqual(result["sentence_count"], 1)
 
-    def test_rejects_short_hint_and_digits(self):
-        for hint, reason in (("Recheck the calculation.", "word_count"), ("Recheck step 2 before answering this.", "digits")):
+    def test_rejects_only_too_short_or_direct_answer_surface_leaks(self):
+        for hint, reason in (
+            ("Recheck the calculation.", "word_count"),
+            ("The correct result is 42 after checking.", "answer_disclosure"),
+        ):
             result = validate_guidance_surface(
                 hint,
                 problem=self.problem,
@@ -35,21 +38,29 @@ class GuidancePolicyTest(unittest.TestCase):
             self.assertFalse(result["valid"])
             self.assertIn(reason, result["reasons"])
 
-    def test_rejects_equations_operations_proper_nouns_and_copied_evidence(self):
-        cases = (
-            ("Recheck whether to multiply the quantities before the final response.", "explicit_operation"),
-            ("Recheck Einstein's relation before providing the final response now.", "proper_noun"),
-            ("The source states the requested relationship clearly before answering now.", "copied_evidence"),
-        )
-        for hint, reason in cases:
+    def test_allows_operations_quantities_and_names_when_the_answer_is_not_disclosed(self):
+        for hint in (
+            "Recheck whether to multiply the quantities before the final response.",
+            "Reconsider whether Samantha's name length uses the requested component.",
+            "Compare the two daily portions before calculating the weekly total.",
+        ):
             result = validate_guidance_surface(
                 hint,
                 problem=self.problem,
                 gold_answer=self.gold,
                 evidence=self.evidence,
             )
-            self.assertFalse(result["valid"])
-            self.assertIn(reason, result["reasons"])
+            self.assertTrue(result["valid"], result)
+
+    def test_rejects_a_long_copied_evidence_phrase(self):
+        result = validate_guidance_surface(
+            "The source states the requested relationship clearly before answering now.",
+            problem=self.problem,
+            gold_answer=self.gold,
+            evidence=self.evidence,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("copied_evidence", result["reasons"])
 
     def test_accumulated_guidance_is_validated_as_a_single_context(self):
         result = validate_accumulated_guidance(
@@ -68,14 +79,14 @@ class GuidancePolicyTest(unittest.TestCase):
 
     def test_surface_invalid_hint_cannot_be_marked_valid_by_accumulation(self):
         result = validate_accumulated_guidance(
-            ["Recheck step 2 before answering this."],
+            ["The correct result is 42 after checking."],
             problem=self.problem,
             gold_answer=self.gold,
             evidence=self.evidence,
         )
 
         self.assertFalse(result["valid"])
-        self.assertIn("digits", result["reasons"])
+        self.assertIn("answer_disclosure", result["reasons"])
 
 
 if __name__ == "__main__":

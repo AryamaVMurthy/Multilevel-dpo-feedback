@@ -4,19 +4,6 @@ import re
 from collections.abc import Iterable
 
 
-_NUMBER_WORDS = {
-    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
-    "eighteen", "nineteen", "twenty", "hundred", "thousand", "million", "billion",
-    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
-}
-_EXPLICIT_OPERATIONS = {
-    "add", "addition", "subtract", "subtraction", "multiply", "multiplication", "divide",
-    "division", "plus", "minus", "times", "quotient", "product", "sum", "difference",
-    "equation", "equations", "equals", "equal",
-}
-
-
 def _words(text: str) -> list[str]:
     return re.findall(r"[A-Za-z]+(?:['’-][A-Za-z]+)?", text)
 
@@ -55,39 +42,25 @@ def _validate(
     reasons: list[str] = []
     stripped = guidance.strip()
     words = _words(stripped)
-    tokens = [word.lower() for word in words]
     if not stripped:
         reasons.append("empty")
     if enforce_length:
-        if not 8 <= len(words) <= 15:
+        if not 5 <= len(words) <= 25:
             reasons.append("word_count")
         if _sentence_count(stripped) != 1:
             reasons.append("sentence_count")
-    if re.search(r"\d", stripped):
-        reasons.append("digits")
-    if re.search(r"[=+*/<>]", stripped):
-        reasons.append("equation_symbol")
-    if any(token.strip("'’-") in _NUMBER_WORDS for token in tokens):
-        reasons.append("quantities")
-    if any(token.strip("'’-") in _EXPLICIT_OPERATIONS for token in tokens):
-        reasons.append("explicit_operation")
-    word_matches = list(re.finditer(r"[A-Za-z]+(?:['’-][A-Za-z]+)?", stripped))
-    for index, match in enumerate(word_matches):
-        if index == 0 or not match.group(0)[:1].isupper():
-            continue
-        previous_text = stripped[: match.start()].rstrip()
-        if previous_text.endswith((".", "!", "?")):
-            continue
-        reasons.append("proper_noun")
-        break
     answer_tokens = _normalized_tokens(gold_answer)
     hint_tokens = _normalized_tokens(stripped)
+    direct_answer = gold_answer.strip().lower()
+    if direct_answer and re.search(
+        rf"(?<![\w.]){re.escape(direct_answer)}(?![\w.])",
+        stripped.lower(),
+    ):
+        reasons.append("answer_disclosure")
     if answer_tokens and len(answer_tokens) >= 1:
         answer_phrase = " ".join(answer_tokens)
         if answer_phrase and answer_phrase in " ".join(hint_tokens):
             reasons.append("answer_disclosure")
-        if len(answer_tokens) == 1 and len(answer_tokens[0]) == 1 and answer_tokens[0] in hint_tokens:
-            reasons.append("answer_initial")
     if _copied_evidence(hint_tokens, evidence):
         reasons.append("copied_evidence")
     return {

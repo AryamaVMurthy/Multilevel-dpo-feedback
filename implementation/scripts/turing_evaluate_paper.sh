@@ -11,7 +11,7 @@
 set -euo pipefail
 
 CONFIG="${CONFIG:?CONFIG is required}"
-CHECKPOINT="${CHECKPOINT:?CHECKPOINT is required}"
+CHECKPOINT_KIND="${CHECKPOINT_KIND:?CHECKPOINT_KIND is required}"
 DATA_PATH="${DATA_PATH:?DATA_PATH is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
@@ -19,6 +19,21 @@ MODEL_CACHE_DIR="${MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required}"
 SPLIT="${SPLIT:?SPLIT is required}"
 FREEZE_MANIFEST="${FREEZE_MANIFEST:?FREEZE_MANIFEST is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+SOURCE_COMMIT="${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
+NUM_SHARDS="${NUM_SHARDS:?NUM_SHARDS is required}"
+SHARD_INDEX="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
+
+if [[ "$CHECKPOINT_KIND" == "base" ]]; then
+  if [[ -n "${CHECKPOINT:-}" ]]; then
+    echo "ERROR: CHECKPOINT must be unset for CHECKPOINT_KIND=base" >&2
+    exit 1
+  fi
+elif [[ "$CHECKPOINT_KIND" == "adapter" ]]; then
+  CHECKPOINT="${CHECKPOINT:?CHECKPOINT is required for CHECKPOINT_KIND=adapter}"
+else
+  echo "ERROR: CHECKPOINT_KIND must be base or adapter" >&2
+  exit 1
+fi
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -27,7 +42,8 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
   exit 1
 fi
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
-mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
+SHARD_OUTPUT_DIR="$OUTPUT_DIR/shard-$(printf '%04d' "$SHARD_INDEX")"
+mkdir -p "$SCRATCH_DIR" "$SHARD_OUTPUT_DIR"
 export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
 if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
@@ -41,7 +57,7 @@ export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
-GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}.csv"
+GPU_LOG="$SHARD_OUTPUT_DIR/gpu-${SLURM_JOB_ID}_${SHARD_INDEX}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
   --format=csv -l 10 > "$GPU_LOG" &
 GPU_MONITOR_PID=$!
@@ -55,6 +71,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-uv run --frozen python -m text_feedback_dpo.cli evaluate-paper \
-  --config "$CONFIG" --checkpoint "$CHECKPOINT" --data "$DATA_PATH" \
-  --split "$SPLIT" --output-dir "$OUTPUT_DIR" --freeze-manifest "$FREEZE_MANIFEST"
+EVALUATE_ARGS=(
+  --config "$CONFIG"
+  --checkpoint-kind "$CHECKPOINT_KIND"
+  --data "$DATA_PATH"
+  --split "$SPLIT"
+  --output-dir "$SHARD_OUTPUT_DIR"
+  --freeze-manifest "$FREEZE_MANIFEST"
+  --source-commit "$SOURCE_COMMIT"
+  --shard-index "$SHARD_INDEX"
+  --num-shards "$NUM_SHARDS"
+)
+if [[ "$CHECKPOINT_KIND" == "adapter" ]]; then
+  EVALUATE_ARGS+=(--checkpoint "$CHECKPOINT")
+fi
+uv run --frozen python -m text_feedback_dpo.cli evaluate-paper "${EVALUATE_ARGS[@]}"

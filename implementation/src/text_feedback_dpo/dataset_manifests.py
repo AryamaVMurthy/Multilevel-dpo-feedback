@@ -13,6 +13,60 @@ def canonical_row_hash(row: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def materialize_preflight_subset(
+    *,
+    source_path: Any,
+    output_path: Any,
+    count: int,
+    seed: int,
+) -> dict[str, Any]:
+    from pathlib import Path
+
+    from text_feedback_dpo.io import append_jsonl_zst, read_jsonl_zst, write_json_atomic
+
+    source = Path(source_path)
+    output = Path(output_path)
+    manifest_path = output.with_name(f"{output.name}.manifest.json")
+    if count <= 0:
+        raise ValueError("preflight subset count must be positive")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed <= 0:
+        raise ValueError("preflight subset seed must be a positive integer")
+    if output.exists() or manifest_path.exists():
+        raise FileExistsError(f"refusing to overwrite preflight subset artifact: {output}")
+    rows = read_jsonl_zst(source)
+    if count > len(rows):
+        raise ValueError(f"preflight subset count {count} exceeds source rows {len(rows)}")
+    ids = [row.get("id") for row in rows]
+    if any(not isinstance(row_id, str) or not row_id for row_id in ids):
+        raise ValueError("preflight subset source contains a missing id")
+    if len(set(ids)) != len(ids):
+        raise ValueError("preflight subset source contains duplicate ids")
+    ranked = sorted(
+        range(len(rows)),
+        key=lambda index: hashlib.sha256(f"{seed}:{ids[index]}".encode("utf-8")).hexdigest(),
+    )
+    selected_indices = set(ranked[:count])
+    selected = [row for index, row in enumerate(rows) if index in selected_indices]
+    for row in selected:
+        append_jsonl_zst(output, row)
+    selected_ids = [str(row["id"]) for row in selected]
+    selection_sha256 = hashlib.sha256(
+        json.dumps(selected_ids, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    manifest = {
+        "schema": "paper-preflight-subset-v1",
+        "source_path": str(source),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+        "seed": seed,
+        "count": count,
+        "selected_ids": selected_ids,
+        "selection_sha256": selection_sha256,
+    }
+    write_json_atomic(manifest_path, manifest)
+    return manifest
+
+
 def _normalized_question(value: object) -> str:
     text = re.sub(r"[^a-z0-9]+", " ", str(value).lower())
     return " ".join(text.split())

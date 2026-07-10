@@ -43,6 +43,18 @@ export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
+if [[ "$METHOD" == "grpo" ]]; then
+  GRPO_ENVIRONMENT="${GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required for GRPO methods}"
+  if [[ ! -x "$GRPO_ENVIRONMENT/bin/python" ]]; then
+    echo "ERROR: frozen GRPO environment is missing: $GRPO_ENVIRONMENT" >&2
+    exit 1
+  fi
+  export UV_PROJECT_ENVIRONMENT="$GRPO_ENVIRONMENT"
+  RUNNER=(uv run --project "$PROJECT_DIR/environments/grpo" --frozen --no-sync)
+else
+  RUNNER=(uv run --frozen --no-sync)
+fi
+
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
   --format=csv -l 10 > "$GPU_LOG" &
@@ -57,7 +69,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-uv run --frozen python -m text_feedback_dpo.cli tune-paper \
+"${RUNNER[@]}" python -m text_feedback_dpo.cli tune-paper \
   --config "$CONFIG" --method "$METHOD" --candidate-id "$CANDIDATE_ID" \
   --stage "$STAGE_ID" --data "$DATA_PATH" --validation "$VALIDATION_PATH" \
   --output-dir "$OUTPUT_DIR" --ledger "$LEDGER_PATH"

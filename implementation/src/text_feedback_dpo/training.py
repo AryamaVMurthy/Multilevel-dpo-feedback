@@ -121,9 +121,12 @@ def build_paper_dpo_config_kwargs(
     max_steps: int,
     candidate: Any,
     effective_global_batch: int,
+    max_length: int,
 ) -> dict[str, Any]:
     if effective_global_batch <= 0:
         raise ValueError("effective_global_batch must be positive")
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
     profile = build_optimizer_profile(
         learning_rate=float(candidate.learning_rate),
         weight_decay=float(candidate.weight_decay),
@@ -134,7 +137,7 @@ def build_paper_dpo_config_kwargs(
     return {
         "output_dir": str(output_dir),
         "beta": float(candidate.beta),
-        "max_length": 2048,
+        "max_length": max_length,
         "per_device_train_batch_size": 1,
         "gradient_accumulation_steps": effective_global_batch,
         "max_steps": max_steps,
@@ -147,7 +150,15 @@ def build_paper_dpo_config_kwargs(
     }
 
 
-def build_paper_grpo_config_kwargs(*, output_dir: Any, max_steps: int, candidate: Any) -> dict[str, Any]:
+def build_paper_grpo_config_kwargs(
+    *,
+    output_dir: Any,
+    max_steps: int,
+    candidate: Any,
+    max_completion_length: int,
+) -> dict[str, Any]:
+    if max_completion_length <= 0:
+        raise ValueError("max_completion_length must be positive")
     profile = build_optimizer_profile(
         learning_rate=float(candidate.learning_rate),
         weight_decay=0.01,
@@ -157,7 +168,7 @@ def build_paper_grpo_config_kwargs(*, output_dir: Any, max_steps: int, candidate
     )
     return {
         "output_dir": str(output_dir),
-        "max_completion_length": 2048,
+        "max_completion_length": max_completion_length,
         "num_generations": int(candidate.num_generations),
         "generation_batch_size": int(candidate.num_generations),
         "per_device_train_batch_size": 1,
@@ -173,6 +184,14 @@ def build_paper_grpo_config_kwargs(*, output_dir: Any, max_steps: int, candidate
         "loss_type": str(candidate.loss_type),
         "scale_rewards": "group",
         "mask_truncated_completions": True,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "use_vllm": True,
+        "vllm_mode": "colocate",
+        "vllm_gpu_memory_utilization": 0.25,
+        "vllm_max_model_length": 10240,
+        "generation_kwargs": {"presence_penalty": 1.5},
         **profile,
     }
 

@@ -47,6 +47,7 @@ class RewardTest(unittest.TestCase):
             },
             domain="math",
             mask_truncated_completions=True,
+            max_completion_tokens=8192,
         )
         rewards = function(["right", "wrong"], example_id=["m1", "m1"], truncated=[False, True])
         self.assertEqual(rewards, [1.0, 0.0])
@@ -55,6 +56,7 @@ class RewardTest(unittest.TestCase):
             evaluator=lambda *_args: (_ for _ in ()).throw(ValueError("bad evaluator")),
             domain="math",
             mask_truncated_completions=True,
+            max_completion_tokens=8192,
         )
         with self.assertRaisesRegex(RuntimeError, "evaluator failure"):
             broken(["right"], example_id=["m1"], truncated=[False])

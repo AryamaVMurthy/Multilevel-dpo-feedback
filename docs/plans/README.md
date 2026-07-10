@@ -13,6 +13,8 @@ Supporting canonical specifications:
   decision log.
 - `../design/training_hyperparameter_protocol.md`: optimizer, Qwen3.5 LoRA coverage,
   deterministic hyperparameter search, model selection, and freeze rules.
+- `../status/2026-07-10-paper-execution-log.md`: living run-by-run findings, failures,
+  fixes, metrics, and artifact references.
 The removed 2026-07-09 planning and status documents described superseded XML
 formatting, fixture-only pipelines, pretest settings, and an obsolete SSH blocker.
 Their relevant findings remain in the living method specification and Git history.

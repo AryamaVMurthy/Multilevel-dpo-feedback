@@ -16,6 +16,7 @@ EXPECTED_SHARDS="${EXPECTED_SHARDS:?EXPECTED_SHARDS is required}"
 OUTPUT_PATH="${OUTPUT_PATH:?OUTPUT_PATH is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+SOURCE_COMMIT="${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -29,10 +30,12 @@ export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
 export UV_LINK_MODE=copy
 cd "$PROJECT_DIR"
+export PYTHONPATH="$PROJECT_DIR/src"
 cp "$CONFIG" "$SCRATCH_DIR/config.yaml"
 uv run --frozen python -m text_feedback_dpo.cli merge-collection \
   --config "$SCRATCH_DIR/config.yaml" \
   --dataset-dir "$DATASET_DIR" \
   --collection-dir "$COLLECTION_DIR" \
   --expected-shards "$EXPECTED_SHARDS" \
-  --output "$OUTPUT_PATH"
+  --output "$OUTPUT_PATH" \
+  --source-commit "$SOURCE_COMMIT"

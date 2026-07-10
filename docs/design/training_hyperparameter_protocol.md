@@ -28,6 +28,24 @@ defaults may select another loss variant, and explicitly enables
 `mask_truncated_completions`. DPO sets `max_length` for the combined
 prompt/completion sequence; removed legacy DPO length arguments are prohibited. The
 locked package APIs are inspected in a model-load preflight before any candidate run.
+The paper config fixes DPO `max_length=10240` to provide 2,048 tokens of prompt
+headroom around the 8,192-token student completion ceiling, and fixes GRPO
+`max_completion_length=8192`.
+These values are explicit config inputs rather than trainer defaults.
+The official Qwen3.5-2B model card reports a native 262,144-token context and recommends
+substantially larger thinking outputs for difficult tasks, so 8,192 is model-supported.
+The same card warns that the 2B checkpoint can enter thinking loops; exact EOS/length
+finish metadata and the 5% truncation gate therefore remain mandatory rather than
+assuming that a larger ceiling guarantees termination.
+
+TRL 1.8 exposes temperature, top-p, and top-k directly, but Transformers generation
+does not implement OpenAI-style presence penalty as a `GenerationConfig` field. Paper
+GRPO therefore uses TRL's vLLM rollout path with explicit
+`generation_kwargs={"presence_penalty": 1.5}`. vLLM is isolated in
+`implementation/environments/grpo/` because its PyTorch constraint differs from the
+main collection/DPO environment. The first profile is colocated vLLM at 25% GPU memory;
+an OOM or memory-gate failure does not permit dropping the penalty and instead triggers
+the prespecified two-GPU server-mode preflight for every GRPO candidate.
 
 ## Qwen3.5 LoRA Coverage Gate
 
@@ -76,6 +94,13 @@ frozen configuration.
 
 Official test data is never used for tuning, stopping, prompt changes, reward changes,
 or model selection.
+
+Before preference collection or optimization, the immutable base checkpoint is
+evaluated teacher-free under a separate `baseline-evaluation-freeze-v1` manifest. It
+is measured on full validation and once on official test only after a manually audited
+evaluation preflight passes. This descriptive base result cannot affect any search,
+promotion, or freeze decision. Adapted checkpoints remain test-blind until model
+selection is frozen.
 
 ### GSM8K
 
@@ -197,6 +222,8 @@ failure reasons, selected settings, and sensitivity plots for learning rate and 
 Paper workflows use the implementation CLI with explicit immutable paths:
 
 - `materialize-dataset` writes the pinned dataset manifest and compressed role files.
+- `freeze-baseline`, sharded `evaluate-paper`, `merge-evaluations`, and
+  `audit-evaluation` establish the teacher-free base reference before research.
 - `collect-shard` and `merge-collection` write resumable compressed trajectory records.
 - `build-preferences` writes `standard`, `multilevel`, and `matched` datasets.
 - `init-search-ledger`, `tune-paper`, `promote-search-stage`, and `freeze-search`

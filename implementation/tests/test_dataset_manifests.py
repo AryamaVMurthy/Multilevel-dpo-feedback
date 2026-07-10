@@ -4,12 +4,15 @@ from tempfile import TemporaryDirectory
 
 from text_feedback_dpo.dataset_manifests import (
     canonical_row_hash,
+    materialize_preflight_subset,
     sample_searchqa8k,
     split_gsm8k_validation_roles,
     split_gsm8k_train,
     validate_disjoint_splits,
     write_manifest_bundle,
 )
+from text_feedback_dpo.cli import run_materialize_preflight_subset
+from text_feedback_dpo.io import append_jsonl_zst, read_jsonl_zst
 
 
 class DatasetManifestTest(unittest.TestCase):
@@ -134,6 +137,53 @@ class DatasetManifestTest(unittest.TestCase):
             self.assertEqual(manifest["nested_roles"], {"confirm": 1, "tune": 2})
             self.assertTrue((Path(tmp) / "validation_tune.jsonl.zst").is_file())
             self.assertTrue((Path(tmp) / "validation_confirm.jsonl.zst").is_file())
+
+    def test_preflight_subset_is_hash_selected_reproducible_and_auditable(self):
+        rows = [{"id": f"row-{index}", "problem": f"Problem {index}"} for index in range(20)]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "validation.jsonl.zst"
+            for row in rows:
+                append_jsonl_zst(source, row)
+            first = materialize_preflight_subset(
+                source_path=source,
+                output_path=root / "preflight-a.jsonl.zst",
+                count=5,
+                seed=20260710,
+            )
+            second = materialize_preflight_subset(
+                source_path=source,
+                output_path=root / "preflight-b.jsonl.zst",
+                count=5,
+                seed=20260710,
+            )
+            first_rows = read_jsonl_zst(root / "preflight-a.jsonl.zst")
+            second_rows = read_jsonl_zst(root / "preflight-b.jsonl.zst")
+            self.assertEqual(first_rows, second_rows)
+            self.assertEqual(first["selected_ids"], [row["id"] for row in first_rows])
+            self.assertEqual(first["selection_sha256"], second["selection_sha256"])
+            self.assertEqual(first["count"], 5)
+            self.assertTrue((root / "preflight-a.jsonl.zst.manifest.json").exists())
+
+    def test_preflight_subset_cli_runner_returns_manifest(self):
+        rows = [{"id": f"row-{index}", "problem": f"Problem {index}"} for index in range(6)]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "validation.jsonl.zst"
+            output = root / "validation_preflight.jsonl.zst"
+            for row in rows:
+                append_jsonl_zst(source, row)
+
+            manifest = run_materialize_preflight_subset(
+                source_path=source,
+                output_path=output,
+                count=3,
+                seed=20260710,
+            )
+
+            self.assertEqual(manifest["schema"], "paper-preflight-subset-v1")
+            self.assertEqual(manifest["count"], 3)
+            self.assertEqual(len(read_jsonl_zst(output)), 3)
 
 
 if __name__ == "__main__":

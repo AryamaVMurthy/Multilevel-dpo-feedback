@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 3
 experiment_id: qwen35-paper-searchqa8k
 dataset:
   name: searchqa8k
@@ -15,16 +15,24 @@ models:
   teacher: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
   evaluator: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
 generation:
-  temperature: 1.0
-  top_p: 0.95
-  top_k: 20
-  presence_penalty: 1.5
-  max_completion_tokens: 2048
+  student:
+    enable_thinking: true
+    do_sample: true
+    max_new_tokens: 8192
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 20
+    presence_penalty: 1.5
+  teacher: {enable_thinking: false, do_sample: false, max_new_tokens: 64}
+  evaluator: {enable_thinking: false, do_sample: false, max_new_tokens: 256}
+  guidance_guard: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
+  guidance_critic: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
 collection:
   max_guidance_steps: 3
   max_guidance_regenerations: 2
   shard_size: 250
-  artifact_schema: paper-v1
+  artifact_schema: paper-v2
+  prompt_protocol: qwen-native-r2
 lora:
   rank: 16
   alpha: 32
@@ -68,6 +76,12 @@ training:
   final_seeds: [17, 31, 47]
   max_epochs: 1.0
   checkpoint_fractions: [0.25, 0.5, 0.75, 1.0]
+  max_sequence_tokens: 10240
+evaluation:
+  baseline_before_training: true
+  generation_seed: 20260710
+  max_truncation_rate: 0.05
+  minimum_evaluator_audit_agreement: 0.95
 slurm:
   account: priyesh.shukla
   partition: u22
