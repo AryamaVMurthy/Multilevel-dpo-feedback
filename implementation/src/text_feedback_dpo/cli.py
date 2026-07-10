@@ -13,6 +13,7 @@ from text_feedback_dpo.evaluators import (
     make_model_evaluator,
     make_model_guidance_guard,
 )
+from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
@@ -632,6 +633,19 @@ def run_training(
     return metrics
 
 
+def run_validate_paper_config(config_path: Path) -> dict[str, object]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    return {
+        "valid": True,
+        "experiment_id": config.experiment_id,
+        "dataset": config.dataset.name,
+        "student_model": config.models["student"]["id"],
+        "teacher_model": config.models["teacher"]["id"],
+        "require_freeze_manifest_for_test": config.require_freeze_manifest_for_test,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -656,6 +670,8 @@ def main() -> None:
     train.add_argument("--max-steps", required=True, type=int)
     validate = subparsers.add_parser("validate-run")
     validate.add_argument("--output-dir", required=True, type=Path)
+    paper_config = subparsers.add_parser("validate-paper-config")
+    paper_config.add_argument("--config", required=True, type=Path)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -686,6 +702,8 @@ def main() -> None:
         )
     elif args.command == "validate-run":
         result = validate_run(args.output_dir)
+    elif args.command == "validate-paper-config":
+        result = run_validate_paper_config(args.config)
     else:
         raise SystemExit(f"unknown command: {args.command}")
     print(json.dumps(result, sort_keys=True))

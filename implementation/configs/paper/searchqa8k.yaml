@@ -1,0 +1,77 @@
+schema_version: 1
+experiment_id: qwen35-paper-searchqa8k
+dataset:
+  name: searchqa8k
+  config: original
+  source: nyu-dl/SearchQA
+  revision: fe1ea9fdb888001723ee89daf72b35601d72a4ea
+  source_counts: {train: 99820, validation: 13393, test: 27248}
+  splits: {train: 5000, validation: 1000, test: 2000}
+  validation_roles: {}
+  auxiliary_hparam: {train: 2000, validation: 500}
+  seed: 20260710
+models:
+  student: {id: Qwen/Qwen3.5-2B, revision: 15852e8c16360a2fea060d615a32b45270f8a8fc}
+  teacher: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
+  evaluator: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
+generation:
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  presence_penalty: 1.5
+  max_completion_tokens: 2048
+collection:
+  max_guidance_steps: 3
+  max_guidance_regenerations: 2
+  shard_size: 250
+  artifact_schema: paper-v1
+lora:
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+  dtype: bfloat16
+  quantization: none
+  target_policy: qwen35_text_linear
+  excluded_components: [vision, multimodal_projector, embeddings, output_head]
+optimizer:
+  name: adamw_torch_fused
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  scheduler: cosine
+  warmup_fraction: 0.05
+dpo_search:
+  learning_rates: [2.0e-6, 5.0e-6, 1.0e-5]
+  betas: [0.05, 0.1, 0.3, 0.5]
+  weight_decays: [0.0, 0.01]
+  warmup_fractions: [0.05, 0.1]
+  schedulers: [linear, cosine]
+  max_epochs: 1.0
+  effective_global_batch: 16
+  promote_counts: [4, 2, 1]
+  tuning_seeds: [11, 29]
+grpo_search:
+  learning_rates: [2.0e-6, 5.0e-6, 1.0e-5]
+  kl_betas: [0.0, 0.001, 0.01, 0.04]
+  epsilon: 0.2
+  num_iterations: 1
+  num_generations: 4
+  loss_type: grpo
+  sensitivity_loss_type: dapo
+  scale_rewards: group
+  mask_truncated_completions: true
+  promote_counts: [4, 2, 1]
+  tuning_seeds: [11, 29]
+training:
+  final_seeds: [17, 31, 47]
+  max_epochs: 1.0
+  checkpoint_fractions: [0.25, 0.5, 0.75, 1.0]
+slurm:
+  account: priyesh.shukla
+  partition: u22
+  gpus_per_job: 1
+  max_walltime: "03:00:00"
+  memory_limit_fraction: 0.9
+require_freeze_manifest_for_test: true
