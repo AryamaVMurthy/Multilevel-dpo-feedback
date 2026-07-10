@@ -6,6 +6,7 @@ class TuringScriptTest(unittest.TestCase):
     def test_paper_scripts_use_fail_fast_slurm_and_explicit_artifacts(self):
         for name in (
             "turing_setup_environment.sh",
+            "turing_stage_model_cache.sh",
             "turing_download_dataset_source.sh",
             "turing_materialize_dataset.sh",
             "turing_materialize_preflight_subset.sh",
@@ -28,6 +29,13 @@ class TuringScriptTest(unittest.TestCase):
         setup = Path("scripts/turing_setup_environment.sh").read_text(encoding="utf-8")
         self.assertIn("SHARED_UV_CACHE:?SHARED_UV_CACHE is required", setup)
         self.assertIn("uv sync --frozen", setup)
+        stage_cache = Path("scripts/turing_stage_model_cache.sh").read_text(encoding="utf-8")
+        self.assertIn("CONFIG:?CONFIG is required", stage_cache)
+        self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", stage_cache)
+        self.assertIn("SOURCE_COMMIT:?SOURCE_COMMIT is required", stage_cache)
+        self.assertIn('"$MODEL_CACHE_DIR" != /scratch/*', stage_cache)
+        self.assertIn("snapshot_download", stage_cache)
+        self.assertIn("tfdpo-model-cache-manifest.json", stage_cache)
         preflight = Path("scripts/turing_materialize_preflight_subset.sh").read_text(encoding="utf-8")
         self.assertIn("materialize-preflight-subset", preflight)
         self.assertIn("SOURCE_PATH:?SOURCE_PATH is required", preflight)

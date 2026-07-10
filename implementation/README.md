@@ -62,3 +62,8 @@ The paper plan applies these sampling settings only to student rollouts. Teacher
 evaluator, and guidance-guard roles use separately configured non-thinking decoding
 profiles. See `../docs/plans/2026-07-10-paper-scale-experiment-implementation.md` for
 the exact execution order, storage gates, and artifact requirements.
+
+Before any paper GPU job, stage the pinned model revisions on a specific compute node's
+local scratch and constrain subsequent GPU jobs to that same node. The CPU-only staging
+script writes `tfdpo-model-cache-manifest.json` alongside the Hugging Face cache; GPU
+wrappers reject a missing cache instead of downloading an untracked replacement.
