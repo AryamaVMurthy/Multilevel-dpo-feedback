@@ -91,3 +91,36 @@ def write_html_report(
 </html>
 """
     path.write_text(html, encoding="utf-8")
+
+
+def write_comparison_report(path: Path, rows: list[dict]) -> None:
+    if not rows:
+        raise ValueError("comparison report requires at least one method row")
+    keys = sorted({key for row in rows for key in row})
+    header = "".join(f"<th>{escape(str(key))}</th>" for key in keys)
+    body = "\n".join(
+        "<tr>"
+        + "".join(f"<td>{escape(str(row.get(key, '')))}</td>" for key in keys)
+        + "</tr>"
+        for row in rows
+    )
+    losses = {
+        str(row["method"]): float(row["train_loss"])
+        for row in rows
+        if row.get("method") and row.get("train_loss") is not None
+    }
+    runtimes = {
+        str(row["method"]): float(row["runtime"])
+        for row in rows
+        if row.get("method") and row.get("runtime") is not None
+    }
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Textual Feedback DPO Method Comparison</title></head><body>
+<h1>Textual Feedback DPO Method Comparison</h1>
+<table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>
+{_bar_chart("comparison_train_loss", losses)}
+{_bar_chart("comparison_runtime_seconds", runtimes)}
+</body></html>
+"""
+    path.write_text(html, encoding="utf-8")

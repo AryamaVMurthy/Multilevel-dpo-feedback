@@ -2,10 +2,26 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from text_feedback_dpo.report import write_html_report
+from text_feedback_dpo.report import write_comparison_report, write_html_report
 
 
 class ReportTest(unittest.TestCase):
+    def test_comparison_report_contains_method_table_and_loss_chart(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "comparison.html"
+            write_comparison_report(
+                path,
+                [
+                    {"method": "standard_dpo", "train_loss": 0.69, "runtime": 2.1},
+                    {"method": "grpo", "train_loss": 0.0, "runtime": 15.0},
+                ],
+            )
+            html = path.read_text(encoding="utf-8")
+            self.assertIn("standard_dpo", html)
+            self.assertIn("grpo", html)
+            self.assertIn("comparison_train_loss", html)
+            self.assertIn("<svg", html)
+
     def test_report_contains_metric_table_and_attempt_chart(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "report.html"
