@@ -94,3 +94,7 @@ This anchor must be logged separately from DPO loss.
   `enable_thinking=false` as a top-level local Transformers chat-template option for
   teacher/evaluator roles. The serving-API `chat_template_kwargs` spelling is not
   interchangeable with the local tokenizer API.
+- Benchmark run qwen35-native-benchmark-smoke-r3 reached SearchQA but failed on an
+  evaluator object with unescaped quotation marks inside `reason`. The evaluator
+  contract now bounds and character-restricts that field; malformed output remains a
+  hard failure with its raw text preserved.

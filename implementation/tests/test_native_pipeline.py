@@ -70,6 +70,8 @@ class NativePipelineTest(unittest.TestCase):
         for prompt in (evaluator_prompt, guard_prompt):
             self.assertIn("first character", prompt.lower())
             self.assertIn("do not provide analysis", prompt.lower())
+        self.assertIn("at most 160 characters", evaluator_prompt.lower())
+        self.assertIn("do not use quotation marks", evaluator_prompt.lower())
 
     def test_native_collector_pairs_all_wrong_attempts_with_first_correct(self):
         examples = [
