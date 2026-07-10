@@ -35,6 +35,14 @@ class BenchmarkConversionTest(unittest.TestCase):
         self.assertEqual(row["difficulty_level"], 4)
         self.assertEqual(row["gold_answer_extraction"]["method"], "last_balanced_boxed")
 
+    def test_math_conversion_accepts_official_unbraced_boxed_answer_with_provenance(self):
+        row = convert_math_row(
+            {"problem": "Find x.", "solution": "Thus x = \\boxed 2$.", "level": "Level 3", "type": "Algebra"},
+            subject="algebra", source_split="train", index=888,
+        )
+        self.assertEqual(row["gold_answer"], "2")
+        self.assertEqual(row["gold_answer_extraction"]["method"], "last_unbraced_boxed")
+
     def test_math_conversion_accepts_the_official_level_and_subject_serialization(self):
         row = convert_math_row(
             {

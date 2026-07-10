@@ -18,15 +18,27 @@ MATH_SUBJECTS = (
 )
 
 
-def extract_math_boxed_answer(solution: str) -> str:
-    """Extract the final balanced ``\\boxed{...}`` answer from an official MATH solution."""
+def extract_math_boxed_answer(solution: str) -> tuple[str, str]:
+    """Extract a final official MATH boxed answer and its exact extraction method."""
 
     text = str(solution)
-    marker = "\\boxed{"
+    marker = "\\boxed"
     start = text.rfind(marker)
     if start < 0:
         raise ValueError("MATH solution has no boxed final answer")
     index = start + len(marker)
+    if index >= len(text) or text[index] != "{":
+        tail = text[index:].lstrip()
+        end = len(tail)
+        for delimiter in ("$", "\n"):
+            candidate = tail.find(delimiter)
+            if candidate >= 0:
+                end = min(end, candidate)
+        answer = tail[:end].strip().rstrip(".,;:")
+        if not answer:
+            raise ValueError("MATH solution has an empty unbraced boxed final answer")
+        return answer, "last_unbraced_boxed"
+    index += 1
     depth = 1
     for end in range(index, len(text)):
         character = text[end]
@@ -38,7 +50,7 @@ def extract_math_boxed_answer(solution: str) -> str:
                 answer = text[index:end].strip()
                 if not answer:
                     raise ValueError("MATH solution has an empty boxed final answer")
-                return answer
+                return answer, "last_balanced_boxed"
     raise ValueError("MATH solution has an unbalanced boxed final answer")
 
 
@@ -87,7 +99,7 @@ def convert_math_row(
         raise ValueError(
             f"MATH {subject}:{source_split}:{index} declares mismatched subject {declared_subject!r}"
         )
-    gold_answer = extract_math_boxed_answer(solution)
+    gold_answer, extraction_method = extract_math_boxed_answer(solution)
     return {
         "id": f"math-{subject}-{source_split}-{index}",
         "domain": "math",
@@ -98,7 +110,7 @@ def convert_math_row(
         "source_subject": subject,
         "difficulty_level": level,
         "gold_answer_extraction": {
-            "method": "last_balanced_boxed",
+            "method": extraction_method,
             "source_field": "solution",
             "source_value": gold_answer,
         },
