@@ -39,6 +39,8 @@ class NativePipelineTest(unittest.TestCase):
         )
         self.assertIn("Gold answer (teacher-only):\n4", prompt)
         self.assertIn("must never reveal", prompt.lower())
+        self.assertIn("do not use digits", prompt.lower())
+        self.assertIn("do not quote", prompt.lower())
         self.assertIn(WRONG, prompt)
 
     def test_evaluator_output_requires_explicit_correctness_and_confidence(self):

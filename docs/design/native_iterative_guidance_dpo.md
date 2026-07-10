@@ -104,3 +104,7 @@ This anchor must be logged separately from DPO loss.
 - The following r3 retry reached the guidance guard but omitted a JSON string delimiter.
   The guard is now an explicit one-token `SAFE`/`UNSAFE` role contract; evaluator
   judgments remain JSON because they require answer and confidence fields.
+- Collection r3 completed with valid artifacts but no pairs: five wrong attempts,
+  three unresolved groups, and all rejected guidance contained answer-bearing numbers
+  or entities. The teacher prompt now forbids digits, proper nouns, quoted spans, and
+  answer-bearing words so safe abstract hints can be tested without relaxing the guard.
