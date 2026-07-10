@@ -1,4 +1,4 @@
-run_id: qwen35-native-smoke-1x
+run_id: qwen35-native-smoke-r2
 student_model: Qwen/Qwen3.5-2B
 teacher_model: Qwen/Qwen3.5-9B
 evaluator_model: Qwen/Qwen3.5-9B
@@ -7,7 +7,7 @@ examples_path: ../examples/native_smoke/examples.jsonl
 max_examples: 2
 max_guidance_steps: 3
 max_guidance_regenerations: 1
-output_dir: runs/qwen35-native-smoke-1x
+output_dir: runs/qwen35-native-smoke-r2
 allow_missing_slurm_account_for_local: true
 
 generation:

@@ -6,8 +6,16 @@ from typing import Any, Callable
 from text_feedback_dpo.prompts import build_native_student_prompt
 
 
+class ModelOutputParseError(ValueError):
+    def __init__(self, *, role: str, raw: str, message: str) -> None:
+        super().__init__(message)
+        self.role = role
+        self.raw = raw
+
+
 def _parse_json_object(raw: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
+    parsed: dict[str, Any] | None = None
     for index, character in enumerate(raw):
         if character != "{":
             continue
@@ -17,10 +25,10 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
             continue
         if not isinstance(value, dict):
             continue
-        if raw[index + end :].strip():
-            continue
-        return value
-    raise ValueError("evaluator output does not end with one valid JSON object")
+        parsed = value
+    if parsed is not None:
+        return parsed
+    raise ValueError("model output does not contain a valid JSON object")
 
 
 def parse_evaluator_output(raw: str) -> dict[str, Any]:
@@ -115,7 +123,10 @@ def make_model_evaluator(
 ) -> Callable[[dict[str, Any], str], dict[str, Any]]:
     def evaluate(example: dict[str, Any], response: str) -> dict[str, Any]:
         raw = generate("evaluator", build_evaluator_prompt(example=example, response=response), **generation_kwargs)
-        parsed = parse_evaluator_output(raw)
+        try:
+            parsed = parse_evaluator_output(raw)
+        except ValueError as exc:
+            raise ModelOutputParseError(role="evaluator", raw=raw, message=str(exc)) from exc
         parsed["raw_evaluator_output"] = raw
         return parsed
 
@@ -138,7 +149,10 @@ def make_model_guidance_guard(
             build_guidance_guard_prompt(example=example, guidance=guidance),
             **generation_kwargs,
         )
-        parsed = parse_guidance_guard_output(raw)
+        try:
+            parsed = parse_guidance_guard_output(raw)
+        except ValueError as exc:
+            raise ModelOutputParseError(role="guidance_guard", raw=raw, message=str(exc)) from exc
         parsed["guidance"] = guidance
         parsed["raw_guard_output"] = raw
         return parsed

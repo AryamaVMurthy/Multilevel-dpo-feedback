@@ -25,6 +25,7 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
 fi
 echo "scratch_df_before=$(df -h /scratch | tail -1)"
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
+PERSISTENT_SCRATCH_ROOT="/scratch/$USER/text-feedback-dpo"
 mkdir -p "$SCRATCH_DIR"
 mkdir -p "$HF_CACHE_DIR"
 echo "scratch_dir=${SCRATCH_DIR}"
@@ -34,7 +35,8 @@ export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
-export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
+mkdir -p "$PERSISTENT_SCRATCH_ROOT/uv_cache"
+export UV_CACHE_DIR="/scratch/$USER/text-feedback-dpo/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}src"
 

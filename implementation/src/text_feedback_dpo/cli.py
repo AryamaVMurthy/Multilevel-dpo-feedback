@@ -6,7 +6,11 @@ from pathlib import Path
 
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.io import read_jsonl, write_jsonl
-from text_feedback_dpo.evaluators import make_model_evaluator, make_model_guidance_guard
+from text_feedback_dpo.evaluators import (
+    ModelOutputParseError,
+    make_model_evaluator,
+    make_model_guidance_guard,
+)
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
@@ -456,17 +460,37 @@ def run_native_pipeline(
         )
         return guidance
 
-    result = build_native_iterative_guidance_pairs(
-        examples=examples,
-        base_prompt_builder=base_prompt_builder,
-        retry_prompt_builder=retry_prompt_builder,
-        student_generate=student_generate,
-        evaluate=evaluator_fn,
-        teacher_guidance=teacher_guidance,
-        guidance_guard=guidance_guard_fn,
-        max_guidance_steps=int(config["max_guidance_steps"]),
-        max_guidance_regenerations=int(config["max_guidance_regenerations"]),
-    )
+    try:
+        result = build_native_iterative_guidance_pairs(
+            examples=examples,
+            base_prompt_builder=base_prompt_builder,
+            retry_prompt_builder=retry_prompt_builder,
+            student_generate=student_generate,
+            evaluate=evaluator_fn,
+            teacher_guidance=teacher_guidance,
+            guidance_guard=guidance_guard_fn,
+            max_guidance_steps=int(config["max_guidance_steps"]),
+            max_guidance_regenerations=int(config["max_guidance_regenerations"]),
+        )
+    except ModelOutputParseError as exc:
+        write_jsonl(
+            output / "model_failures.jsonl",
+            [
+                {
+                    "role": exc.role,
+                    "error_code": "model_output_parse_failed",
+                    "message": str(exc),
+                    "raw_output": exc.raw,
+                }
+            ],
+        )
+        logger.failure(
+            stage=exc.role,
+            error_code="model_output_parse_failed",
+            message=str(exc),
+            raw_output_path=str(output / "model_failures.jsonl"),
+        )
+        raise
     metrics = {
         "run_id": run_id,
         "method": "native_iterative_guidance_dpo",

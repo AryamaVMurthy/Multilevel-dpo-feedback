@@ -47,6 +47,14 @@ class NativePipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "correct"):
             parse_evaluator_output('{"answer": "4"}')
 
+    def test_evaluator_accepts_native_reasoning_around_final_json(self):
+        parsed = parse_evaluator_output(
+            'I checked the response carefully.\n'
+            '{"correct": true, "answer": "4", "confidence": 0.98, "reason": "matches"}\n'
+            'This judgment is final.'
+        )
+        self.assertTrue(parsed["correct"])
+
     def test_native_collector_pairs_all_wrong_attempts_with_first_correct(self):
         examples = [
             {

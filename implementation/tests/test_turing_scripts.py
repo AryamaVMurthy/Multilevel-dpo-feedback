@@ -30,6 +30,7 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn('native-pipeline', text)
         self.assertIn("output_dir", text)
         self.assertIn("hf_cache_dir", text)
+        self.assertIn('UV_CACHE_DIR="/scratch/$USER/text-feedback-dpo/uv_cache"', text)
         self.assertIn("SLURM_JOB_NUM_NODES", text)
         self.assertIn("SLURM_GPUS_ON_NODE", text)
         self.assertIn("allocation_mismatch", text)
