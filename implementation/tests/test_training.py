@@ -3,6 +3,7 @@ import unittest
 from text_feedback_dpo.training import (
     build_dpo_config_kwargs,
     build_distillation_rows,
+    build_grpo_config_kwargs,
     build_standard_dpo_pairs,
     dpo_loss,
     response_sft_weight,
@@ -14,6 +15,11 @@ class TrainingDataTest(unittest.TestCase):
         values = build_dpo_config_kwargs(output_dir="out", max_steps=1)
         self.assertEqual(values["max_length"], 1024)
         self.assertNotIn("max_prompt_length", values)
+
+    def test_grpo_config_batches_all_generations(self):
+        values = build_grpo_config_kwargs(output_dir="out", max_steps=1)
+        self.assertEqual(values["num_generations"], 2)
+        self.assertEqual(values["generation_batch_size"], 2)
 
     def test_distillation_rows_keep_prompt_and_teacher_target(self):
         rows = build_distillation_rows(

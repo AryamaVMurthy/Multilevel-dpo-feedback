@@ -128,6 +128,24 @@ def build_dpo_config_kwargs(*, output_dir: Any, max_steps: int) -> dict[str, Any
     }
 
 
+def build_grpo_config_kwargs(*, output_dir: Any, max_steps: int) -> dict[str, Any]:
+    """Build a GRPOConfig with a valid generation batch for two samples per prompt."""
+
+    return {
+        "output_dir": str(output_dir),
+        "max_completion_length": 512,
+        "num_generations": 2,
+        "generation_batch_size": 2,
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "learning_rate": 5e-6,
+        "max_steps": max_steps,
+        "logging_steps": 1,
+        "report_to": [],
+        "save_strategy": "no",
+    }
+
+
 def run_dpo_training(
     *,
     model_id: str,
@@ -225,18 +243,7 @@ def run_grpo_training(
     from trl import GRPOConfig, GRPOTrainer
 
     model, tokenizer = _load_model_and_tokenizer(model_id)
-    args = GRPOConfig(
-        output_dir=str(output_dir),
-        max_completion_length=512,
-        num_generations=2,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        learning_rate=5e-6,
-        max_steps=max_steps,
-        logging_steps=1,
-        report_to=[],
-        save_strategy="no",
-    )
+    args = GRPOConfig(**build_grpo_config_kwargs(output_dir=output_dir, max_steps=max_steps))
 
     def reward_func(completions: list[Any], gold_answer: list[str], **_: Any) -> list[float]:
         rewards = []
