@@ -1,6 +1,7 @@
 import unittest
 
 from text_feedback_dpo.evaluators import (
+    ModelOutputParseError,
     build_evaluator_prompt,
     build_guidance_guard_prompt,
     make_model_evaluator,
@@ -89,6 +90,42 @@ class NativePipelineTest(unittest.TestCase):
         self.assertTrue(result["model_correct"])
         self.assertTrue(result["deterministic"]["numeric_exact_match"])
         self.assertEqual(result["deterministic"]["evaluator_source"], "deterministic_numeric")
+
+    def test_model_evaluator_repairs_malformed_serialization_and_preserves_every_attempt(self):
+        outputs = iter(
+            [
+                '{false,"$74","reason","high"}',
+                '{"correct": false, "answer": "$74", "confidence": 0.91, "reason": "does not match"}',
+            ]
+        )
+        evaluator = make_model_evaluator(
+            generate=lambda *_args, **_kwargs: next(outputs),
+            generation_kwargs={},
+            max_regenerations=1,
+        )
+        result = evaluator(
+            {"domain": "math", "problem": "Compute the value.", "gold_answer": "75"},
+            "The result is 74.",
+        )
+
+        self.assertFalse(result["correct"])
+        self.assertEqual(result["evaluator_regenerations"], 1)
+        self.assertEqual(len(result["raw_evaluator_outputs"]), 2)
+        self.assertEqual(len(result["evaluator_parse_failures"]), 1)
+
+    def test_model_evaluator_exhaustion_exposes_all_raw_outputs(self):
+        outputs = iter(["invalid one", "invalid two"])
+        evaluator = make_model_evaluator(
+            generate=lambda *_args, **_kwargs: next(outputs),
+            generation_kwargs={},
+            max_regenerations=1,
+        )
+        with self.assertRaises(ModelOutputParseError) as caught:
+            evaluator(
+                {"domain": "math", "problem": "Compute.", "gold_answer": "4"},
+                "five",
+            )
+        self.assertEqual(caught.exception.raw_outputs, ["invalid one", "invalid two"])
 
     def test_structured_role_prompts_require_json_without_preceding_reasoning(self):
         example = {

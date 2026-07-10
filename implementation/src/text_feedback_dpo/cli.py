@@ -872,6 +872,7 @@ def _paper_evaluator(config: Any):
             "presence_penalty": config.generation.presence_penalty,
             "enable_thinking": False,
         },
+        max_regenerations=int(config.collection["max_guidance_regenerations"]),
     )
 
 

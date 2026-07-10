@@ -95,6 +95,7 @@ def collect_paper_shard(
     evaluate = evaluator or make_model_evaluator(
         generate=provider.generate,
         generation_kwargs=paper_generation_kwargs(config, role="evaluator"),
+        max_regenerations=int(config.collection["max_guidance_regenerations"]),
     )
     guard = guidance_guard or make_model_guidance_guard(
         generate=provider.generate,
@@ -185,6 +186,8 @@ def collect_paper_shard(
                     "error_code": "model_output_parse_failed",
                     "message": str(exc),
                     "raw_output": exc.raw,
+                    "raw_outputs": exc.raw_outputs,
+                    "parse_failures": exc.parse_failures,
                 }
             )
             write_jsonl(failure_path, failures)

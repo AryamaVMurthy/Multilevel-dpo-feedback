@@ -8,10 +8,20 @@ from text_feedback_dpo.answer_evaluation import evaluate_domain_answer
 
 
 class ModelOutputParseError(ValueError):
-    def __init__(self, *, role: str, raw: str, message: str) -> None:
+    def __init__(
+        self,
+        *,
+        role: str,
+        raw: str,
+        message: str,
+        raw_outputs: list[str] | None = None,
+        parse_failures: list[str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.role = role
         self.raw = raw
+        self.raw_outputs = list(raw_outputs or [raw])
+        self.parse_failures = list(parse_failures or [message])
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
@@ -94,6 +104,9 @@ reason: short single-line explanation, at most 160 characters, with no quotation
 Do not use quotation marks or braces inside the reason string.
 Use a single line for the reason string.
 For SearchQA also include answer_type and evidence_supported.
+Use JSON field names exactly as shown in this shape example:
+{{"correct":false,"answer":"sample answer","confidence":0.90,"reason":"answer does not match"}}
+Confidence must be a JSON number, never a word such as low, medium, or high.
 
 Problem:
 {example["problem"]}
@@ -106,6 +119,19 @@ Controlled evidence:
 
 Model response:
 {response}
+"""
+
+
+def build_evaluator_repair_prompt(*, original_prompt: str, raw: str, error: str) -> str:
+    return f"""{original_prompt}
+
+Your previous serialization was invalid and was not accepted.
+Validation error: {error}
+Invalid response:
+{raw}
+
+Return a corrected JSON object now. Preserve your judgment, but use the exact required field names
+and JSON value types. Output only the corrected object, from '{{' through '}}'.
 """
 
 
@@ -134,28 +160,55 @@ def make_model_evaluator(
     *,
     generate: Callable[..., str],
     generation_kwargs: dict[str, Any],
+    max_regenerations: int = 0,
 ) -> Callable[[dict[str, Any], str], dict[str, Any]]:
+    if max_regenerations < 0:
+        raise ValueError("max_regenerations must be non-negative")
+
     def evaluate(example: dict[str, Any], response: str) -> dict[str, Any]:
         start = time.monotonic_ns()
-        raw = generate("evaluator", build_evaluator_prompt(example=example, response=response), **generation_kwargs)
-        try:
-            parsed = parse_evaluator_output(raw)
-        except ValueError as exc:
-            raise ModelOutputParseError(role="evaluator", raw=raw, message=str(exc)) from exc
+        original_prompt = build_evaluator_prompt(example=example, response=response)
+        prompt = original_prompt
+        raw_outputs: list[str] = []
+        parse_failures: list[str] = []
+        parsed: dict[str, Any] | None = None
+        for generation_attempt in range(max_regenerations + 1):
+            raw = generate("evaluator", prompt, **generation_kwargs)
+            raw_outputs.append(raw)
+            try:
+                candidate = parse_evaluator_output(raw)
+                actual_answer_type = candidate.get("answer_type", "unknown")
+                if not isinstance(actual_answer_type, str) or not actual_answer_type.strip():
+                    raise ValueError("evaluator field answer_type must be a non-empty string when supplied")
+                model_evidence_supported = candidate.get("evidence_supported")
+                if model_evidence_supported is not None and not isinstance(model_evidence_supported, bool):
+                    raise ValueError("evaluator field evidence_supported must be boolean when supplied")
+                if example.get("domain") == "search_qa":
+                    if "answer_type" not in candidate:
+                        raise ValueError("SearchQA evaluator output is missing answer_type")
+                    if "evidence_supported" not in candidate:
+                        raise ValueError("SearchQA evaluator output is missing evidence_supported")
+                parsed = candidate
+                break
+            except ValueError as exc:
+                parse_failures.append(str(exc))
+                if generation_attempt >= max_regenerations:
+                    raise ModelOutputParseError(
+                        role="evaluator",
+                        raw=raw,
+                        message=str(exc),
+                        raw_outputs=raw_outputs,
+                        parse_failures=parse_failures,
+                    ) from exc
+                prompt = build_evaluator_repair_prompt(
+                    original_prompt=original_prompt,
+                    raw=raw,
+                    error=str(exc),
+                )
+        if parsed is None:
+            raise RuntimeError("evaluator regeneration loop exited without a result")
         actual_answer_type = parsed.get("answer_type", "unknown")
-        if not isinstance(actual_answer_type, str) or not actual_answer_type.strip():
-            raise ModelOutputParseError(
-                role="evaluator",
-                raw=raw,
-                message="evaluator field answer_type must be a non-empty string when supplied",
-            )
         model_evidence_supported = parsed.get("evidence_supported")
-        if model_evidence_supported is not None and not isinstance(model_evidence_supported, bool):
-            raise ModelOutputParseError(
-                role="evaluator",
-                raw=raw,
-                message="evaluator field evidence_supported must be boolean when supplied",
-            )
         try:
             deterministic = evaluate_domain_answer(
                 domain=str(example["domain"]),
@@ -167,8 +220,10 @@ def make_model_evaluator(
         except (KeyError, TypeError, ValueError) as exc:
             raise ModelOutputParseError(
                 role="evaluator",
-                raw=raw,
+                raw=raw_outputs[-1],
                 message=f"deterministic answer evaluation failed: {exc}",
+                raw_outputs=raw_outputs,
+                parse_failures=parse_failures,
             ) from exc
         model_correct = bool(parsed["correct"])
         requires_model_judgment = bool(deterministic.get("requires_model_judgment"))
@@ -179,9 +234,12 @@ def make_model_evaluator(
         # Deterministic checks act as a consistency gate for clear cases. Ambiguous cases remain
         # under the evaluator model's judgment and are visible in the result for auditability.
         parsed["correct"] = model_correct if requires_model_judgment else model_correct and bool(deterministic["correct"])
-        parsed["raw_evaluator_output"] = raw
+        parsed["raw_evaluator_output"] = raw_outputs[-1]
+        parsed["raw_evaluator_outputs"] = raw_outputs
+        parsed["evaluator_parse_failures"] = parse_failures
+        parsed["evaluator_regenerations"] = len(raw_outputs) - 1
         parsed["latency_ms"] = (time.monotonic_ns() - start) // 1_000_000
-        parsed["generated_tokens_estimate"] = len(raw.split())
+        parsed["generated_tokens_estimate"] = sum(len(raw_output.split()) for raw_output in raw_outputs)
         return parsed
 
     return evaluate
