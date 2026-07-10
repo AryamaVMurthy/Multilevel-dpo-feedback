@@ -32,8 +32,9 @@ export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
-export UV_LINK_MODE=copy
+export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
+export PYTHONPATH="$PROJECT_DIR/src"
 
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \

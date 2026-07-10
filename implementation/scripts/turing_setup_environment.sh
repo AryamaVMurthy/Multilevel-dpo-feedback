@@ -26,7 +26,7 @@ export UV_PROJECT_ENVIRONMENT="$SHARED_PROJECT_ENV"
 export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
-export UV_LINK_MODE=copy
+export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 uv sync --frozen
 uv run --frozen python -c 'import sys; print(sys.executable); print(sys.version)' \

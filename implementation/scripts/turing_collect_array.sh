@@ -35,8 +35,9 @@ export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
 export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
-export UV_LINK_MODE=copy
+export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
+export PYTHONPATH="$PROJECT_DIR/src"
 
 GPU_LOG="$OUTPUT_DIR/gpu-${SLURM_JOB_ID}_${SHARD_INDEX}.csv"
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
