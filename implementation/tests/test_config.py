@@ -49,7 +49,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_one_example_pair_validation_config_is_explicitly_bounded(self):
         config = load_config(Path("configs/pair_validation_1x.yaml"))
-        self.assertEqual(config["run_id"], "qwen35-pair-validation-1x-r5")
+        self.assertEqual(config["run_id"], "qwen35-pair-validation-1x-r6")
         self.assertEqual(config["student_model"], "Qwen/Qwen3.5-2B")
         self.assertEqual(config["teacher_model"], "Qwen/Qwen3.5-9B")
         self.assertEqual(config["teacher_mode"], "stronger_model")

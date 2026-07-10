@@ -113,10 +113,28 @@ Student result:
 Return exactly:
 
 <feedback>
-...
+The specific repair the student needs, without repeating the gold answer.
 </feedback>
 
 <corrected_rollout>
-...
+<plan>
+A concise corrected plan for this problem.
+</plan>
+<think branch="A">
+The corrected reasoning for the student's actual error.
+</think>
+<reflect>
+Branch comparison: compare the corrected route with the student's route.
+Evidence / derivation check: check the relevant derivation or evidence.
+Verification: perform a concrete verification for this problem.
+Decision: answer
+</reflect>
+<final>
+The answer to the problem, and nothing else.
+</final>
 </corrected_rollout>
+
+The lines above are a format example, not text to copy. Replace every instructional sentence with
+content specific to the supplied problem and rollout. Never output `...`, `TODO`, or instructional
+placeholder text.
 """

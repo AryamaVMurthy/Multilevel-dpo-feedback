@@ -125,6 +125,23 @@ class GeneratePipelineTest(unittest.TestCase):
             ]
             self.assertTrue(any(event["event_name"] == "failure" for event in events))
 
+    def test_placeholder_teacher_blocks_fail_explicitly(self):
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "run"
+            provider = FakeModelProvider(
+                {
+                    "student": STUDENT_WRONG,
+                    "teacher": "<feedback>...</feedback><corrected_rollout>...</corrected_rollout>",
+                }
+            )
+
+            with self.assertRaisesRegex(ValueError, "placeholder"):
+                run_generate_pipeline(
+                    config_path=Path("configs/basic_smoke.yaml"),
+                    output_dir=out,
+                    model_provider=provider,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

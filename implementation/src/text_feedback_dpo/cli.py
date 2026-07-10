@@ -73,7 +73,10 @@ def _extract_required_block(text: str, tag: str) -> str:
     end = text.find(end_tag, start + len(start_tag))
     if start < 0 or end < 0:
         raise ValueError(f"teacher output missing <{tag}> block")
-    return text[start + len(start_tag) : end].strip()
+    content = text[start + len(start_tag) : end].strip()
+    if not content or "..." in content:
+        raise ValueError(f"teacher output contains a placeholder in <{tag}> block")
+    return content
 
 
 def _default_smoke_examples(max_examples: int) -> list[dict]:
