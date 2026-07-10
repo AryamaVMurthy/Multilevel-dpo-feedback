@@ -91,4 +91,6 @@ This anchor must be logged separately from DPO loss.
 - Benchmark run qwen35-native-benchmark-smoke-r2 failed explicitly because the 9B
   evaluator exhausted its reasoning budget before emitting JSON. The raw output is
   preserved in `model_failures.jsonl`; the corrective change passes
-  `enable_thinking=false` through `chat_template_kwargs` for teacher/evaluator roles.
+  `enable_thinking=false` as a top-level local Transformers chat-template option for
+  teacher/evaluator roles. The serving-API `chat_template_kwargs` spelling is not
+  interchangeable with the local tokenizer API.

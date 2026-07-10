@@ -118,7 +118,7 @@ class ModelProviderTest(unittest.TestCase):
         self.assertTrue(tokenizer.chat_template_calls[0][1]["tokenize"])
         self.assertTrue(tokenizer.chat_template_calls[0][1]["return_dict"])
 
-    def test_transformers_provider_forwards_qwen_chat_template_kwargs(self):
+    def test_transformers_provider_forwards_local_qwen_thinking_flag(self):
         provider = TransformersModelProvider(
             model_ids={"evaluator": "Qwen/Qwen3.5-9B"},
             allow_cpu_for_unit_tests=True,
@@ -137,8 +137,8 @@ class ModelProviderTest(unittest.TestCase):
             )
 
         self.assertEqual(
-            tokenizer.chat_template_calls[0][1]["chat_template_kwargs"],
-            {"enable_thinking": False},
+            tokenizer.chat_template_calls[0][1]["enable_thinking"],
+            False,
         )
 
     def test_cached_model_load_does_not_import_torch(self):
