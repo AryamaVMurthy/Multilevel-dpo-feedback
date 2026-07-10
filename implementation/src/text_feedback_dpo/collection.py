@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from text_feedback_dpo.evaluators import make_model_evaluator, make_model_guidance_guard
-from text_feedback_dpo.io import append_jsonl_zst, read_jsonl_zst, write_json_atomic
+from text_feedback_dpo.evaluators import ModelOutputParseError, make_model_evaluator, make_model_guidance_guard
+from text_feedback_dpo.io import append_jsonl_zst, read_jsonl, read_jsonl_zst, write_json_atomic, write_jsonl
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
@@ -162,17 +162,40 @@ def collect_paper_shard(
         def retry_prompt_builder(base_prompt: str, guidance: str) -> str:
             return f"{base_prompt}\n\nTeacher guidance for reconsideration:\n{guidance}\nSolve again."
 
-        result = build_native_iterative_guidance_pairs(
-            examples=[example],
-            base_prompt_builder=base_prompt_builder,
-            retry_prompt_builder=retry_prompt_builder,
-            student_generate=student_generate,
-            evaluate=evaluate,
-            teacher_guidance=teacher_guidance,
-            guidance_guard=guard,
-            max_guidance_steps=int(config.collection["max_guidance_steps"]),
-            max_guidance_regenerations=int(config.collection["max_guidance_regenerations"]),
-        )
+        try:
+            result = build_native_iterative_guidance_pairs(
+                examples=[example],
+                base_prompt_builder=base_prompt_builder,
+                retry_prompt_builder=retry_prompt_builder,
+                student_generate=student_generate,
+                evaluate=evaluate,
+                teacher_guidance=teacher_guidance,
+                guidance_guard=guard,
+                max_guidance_steps=int(config.collection["max_guidance_steps"]),
+                max_guidance_regenerations=int(config.collection["max_guidance_regenerations"]),
+            )
+        except ModelOutputParseError as exc:
+            failure_path = shard_dir / "model_failures.jsonl"
+            failures = read_jsonl(failure_path) if failure_path.exists() else []
+            failures.append(
+                {
+                    "id": str(example["id"]),
+                    "local_index": local_index,
+                    "role": exc.role,
+                    "error_code": "model_output_parse_failed",
+                    "message": str(exc),
+                    "raw_output": exc.raw,
+                }
+            )
+            write_jsonl(failure_path, failures)
+            logger.failure(
+                stage=exc.role,
+                error_code="model_output_parse_failed",
+                message=str(exc),
+                example_id=str(example["id"]),
+                raw_output_path=str(failure_path),
+            )
+            raise
         record = {
             "id": str(example["id"]),
             "split": split,
