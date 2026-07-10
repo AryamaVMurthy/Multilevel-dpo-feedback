@@ -78,8 +78,9 @@ must be '{{' and the last character must be '}}'. Return exactly one JSON object
 correct: boolean
 answer: string containing the answer you evaluated
 confidence: number from 0 to 1
-reason: short explanation, at most 160 characters, with no quotation marks or braces
+reason: short single-line explanation, at most 160 characters, with no quotation marks or braces
 Do not use quotation marks or braces inside the reason string.
+Use a single line for the reason string.
 For SearchQA also include answer_type and evidence_supported.
 
 Problem:
@@ -107,8 +108,9 @@ Do not provide analysis, reasoning, headings, or a preamble. The first character
 must be '{{' and the last character must be '}}'. Return exactly one JSON object with fields:
 safe: boolean
 confidence: number from 0 to 1
-reason: short explanation, at most 160 characters, with no quotation marks or braces
+reason: short single-line explanation, at most 160 characters, with no quotation marks or braces
 Do not use quotation marks or braces inside the reason string.
+Use a single line for the reason string.
 
 Problem:
 {example["problem"]}

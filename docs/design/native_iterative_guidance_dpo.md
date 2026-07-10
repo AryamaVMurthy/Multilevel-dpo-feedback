@@ -98,3 +98,6 @@ This anchor must be logged separately from DPO loss.
   evaluator object with unescaped quotation marks inside `reason`. The evaluator
   contract now bounds and character-restricts that field; malformed output remains a
   hard failure with its raw text preserved.
+- The next r3 retry reached the guidance guard and failed on a literal newline inside
+  its JSON `reason` string. Structured-role reasons are now explicitly single-line;
+  parsing remains strict rather than repairing malformed model output.
