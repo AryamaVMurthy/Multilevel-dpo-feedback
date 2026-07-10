@@ -14,6 +14,36 @@ The canonical optimizer and search specification is
 `docs/design/training_hyperparameter_protocol.md`. Historical smoke settings are not
 paper defaults.
 
+## Current Execution State
+
+Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`, verified implementation commit
+`c1701e2`.
+
+| Scope | State | Evidence or next gate |
+| --- | --- | --- |
+| Tasks 1-12 | implemented | strict configs, data, collection, preference, LoRA, DPO/GRPO, held-out, observability, and Slurm surfaces exist |
+| Task 13 | verified | 119 tests pass in the locked local `.venv`; compile, shell syntax, documentation integrity, and diff checks pass |
+| Task 14 | complete | GSM8K manifest hash `61a7a7f82f0ff75491b7b363504f85b0543628a860084cc0be66a01cf6f9eb6c` with 6,726/747/1,319 and nested 500/247 roles |
+| Task 15 R1 | running | Slurm `12964_0`; immutable 64-example fixed-policy preflight on `node04` |
+| Tasks 16-26 | blocked | require a passing Task 15 preflight and all later domain gates |
+
+Partial R1 observations are not results and must not be used to start training. The R1
+policy is allowed to finish unchanged. If it fails a gate, its artifacts remain intact
+and the corrected protocol runs from example zero under a new R2 path and hash.
+
+## Canonical Paths
+
+- Local worktree: `multilevel-feedback-dpo/.worktrees/qwen35-pretest/`.
+- Turing code: `/home/aryama.murthy/multilevel-feedback-dpo/implementation`.
+- Turing persistent metadata: `/home/aryama.murthy/tfdpo-runs`.
+- Turing large active artifacts: revision-keyed directories under the allocated
+  compute node's `/scratch`.
+- Local durable archive: `/home/aryamavmurthy/work/SLM-Research/multilevel-feedback-dpo-artifacts/`, outside Git.
+
+Code sync is restricted to `implementation/` and selected docs. Never use a whole
+remote worktree as an `rsync --delete` destination because experiment artifacts are not
+source files.
+
 ## Execution Rules
 
 - Work in the existing `agent/qwen35-pretest` worktree.
@@ -26,6 +56,11 @@ paper defaults.
 - Do not start SearchQA until the GSM8K completion gate passes.
 - Do not start a full job after a failed preflight.
 - Before and after each Slurm phase, run `squeue -u "$USER"` and record the result.
+- Before every phase, record `df`, `du`, Slurm accounting, node-local cache identity,
+  and projected output size. Require at least 8 GB free and less than 85% persistent
+  storage utilization before submission.
+- Student, teacher, evaluator, and guard generation profiles are separate immutable
+  config objects. No role inherits another role's decoding settings implicitly.
 
 ## Task 1: Add Paper Experiment Configuration Schema
 
@@ -594,7 +629,7 @@ promotion, and freezing are explicit CLI operations between tuning and final tra
 
 ```bash
 cd implementation
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Expected: all tests pass with no warnings promoted to errors.
@@ -654,9 +689,12 @@ squeue -u "$USER"
 **Files/Artifacts:**
 - Create remotely: `runs/paper/gsm8k/collection-preflight/`
 
-**Step 1: Submit 64-train-example collection**
+**Step 1: Finish immutable R1 collection**
 
-Use the first deterministic preflight shard. Allow three slight-hint rounds.
+Use the first deterministic 64 training examples and allow three slight-hint rounds.
+Do not change prompts, decoding, parsing, safety policy, or retry behavior while R1 is
+running. Preserve Slurm job `12964_0`, raw outputs, model failures, progress, telemetry,
+and accounting even if a gate fails.
 
 **Step 2: Inspect every raw attempt and hint**
 
@@ -666,12 +704,55 @@ decisions. Record corrections in an audit JSONL, never by editing raw artifacts.
 **Step 3: Enforce gates**
 
 Require evaluator parse success at least 99%, audit agreement at least 95%, nonzero
-pair yield, no leakage, memory below 90%, and truncation at most 5%.
+pair yield, zero accepted answer leakage, guidance-guard agreement at least 95%, memory
+below 90%, and truncation at most 5%. Report first-attempt accuracy, success by guidance
+step, unresolved rate, mean attempts, pair yield, surface-rejection rate, guard
+confusion matrix, evaluator regeneration rate, latency, tokens, and peak memory.
 
-**Step 4: Stop on failure**
+**Step 4: Diagnose a failed R1 without modifying its artifacts**
 
 If a gate fails, capture exact artifacts, reproduce the smallest failing example, add a
-failing local test, fix, verify, commit, push, and rerun only the preflight.
+failing local test, and write the root cause to the failure ledger. A failed R1 does not
+permit full collection or training.
+
+**Step 5: Add explicit role-specific decoding for R2 when required**
+
+**Files:**
+- Modify: `implementation/src/text_feedback_dpo/experiment_config.py`
+- Modify: `implementation/src/text_feedback_dpo/collection.py`
+- Modify: `implementation/src/text_feedback_dpo/models.py`
+- Modify: `implementation/src/text_feedback_dpo/evaluators.py`
+- Modify: `implementation/src/text_feedback_dpo/prompts.py`
+- Modify: `implementation/configs/paper/gsm8k.yaml`
+- Modify: `implementation/configs/paper/searchqa8k.yaml`
+- Modify: `implementation/tests/test_experiment_config.py`
+- Modify: `implementation/tests/test_collection.py`
+- Modify: `implementation/tests/test_models.py`
+- Modify: `implementation/tests/test_guidance_policy.py`
+
+Write failing tests proving that the student alone uses thinking plus sampled
+`1.0/0.95/20/1.5` decoding and 2,048 tokens. Require teacher greedy non-thinking
+decoding with 64 tokens, evaluator greedy non-thinking decoding with 256 tokens, and
+guard greedy non-thinking decoding with eight tokens. Greedy profiles must omit
+temperature, top-p, top-k, and presence penalty instead of passing ignored values.
+Missing or inherited profiles fail config validation.
+
+Calibrate the model-based guard with explicit safe relation-level hints and unsafe
+answer-bearing hints from the audited R1 failures. The guard's sole question is whether
+the accumulated guidance discloses the answer or an equivalent, not whether the hint is
+useful. Keep strict parsing, zero answer leakage, bounded repair turns, and full raw
+logging; do not replace semantic judgment with keywords or regexes.
+
+Run focused tests, the entire local suite, compile checks, and shell syntax checks.
+Commit and push the protocol change before syncing only `implementation/` to Turing.
+
+**Step 6: Run R2 from scratch and freeze the passing protocol**
+
+Write R2 to `collection-preflight-r2/`; never append it to R1. Re-run all 64 examples,
+audit every record, and enforce every Step 3 gate. If R2 fails, repeat the same
+test-first failure workflow under R3 rather than relaxing a gate. When a preflight
+passes, freeze its config, prompts, role profiles, evaluator, guard, package lock,
+model revisions, and artifact schema hashes for full GSM8K collection.
 
 ## Task 16: Run Full GSM8K Collection and Merge
 
@@ -682,6 +763,11 @@ failing local test, fix, verify, commit, push, and rerun only the preflight.
 
 Choose the largest shard size projected below three hours. Start with 256 examples per
 shard, yielding 27 shards, and adjust only from measured throughput.
+
+Before submission, restore the persistent-storage gate: at least 8 GB free and less
+than 85% utilization. Stage and hash the pinned model cache on every eligible node, or
+constrain jobs to a node whose cache has been verified. A missing node-local cache is a
+hard scheduling error, not permission to download an untracked replacement.
 
 **Step 2: Submit the array at verified account concurrency**
 
@@ -854,8 +940,9 @@ evaluator result.
 
 **Step 3: Enforce the same gates plus evidence coverage**
 
-Require answer-alias evidence coverage and report any deterministic truncation. Freeze
-the SearchQA reward only after preflight audit.
+Require answer-alias evidence coverage and report any deterministic truncation. Verify
+the already frozen `0.55/0.25/0.10/0.10` SearchQA reward implementation during
+preflight; do not tune reward weights from preflight outcomes.
 
 ## Task 22: Run Full SearchQA-8K Collection
 
@@ -902,6 +989,9 @@ multilevel DPO with identical updates. Report this as an ablation, not part of t
 three-seed table. If either method cannot use the identical setup, omit the ablation
 rather than use asymmetric settings.
 
+This task is non-blocking and is not part of the paper completion definition. The main
+study is LoRA because full fine-tuning would change the compute and optimization budget.
+
 ## Task 26: Final Cross-Domain Report and Completion Audit
 
 **Files/Artifacts:**
@@ -926,7 +1016,7 @@ raw logs, telemetry, reports, Git commits, and reproduction commands.
 
 ```bash
 cd implementation
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 git diff --check
 git status --short --branch
 ssh aryama.murthy@turing.iiit.ac.in 'squeue -u "$USER"; df -h "$HOME" /scratch/node01'

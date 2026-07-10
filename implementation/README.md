@@ -1,6 +1,9 @@
-# Textual Feedback DPO Basic Pipeline
+# Multilevel Feedback DPO Implementation
 
-This folder starts with the minimal observable pipeline only. It does not train Qwen, run GRPO, or launch Turing jobs yet.
+This folder contains the observable native-Qwen collection, preference construction,
+DPO/GRPO training, held-out evaluation, reporting, and Turing Slurm workflows. Paper
+runs are fail-fast and remain blocked until the preceding preflight and freeze gates
+pass.
 
 Run the basic pipeline smoke check:
 
@@ -42,7 +45,7 @@ sbatch -A <account> --job-name=tfdpo-basic-pairs \
   scripts/turing_basic_pair_generation.sh
 ```
 
-These jobs only verify model loading and tiny pair generation. They do not start DPO, GRPO, or distillation training.
+These two commands are legacy runtime smokes. They do not authorize paper training.
 
 Current smoke generation settings:
 
@@ -54,3 +57,8 @@ presence_penalty: 1.5
 ```
 
 `temperature`, `top_p`, and `top_k` are passed directly to Hugging Face Transformers `generate()`. `presence_penalty` is not a native Transformers `GenerationConfig` field, so this repo applies it through a custom logits processor that subtracts the penalty from tokens already present in the sequence. This is explicit and tested; it is not mapped silently to `repetition_penalty`.
+
+The paper plan applies these sampling settings only to student rollouts. Teacher,
+evaluator, and guidance-guard roles use separately configured non-thinking decoding
+profiles. See `../docs/plans/2026-07-10-paper-scale-experiment-implementation.md` for
+the exact execution order, storage gates, and artifact requirements.

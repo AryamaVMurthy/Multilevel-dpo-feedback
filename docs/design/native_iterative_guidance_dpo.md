@@ -32,6 +32,12 @@ supported non-thinking chat-template mode so short guidance and machine-readable
 judgments do not spend their entire output budget on internal reasoning. This is a
 serialization control for those roles, not a student-format constraint.
 
+The student uses sampled thinking-mode decoding with temperature `1.0`, top-p `0.95`,
+top-k `20`, presence penalty `1.5`, and at most 2,048 new tokens. The teacher,
+evaluator, and guard use explicit non-thinking greedy profiles with maximum output
+budgets of 64, 256, and eight tokens respectively. These profiles are independently
+hashed and logged; structured roles never inherit student sampling settings.
+
 Evaluation is a separate role. It returns a small structured judgment containing
 correctness, extracted answer, confidence, and reason. This structure belongs to the
 evaluator contract, not to the student's answer-generation contract.
@@ -145,3 +151,10 @@ This anchor must be logged separately from DPO loss.
   2,000/500 auxiliary tuning pool from unused original official rows.
 - Defined original `loss_type="grpo"` as the primary GRPO baseline and relegated the
   current DAPO loss to a separately labeled one-seed sensitivity run.
+- Materialized and validated the complete pinned GSM8K paper split: 6,726 train, 747
+  validation, and 1,319 official test rows, with validation partitioned 500/247.
+- Started an immutable 64-example GSM8K R1 preflight. Partial evidence showed repeated
+  malformed evaluator outputs before bounded evaluator repair was added, and an
+  over-conservative guidance guard rejecting broad relation-level hints. R1 must finish
+  unchanged; if its final gate fails, R2 will use explicit role-specific decoding and
+  audited model-guard calibration under a new artifact path and protocol hash.

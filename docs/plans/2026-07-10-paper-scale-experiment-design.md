@@ -1,10 +1,24 @@
 # Paper-Scale Multilevel Feedback Experiment Design
 
-Status: approved for implementation; optimizer revision approved on 2026-07-10
+Status: approved and execution-ready; GSM8K collection preflight in progress on
+2026-07-10
 
 The canonical optimizer and search protocol is
 `docs/design/training_hyperparameter_protocol.md`. If a historical smoke constant or
 older plan conflicts with that document, the canonical protocol controls.
+
+## Execution Checkpoint
+
+- Implementation foundations, local tests, Turing scripts, the locked environment,
+  and the pinned GSM8K manifest are complete.
+- The GSM8K manifest contains 6,726 train, 747 validation, and 1,319 official-test
+  rows; validation is partitioned into 500 tuning and 247 confirmation rows.
+- The first 64-example GSM8K collection policy is running as an immutable R1
+  preflight. Its partial results are diagnostic only and cannot authorize training.
+- Full GSM8K collection, all training, official-test evaluation, and all SearchQA work
+  remain blocked until their preceding gates pass.
+- The exact operational sequence and current evidence are maintained in
+  `docs/plans/2026-07-10-paper-scale-experiment-implementation.md`.
 
 ## Research Question
 
@@ -29,6 +43,24 @@ protocol?
 - Student completion budget: 2048 tokens.
 - Original GRPO is the primary online-RL baseline; a DAPO-loss run is labeled only as
   a sensitivity analysis.
+
+## Role-Specific Generation Profiles
+
+The official Qwen sampling settings apply to the student policy, which is the object
+being evaluated. They are not silently reused for machine-readable control roles.
+
+| Role | Thinking | Decoding | Maximum new tokens | Purpose |
+| --- | --- | --- | ---: | --- |
+| student | enabled | sampled: temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5 | 2048 | natural problem solving and retries |
+| teacher | disabled | greedy | 64 | one very slight answer-free hint |
+| evaluator | disabled | greedy | 256 | structured answer extraction and judgment |
+| guidance guard | disabled | greedy | 8 | exact `SAFE` or `UNSAFE` verdict |
+
+Each role profile is explicit in the config and run manifest. Greedy roles do not
+receive ignored sampling parameters. Evaluator repair and teacher regeneration are
+bounded, separately logged turns with the prior invalid raw output and error included;
+exhaustion is a hard failure. This separation does not constrain the student's native
+thinking or response format.
 
 ## Dataset Protocol
 
@@ -161,9 +193,9 @@ because it changes compute, storage, and optimization conditions.
 The current substring reward is prohibited.
 
 GSM8K reward uses canonical numeric correctness after evaluator-backed final-answer
-extraction. SearchQA reward is frozen after preflight as:
+extraction. SearchQA reward is frozen before preflight as:
 
-`0.70 * exact_match + 0.15 * token_f1 + 0.10 * evidence_support + 0.05 * answer_type_correct`
+`0.55 * exact_match + 0.25 * token_f1 + 0.10 * evidence_support + 0.10 * answer_type_correct`
 
 Original GRPO uses four generations per prompt, one policy iteration per generation
 batch, clipping epsilon `0.2`, within-group reward scaling, a 2048-token completion
@@ -198,6 +230,15 @@ correction across method comparisons, and effect sizes.
 - Use node-local scratch for model caches, datasets, environments, and compressed raw
   trajectories.
 - Keep only manifests, metrics, reports, and final LoRA adapters in `/home`.
+- Use `/home/aryama.murthy/multilevel-feedback-dpo/implementation` for synced code,
+  `/home/aryama.murthy/tfdpo-runs` for small persistent run metadata, and a
+  revision-keyed cache under the allocated node's scratch. Never whole-tree rsync a
+  remote run directory with `--delete`.
+- Before every phase, require at least 8 GB free and less than 85% utilization in the
+  persistent destination. If the gate fails, inventory storage and remove only
+  verified disposable caches or duplicates; no job starts until headroom is restored.
+- Archive compressed raw trajectories to the local workstation outside Git after each
+  completed phase, verify hashes, and only then remove scratch copies.
 - Every job records commit, config, seed, package versions, dataset revisions, node,
   GPU, CUDA visibility, start/end times, and GPU telemetry.
 - Failed shards remain explicit and are never silently skipped during merge.
@@ -215,6 +256,7 @@ Full collection gates:
 - zero prompt/guidance/gold leakage;
 - peak GPU memory below 90% of device memory;
 - completion truncation at most 5%;
+- structured-role profile and prompt hashes match the approved preflight;
 - every shard and merged artifact passes schema validation.
 
 Final test runs begin only after prompts, rewards, hyperparameters, stopping rules, and

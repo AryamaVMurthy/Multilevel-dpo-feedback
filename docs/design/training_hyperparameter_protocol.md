@@ -1,6 +1,6 @@
 # Training Hyperparameter Protocol
 
-Status: approved on 2026-07-10
+Status: approved and reverified against current official documentation on 2026-07-10
 
 This document is the canonical optimizer, LoRA coverage, hyperparameter search, and
 model-selection protocol for the paper-scale GSM8K and SearchQA-8K experiments. The
@@ -15,13 +15,19 @@ are runtime checks only and are not approved paper settings.
 | [TRL GRPO trainer](https://huggingface.co/docs/trl/grpo_trainer) | official software documentation | KL beta, clipping, update count, loss variants, reward scaling, truncation masking |
 | [Transformers TrainingArguments](https://github.com/huggingface/transformers/blob/main/src/transformers/training_args.py) | official source | fused AdamW, Adam coefficients, scheduler, warmup, weight decay, clipping |
 | [PEFT LoRA guide](https://github.com/huggingface/peft/blob/main/docs/source/developer_guides/quantization.md) | official software documentation | broad linear-module targeting support |
-| [Qwen3.5-2B model card](https://huggingface.co/Qwen/Qwen3.5-2B) | official model documentation | model identity, architecture, chat template, supported Transformers integration |
+| [Qwen3.5-2B model card](https://huggingface.co/Qwen/Qwen3.5-2B) | official model documentation | model identity, architecture, chat template, thinking-mode sampling, and thinking-loop warning |
 | [Direct Preference Optimization](https://papers.neurips.cc/paper_files/paper/2023/file/a85b405ed65c6477a4fe8302b5e06ce7-Paper-Conference.pdf) | peer-reviewed NeurIPS 2023 paper | standard DPO objective and beta sensitivity |
 | [Beta-DPO](https://proceedings.neurips.cc/paper_files/paper/2024/file/ea888178abdb6fc233226d12321d754f-Paper-Conference.pdf) | peer-reviewed NeurIPS 2024 paper | evidence that DPO performance is beta-sensitive |
 
 The exact Git revisions and installed versions of TRL, Transformers, PEFT, PyTorch,
 Accelerate, Datasets, and Qwen model artifacts are frozen in each run manifest. A
 full job must fail if its installed API does not expose every configured field.
+
+In particular, paper GRPO explicitly sets `loss_type="grpo"` because current TRL
+defaults may select another loss variant, and explicitly enables
+`mask_truncated_completions`. DPO sets `max_length` for the combined
+prompt/completion sequence; removed legacy DPO length arguments are prohibited. The
+locked package APIs are inspected in a model-load preflight before any candidate run.
 
 ## Qwen3.5 LoRA Coverage Gate
 

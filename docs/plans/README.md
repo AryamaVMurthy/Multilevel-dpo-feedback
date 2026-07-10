@@ -13,9 +13,7 @@ Supporting canonical specifications:
   decision log.
 - `../design/training_hyperparameter_protocol.md`: optimizer, Qwen3.5 LoRA coverage,
   deterministic hyperparameter search, model selection, and freeze rules.
-- `../status/2026-07-09-turing-smoke-attempt.md`: historical smoke-run evidence.
-
-The removed 2026-07-09 planning documents described superseded XML formatting,
-fixture-only pipelines, and pretest settings. Their completed findings remain in the
-living method specification and status record. Historical smoke constants must not be
-used for paper training.
+The removed 2026-07-09 planning and status documents described superseded XML
+formatting, fixture-only pipelines, pretest settings, and an obsolete SSH blocker.
+Their relevant findings remain in the living method specification and Git history.
+Historical smoke constants must not be used for paper training.

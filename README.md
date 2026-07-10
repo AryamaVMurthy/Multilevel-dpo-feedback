@@ -1,13 +1,16 @@
 # Multilevel DPO Feedback
 
-This repository contains the V1 textual-feedback DPO research prototype design and the first basic observable pipeline.
+This repository contains the implementation and paper-scale execution protocol for
+native multilevel-feedback DPO with Qwen3.5.
 
 Current status:
 
-- Design PDF: `v1_textual_feedback_dpo_design.pdf`
-- Planning docs: `docs/plans/`
-- Basic pipeline implementation: `implementation/`
-- Model training, GRPO, on-policy distillation, and Turing jobs have not started yet.
+- Original design source: `v1_textual_feedback_dpo_design.pdf`.
+- Canonical living method: `docs/design/native_iterative_guidance_dpo.md`.
+- Paper design and execution plan: `docs/plans/`.
+- Tested implementation and Turing workflows: `implementation/`.
+- Current state: GSM8K data is materialized and the 64-example collection preflight is
+  running. Full collection and training remain gated; SearchQA-8K follows GSM8K.
 
 Run the basic local pipeline:
 
@@ -28,6 +31,10 @@ PYTHONPATH=src python3 -m unittest tests.test_basic_pipeline -v
 PYTHONPATH=src python3 -m compileall -q src tests
 ```
 
+For paper execution, use
+`docs/plans/2026-07-10-paper-scale-experiment-implementation.md`. Smoke commands and
+their constants are runtime checks only, not paper hyperparameters.
+
 The basic pipeline writes observable artifacts:
 
 - `events.jsonl`
@@ -35,4 +42,3 @@ The basic pipeline writes observable artifacts:
 - `pairs.jsonl`
 - `rejections.jsonl`
 - `report.html`
-
