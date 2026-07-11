@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from text_feedback_dpo.dataset_manifests import (
+    audit_paper_dataset,
     canonical_row_hash,
     exclude_math_train_test_overlaps,
     materialize_paper_dataset,
@@ -172,6 +173,144 @@ class DatasetManifestTest(unittest.TestCase):
             self.assertTrue((Path(tmp) / "train.jsonl.zst").is_file())
             self.assertTrue((Path(tmp) / "validation.jsonl.zst").is_file())
             self.assertEqual(manifest["metadata"]["dataset"], "gsm8k")
+
+    def test_audit_recomputes_manifest_artifacts_and_math_role_policy(self):
+        primary_rows = [
+            {
+                "id": f"math-{subject}-{level}-{index}",
+                "problem": f"Problem {subject} {level} {index}",
+                "gold_answer": str(index),
+                "source_subject": subject,
+                "difficulty_level": level,
+            }
+            for subject in ("algebra", "geometry")
+            for level in (4, 5)
+            for index in range(20)
+        ]
+        split = split_math_train(primary_rows, seed=7)
+        split["test"] = [
+            {
+                **row,
+                "dataset_role": "test",
+            }
+            for row in split_math_train(
+                [
+                    {
+                        "id": f"test-{subject}-{level}-{index}",
+                        "problem": f"Test problem {subject} {level} {index}",
+                        "gold_answer": str(index),
+                        "source_subject": subject,
+                        "difficulty_level": level,
+                    }
+                    for subject in ("algebra", "geometry")
+                    for level in (4, 5)
+                    for index in range(10)
+                ],
+                seed=8,
+            )["train"][:2]
+        ]
+        for index, row in enumerate(split["test"]):
+            row["source_split"] = "test"
+            row["source_key"] = f"test:{index}"
+            row["source_index"] = index
+        nested = split_math_validation_roles(split["validation"], seed=7)
+        dataset = SimpleNamespace(
+            name="math",
+            source="EleutherAI/hendrycks_math",
+            revision="a" * 40,
+            source_counts={"train": 80, "validation": 0, "test": 2},
+            seed=7,
+            subjects=("algebra", "geometry"),
+            primary_levels=(4, 5),
+            train_fraction=0.9,
+            validation_tune_fraction=2 / 3,
+        )
+        config = SimpleNamespace(dataset=dataset)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "dataset"
+            manifest = write_manifest_bundle(
+                root,
+                split,
+                metadata={
+                    "dataset": dataset.name,
+                    "source": dataset.source,
+                    "revision": dataset.revision,
+                    "source_artifact_sha256": "b" * 64,
+                    "seed": dataset.seed,
+                    "subjects": list(dataset.subjects),
+                    "primary_levels": list(dataset.primary_levels),
+                    "train_fraction": dataset.train_fraction,
+                    "validation_tune_fraction": dataset.validation_tune_fraction,
+                    "train_test_exclusions": [],
+                },
+                nested_roles=nested,
+            )
+            output = Path(tmp) / "audit.json"
+            audit = audit_paper_dataset(config, root, output_path=output)
+
+            self.assertEqual(audit["schema"], "paper-dataset-audit-v1")
+            self.assertEqual(audit["status"], "passed")
+            self.assertEqual(audit["manifest_content_sha256"], manifest["content_sha256"])
+            self.assertEqual(audit["roles"], manifest["roles"])
+            self.assertTrue(output.is_file())
+            self.assertTrue(all(len(value) == 64 for value in audit["artifact_sha256"].values()))
+
+    def test_audit_fails_on_tampered_role_artifact(self):
+        rows = split_gsm8k_train(self._gsm_rows(4), seed=7, validation_count=1)
+        dataset = SimpleNamespace(
+            name="gsm8k",
+            source="openai/gsm8k",
+            revision="a" * 40,
+            source_counts={"train": 4, "validation": 0, "test": 1},
+            seed=7,
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_manifest_bundle(
+                root,
+                rows,
+                metadata={
+                    "dataset": dataset.name,
+                    "source": dataset.source,
+                    "revision": dataset.revision,
+                    "source_artifact_sha256": "b" * 64,
+                    "seed": dataset.seed,
+                },
+            )
+            (root / "train.jsonl.zst").write_bytes(b"tampered")
+
+            with self.assertRaisesRegex(ValueError, "could not be decoded"):
+                audit_paper_dataset(SimpleNamespace(dataset=dataset), root)
+
+    def test_audit_fails_when_manifest_content_hash_is_wrong(self):
+        rows = split_gsm8k_train(self._gsm_rows(4), seed=7, validation_count=1)
+        dataset = SimpleNamespace(
+            name="gsm8k",
+            source="openai/gsm8k",
+            revision="a" * 40,
+            source_counts={"train": 4, "validation": 0, "test": 1},
+            seed=7,
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_manifest_bundle(
+                root,
+                rows,
+                metadata={
+                    "dataset": dataset.name,
+                    "source": dataset.source,
+                    "revision": dataset.revision,
+                    "source_artifact_sha256": "b" * 64,
+                    "seed": dataset.seed,
+                },
+            )
+            manifest_path = root / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["content_sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "content_sha256 mismatch"):
+                audit_paper_dataset(SimpleNamespace(dataset=dataset), root)
 
     def test_gsm_validation_roles_partition_validation_and_are_written_as_nested_artifacts(self):
         rows = split_gsm8k_train(self._gsm_rows(6), seed=7, validation_count=3)

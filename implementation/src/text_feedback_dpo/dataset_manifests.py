@@ -492,6 +492,245 @@ def write_manifest_bundle(
     return manifest
 
 
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _load_manifest_role(path: Any) -> list[dict[str, Any]]:
+    from pathlib import Path
+
+    import zstandard
+
+    from text_feedback_dpo.io import read_jsonl_zst
+
+    artifact = Path(path)
+    try:
+        rows = read_jsonl_zst(artifact)
+    except (OSError, UnicodeError, json.JSONDecodeError, zstandard.ZstdError) as exc:
+        raise ValueError(f"dataset role artifact could not be decoded: {artifact}: {exc}") from exc
+    if not all(isinstance(row, dict) for row in rows):
+        raise ValueError(f"dataset role artifact contains a non-object row: {artifact}")
+    return rows
+
+
+def _validate_manifest_role(
+    *,
+    role: str,
+    rows: list[dict[str, Any]],
+    expected_count: object,
+    expected_hashes: object,
+) -> None:
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        raise ValueError(f"manifest count for role {role} must be a non-negative integer")
+    if len(rows) != expected_count:
+        raise ValueError(
+            f"manifest count mismatch for role {role}: expected {expected_count}, found {len(rows)}"
+        )
+    if not isinstance(expected_hashes, list) or not all(
+        isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in expected_hashes
+    ):
+        raise ValueError(f"manifest row_hashes for role {role} are invalid")
+    actual_hashes = [row.get("row_hash") for row in rows]
+    if actual_hashes != expected_hashes:
+        raise ValueError(f"manifest row_hash mismatch for role {role}")
+    for index, row in enumerate(rows):
+        if row.get("dataset_role") != role:
+            raise ValueError(
+                f"dataset role mismatch in {role} row {index}: {row.get('dataset_role')!r}"
+            )
+        if not isinstance(row.get("source_key"), str) or not row["source_key"]:
+            raise ValueError(f"dataset role {role} row {index} has no source_key")
+
+
+def _validate_math_audit_policy(config: Any, manifest: Mapping[str, Any], roles: Mapping[str, list[dict[str, Any]]], nested: Mapping[str, list[dict[str, Any]]]) -> None:
+    dataset = config.dataset
+    metadata = manifest["metadata"]
+    if set(roles) != {"train", "validation", "test"}:
+        raise ValueError("MATH manifest must contain exactly train, validation, and test roles")
+    for role in ("train", "validation"):
+        if any(row.get("difficulty_level") not in dataset.primary_levels for row in roles[role]):
+            raise ValueError(f"MATH {role} contains a row outside frozen primary levels")
+        if any(row.get("source_split") != "train" for row in roles[role]):
+            raise ValueError(f"MATH {role} contains a row not sourced from official train")
+    if len(roles["test"]) != dataset.source_counts["test"]:
+        raise ValueError("MATH official test role count does not match frozen source count")
+    if any(row.get("source_split") != "test" for row in roles["test"]):
+        raise ValueError("MATH official test role contains a row not sourced from test")
+    combined_primary = roles["train"] + roles["validation"]
+    strata: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in combined_primary:
+        strata[_math_stratum(row)].append(row)
+    for stratum, rows in strata.items():
+        expected_validation = min(len(rows) - 1, max(1, round(len(rows) * (1 - dataset.train_fraction))))
+        actual_validation = sum(row["dataset_role"] == "validation" for row in rows)
+        if actual_validation != expected_validation:
+            raise ValueError(
+                f"MATH validation fraction mismatch for {stratum}: "
+                f"expected {expected_validation}, found {actual_validation}"
+            )
+    if set(nested) != {"tune", "confirm"}:
+        raise ValueError("MATH manifest must contain tune and confirm validation roles")
+    nested_by_stratum: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for rows in nested.values():
+        for row in rows:
+            nested_by_stratum[_math_stratum(row)].append(row)
+    for stratum, rows in nested_by_stratum.items():
+        expected_tune = min(
+            len(rows) - 1,
+            max(1, round(len(rows) * dataset.validation_tune_fraction)),
+        )
+        actual_tune = sum(row["dataset_role"] == "validation_tune" for row in rows)
+        if actual_tune != expected_tune:
+            raise ValueError(
+                f"MATH tune fraction mismatch for {stratum}: expected {expected_tune}, found {actual_tune}"
+            )
+    exclusions = metadata.get("train_test_exclusions")
+    if not isinstance(exclusions, list):
+        raise ValueError("MATH metadata train_test_exclusions must be a list")
+    for item in exclusions:
+        if not isinstance(item, dict) or item.get("reason") != "normalized_problem_present_in_official_test":
+            raise ValueError("MATH train-test exclusion has invalid provenance")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(item.get("row_hash", ""))):
+            raise ValueError("MATH train-test exclusion has invalid row_hash")
+    official_revision = "21a5633873b6a120296cce3e2df9d5550074f4a3"
+    if dataset.revision == official_revision:
+        expected_ids = {
+            "math-algebra-train-750",
+            "math-algebra-train-1414",
+            "math-algebra-train-1598",
+            "math-geometry-train-433",
+        }
+        if {item.get("id") for item in exclusions} != expected_ids:
+            raise ValueError("MATH pinned snapshot overlap quarantine does not match the reviewed set")
+
+
+def audit_paper_dataset(config: Any, dataset_dir: Any, *, output_path: Any | None = None) -> dict[str, Any]:
+    """Fail fast unless a materialized paper dataset exactly matches its frozen manifest."""
+
+    from pathlib import Path
+
+    from text_feedback_dpo.io import write_json_atomic
+
+    root = Path(dataset_dir)
+    manifest_path = root / "manifest.json"
+    if not root.is_dir() or not manifest_path.is_file():
+        raise FileNotFoundError(f"materialized dataset manifest does not exist: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"dataset manifest could not be decoded: {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != "paper-dataset-manifest-v1":
+        raise ValueError("dataset manifest schema must be paper-dataset-manifest-v1")
+    content = manifest.get("content")
+    if not isinstance(content, dict):
+        raise ValueError("dataset manifest content must be an object")
+    expected_content_keys = {"metadata", "roles", "row_hashes", "nested_roles", "nested_row_hashes"}
+    if set(content) != expected_content_keys:
+        raise ValueError("dataset manifest content keys do not match paper-dataset-manifest-v1")
+    for key in expected_content_keys:
+        if manifest.get(key) != content[key]:
+            raise ValueError(f"dataset manifest top-level {key} does not match content")
+    content_sha256 = _sha256_json(content)
+    if manifest.get("content_sha256") != content_sha256:
+        raise ValueError("dataset manifest content_sha256 mismatch")
+    metadata = manifest["metadata"]
+    dataset = config.dataset
+    expected_metadata = {
+        "dataset": dataset.name,
+        "source": dataset.source,
+        "revision": dataset.revision,
+        "seed": dataset.seed,
+    }
+    for key, expected in expected_metadata.items():
+        if metadata.get(key) != expected:
+            raise ValueError(f"dataset manifest metadata {key} mismatch")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("source_artifact_sha256", ""))):
+        raise ValueError("dataset manifest source_artifact_sha256 is invalid")
+    role_counts = manifest["roles"]
+    row_hashes = manifest["row_hashes"]
+    nested_counts = manifest["nested_roles"]
+    nested_hashes = manifest["nested_row_hashes"]
+    if not all(isinstance(value, dict) for value in (role_counts, row_hashes, nested_counts, nested_hashes)):
+        raise ValueError("dataset manifest role fields must be objects")
+    if set(role_counts) != set(row_hashes) or set(nested_counts) != set(nested_hashes):
+        raise ValueError("dataset manifest role and row-hash keys differ")
+    expected_artifacts = {"manifest.json"}
+    expected_artifacts.update(f"{role}.jsonl.zst" for role in role_counts)
+    expected_artifacts.update(f"validation_{role}.jsonl.zst" for role in nested_counts)
+    actual_artifacts = {path.name for path in root.iterdir() if path.is_file()}
+    if actual_artifacts != expected_artifacts:
+        missing = sorted(expected_artifacts - actual_artifacts)
+        unexpected = sorted(actual_artifacts - expected_artifacts)
+        raise ValueError(f"dataset artifact inventory mismatch: missing={missing}, unexpected={unexpected}")
+    roles: dict[str, list[dict[str, Any]]] = {}
+    artifact_sha256: dict[str, str] = {}
+    for role in sorted(role_counts):
+        artifact = root / f"{role}.jsonl.zst"
+        rows = _load_manifest_role(artifact)
+        _validate_manifest_role(
+            role=role,
+            rows=rows,
+            expected_count=role_counts[role],
+            expected_hashes=row_hashes[role],
+        )
+        roles[role] = rows
+        artifact_sha256[artifact.name] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    validate_disjoint_splits(row for rows in roles.values() for row in rows)
+    nested: dict[str, list[dict[str, Any]]] = {}
+    for role in sorted(nested_counts):
+        artifact = root / f"validation_{role}.jsonl.zst"
+        rows = _load_manifest_role(artifact)
+        _validate_manifest_role(
+            role=f"validation_{role}",
+            rows=rows,
+            expected_count=nested_counts[role],
+            expected_hashes=nested_hashes[role],
+        )
+        nested[role] = rows
+        artifact_sha256[artifact.name] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    if nested:
+        validation_keys = {row["source_key"] for row in roles.get("validation", [])}
+        nested_keys = [row["source_key"] for rows in nested.values() for row in rows]
+        if len(nested_keys) != len(set(nested_keys)) or set(nested_keys) != validation_keys:
+            raise ValueError("nested validation roles do not partition validation")
+        validate_disjoint_splits(row for rows in nested.values() for row in rows)
+    if dataset.name == "math":
+        for key, expected in {
+            "subjects": list(dataset.subjects),
+            "primary_levels": list(dataset.primary_levels),
+            "train_fraction": dataset.train_fraction,
+            "validation_tune_fraction": dataset.validation_tune_fraction,
+        }.items():
+            if metadata.get(key) != expected:
+                raise ValueError(f"MATH manifest metadata {key} mismatch")
+        _validate_math_audit_policy(config, manifest, roles, nested)
+    audit = {
+        "schema": "paper-dataset-audit-v1",
+        "status": "passed",
+        "dataset": dataset.name,
+        "dataset_dir": str(root),
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "manifest_content_sha256": content_sha256,
+        "source_artifact_sha256": metadata["source_artifact_sha256"],
+        "roles": role_counts,
+        "nested_roles": nested_counts,
+        "artifact_sha256": artifact_sha256,
+        "train_test_exclusion_count": len(metadata.get("train_test_exclusions", [])),
+    }
+    if output_path is not None:
+        output = Path(output_path)
+        if output.exists():
+            existing = json.loads(output.read_text(encoding="utf-8"))
+            if existing != audit:
+                raise ValueError(f"refusing to overwrite different dataset audit: {output}")
+        else:
+            write_json_atomic(output, audit)
+    return audit
+
+
 def _read_json_rows(path: Any) -> list[dict[str, Any]]:
     from pathlib import Path
 

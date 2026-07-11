@@ -235,14 +235,27 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertTrue(result["require_freeze_manifest_for_test"])
 
     def test_materialize_cli_validates_config_before_delegating(self):
-        with mock.patch("text_feedback_dpo.cli.materialize_paper_dataset", return_value={"ok": True}) as materialize:
+        materialized = {
+            "output_dir": "/tmp/gsm8k-output",
+            "manifest": {
+                "schema": "paper-dataset-manifest-v1",
+                "metadata": {"dataset": "gsm8k"},
+                "roles": {"train": 10, "validation": 2, "test": 3},
+                "nested_roles": {"tune": 1, "confirm": 1},
+                "content_sha256": "a" * 64,
+            },
+        }
+        with mock.patch("text_feedback_dpo.cli.materialize_paper_dataset", return_value=materialized) as materialize:
             result = run_materialize_dataset(
                 Path("configs/paper/gsm8k.yaml"),
                 Path("/tmp/gsm8k-source"),
                 Path("/tmp/gsm8k-output"),
             )
 
-        self.assertEqual(result, {"ok": True})
+        self.assertEqual(result["schema"], "paper-dataset-materialization-summary-v1")
+        self.assertEqual(result["dataset"], "gsm8k")
+        self.assertEqual(result["roles"], {"train": 10, "validation": 2, "test": 3})
+        self.assertEqual(result["content_sha256"], "a" * 64)
         self.assertEqual(materialize.call_args.args[1:], (Path("/tmp/gsm8k-source"), Path("/tmp/gsm8k-output")))
 
 

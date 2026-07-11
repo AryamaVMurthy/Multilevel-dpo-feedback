@@ -260,3 +260,31 @@ No actions have been logged under this control policy yet.
 - Job 13114: `COMPLETED`, exit `0:0`, node01, elapsed 00:01:23, MaxRSS 179,692 KiB, 0 GPUs.
 - MATH job generated all seven official subject train/test splits and passed the aggregate 7,500 train / 5,000 test count check.
 - Total accounted GPU-hours: 0.
+
+## 2026-07-11T21:31:16+05:30 - sync and submit full MATH materialization
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command fast-forwarding only to `0544a4674ed16ce9704e92d1fee28cb494202eb6`, verifying clean status and empty queue, then submitting one node01 CPU-only `turing_materialize_dataset.sh` job.
+- Purpose: normalize all official rows, preserve provenance and reviewed errata, quarantine source duplicates and train-test overlaps, derive deterministic Level 4-5 train/validation and 2:1 tune/confirmation roles, hash artifacts, and retain the untouched 5,000-row test split.
+- Source path: `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-source`.
+- Output path: `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-materialized-v1`.
+- Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 32 GiB, 01:00:00, 0 GPUs, 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:31:56+05:30
+
+- Source fast-forward and exact commit verification succeeded.
+- Slurm job ID: `13116`; pre-submit queue was empty.
+
+## 2026-07-11T21:32:16+05:30 - monitor MATH materialization job 13116
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, and bounded job stdout/stderr until terminal state.
+- Purpose: capture materialization failure context and resource accounting before a separate node-local manifest audit.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:33:01+05:30
+
+- Job 13116: `COMPLETED`, exit `0:0`, node01, elapsed `00:00:02`, MaxRSS `8,712 KiB`, 0 GPUs.
+- The materializer retained the official 5,000-row test role, created 402 Level 4-5 validation rows partitioned into 270 tune and 132 confirmation rows, and quarantined four reviewed official-train/official-test overlaps with row-level provenance.
+- The job emitted a full manifest to stdout; the next tested revision replaces that noisy output with a bounded summary. No dataset is accepted from this result until the separate node-local integrity and protocol audit passes.
+- Total accounted GPU-hours: 0.

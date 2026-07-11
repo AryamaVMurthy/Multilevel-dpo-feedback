@@ -10,6 +10,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_download_dataset_source.sh",
             "turing_download_math_source.sh",
             "turing_materialize_dataset.sh",
+            "turing_audit_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",
@@ -60,6 +61,12 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("SUBSET_SEED:?SUBSET_SEED is required", preflight)
         self.assertIn('OUTPUT_MANIFEST="$(dirname "$OUTPUT_PATH")/manifest.json"', preflight)
         self.assertIn('cmp -s "$DATASET_MANIFEST" "$OUTPUT_MANIFEST"', preflight)
+        audit = Path("scripts/turing_audit_dataset.sh").read_text(encoding="utf-8")
+        self.assertIn("audit-dataset", audit)
+        self.assertIn("DATASET_DIR:?DATASET_DIR is required", audit)
+        self.assertIn("AUDIT_OUTPUT:?AUDIT_OUTPUT is required", audit)
+        self.assertIn('"$DATASET_DIR" != /scratch/*', audit)
+        self.assertIn("uv run --frozen --no-sync python", audit)
         freeze_baseline = Path("scripts/turing_freeze_baseline.sh").read_text(encoding="utf-8")
         self.assertIn("freeze-baseline", freeze_baseline)
         self.assertIn("DATASET_MANIFEST:?DATASET_MANIFEST is required", freeze_baseline)
@@ -124,6 +131,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_download_dataset_source.sh",
             "turing_download_math_source.sh",
             "turing_materialize_dataset.sh",
+            "turing_audit_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",

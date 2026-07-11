@@ -20,7 +20,11 @@ from text_feedback_dpo.evaluation_audit import (
     audit_checkpoint_evaluation,
     rescore_checkpoint_evaluation,
 )
-from text_feedback_dpo.dataset_manifests import materialize_paper_dataset, materialize_preflight_subset
+from text_feedback_dpo.dataset_manifests import (
+    audit_paper_dataset,
+    materialize_paper_dataset,
+    materialize_preflight_subset,
+)
 from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
@@ -686,7 +690,22 @@ def run_validate_paper_config(config_path: Path) -> dict[str, object]:
 def run_materialize_dataset(config_path: Path, source_path: Path, output_dir: Path) -> dict[str, object]:
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
-    return materialize_paper_dataset(config, source_path, output_dir)
+    result = materialize_paper_dataset(config, source_path, output_dir)
+    manifest = result["manifest"]
+    return {
+        "schema": "paper-dataset-materialization-summary-v1",
+        "dataset": manifest["metadata"]["dataset"],
+        "output_dir": result["output_dir"],
+        "roles": manifest["roles"],
+        "nested_roles": manifest["nested_roles"],
+        "content_sha256": manifest["content_sha256"],
+    }
+
+
+def run_audit_dataset(config_path: Path, dataset_dir: Path, output_path: Path) -> dict[str, object]:
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+    return audit_paper_dataset(config, dataset_dir, output_path=output_path)
 
 
 def run_materialize_preflight_subset(
@@ -1282,6 +1301,10 @@ def main() -> None:
     materialize.add_argument("--config", required=True, type=Path)
     materialize.add_argument("--source-path", required=True, type=Path)
     materialize.add_argument("--output-dir", required=True, type=Path)
+    audit_dataset = subparsers.add_parser("audit-dataset")
+    audit_dataset.add_argument("--config", required=True, type=Path)
+    audit_dataset.add_argument("--dataset-dir", required=True, type=Path)
+    audit_dataset.add_argument("--output-path", required=True, type=Path)
     preflight_subset = subparsers.add_parser("materialize-preflight-subset")
     preflight_subset.add_argument("--source-path", required=True, type=Path)
     preflight_subset.add_argument("--output-path", required=True, type=Path)
@@ -1407,6 +1430,8 @@ def main() -> None:
         result = run_validate_paper_config(args.config)
     elif args.command == "materialize-dataset":
         result = run_materialize_dataset(args.config, args.source_path, args.output_dir)
+    elif args.command == "audit-dataset":
+        result = run_audit_dataset(args.config, args.dataset_dir, args.output_path)
     elif args.command == "materialize-preflight-subset":
         result = run_materialize_preflight_subset(
             source_path=args.source_path,
