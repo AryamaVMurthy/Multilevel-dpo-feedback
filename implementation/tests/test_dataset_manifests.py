@@ -7,6 +7,7 @@ from unittest import mock
 
 from text_feedback_dpo.dataset_manifests import (
     canonical_row_hash,
+    exclude_math_train_test_overlaps,
     materialize_paper_dataset,
     materialize_preflight_subset,
     sample_searchqa8k,
@@ -228,6 +229,18 @@ class DatasetManifestTest(unittest.TestCase):
         )
         self.assertTrue(all(row["dataset_role"] == "validation_tune" for row in roles["tune"]))
         self.assertTrue(all(row["dataset_role"] == "validation_confirm" for row in roles["confirm"]))
+
+    def test_math_train_test_overlap_is_quarantined_with_hash_evidence(self):
+        train = [
+            {"id": "train-1", "problem": "Find x + y."},
+            {"id": "train-2", "problem": "Keep this problem."},
+        ]
+        test = [{"id": "test-1", "problem": " find x+y "}]
+        kept, excluded = exclude_math_train_test_overlaps(train, test)
+        self.assertEqual([row["id"] for row in kept], ["train-2"])
+        self.assertEqual(excluded[0]["id"], "train-1")
+        self.assertEqual(excluded[0]["reason"], "normalized_problem_present_in_official_test")
+        self.assertEqual(len(excluded[0]["row_hash"]), 64)
 
     def test_math_materialization_requires_all_subjects_and_derives_primary_roles(self):
         subjects = (

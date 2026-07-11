@@ -227,6 +227,31 @@ def split_math_validation_roles(
     return {"tune": tune, "confirm": confirm}
 
 
+def exclude_math_train_test_overlaps(
+    train_rows: Iterable[Mapping[str, Any]],
+    test_rows: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Remove official-train problems duplicated in official test and record immutable evidence."""
+
+    test_questions = {_normalized_question(_question_value(row)) for row in test_rows}
+    kept: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for row in train_rows:
+        normalized = _normalized_question(_question_value(row))
+        if normalized in test_questions:
+            excluded.append(
+                {
+                    "id": str(row["id"]),
+                    "normalized_question": normalized,
+                    "row_hash": canonical_row_hash(row),
+                    "reason": "normalized_problem_present_in_official_test",
+                }
+            )
+        else:
+            kept.append(dict(row))
+    return kept, excluded
+
+
 def _answer_text(row: Mapping[str, Any]) -> str:
     answers = row.get("answers")
     if isinstance(answers, list) and answers:
@@ -589,8 +614,9 @@ def materialize_paper_dataset(config: Any, source_path: Any, output_dir: Any) ->
                 raw_test.append(convert_math_row(row, subject=subject, source_split="test", index=index))
         if len(raw_train) != dataset.source_counts["train"] or len(raw_test) != dataset.source_counts["test"]:
             raise ValueError("MATH source counts do not match the frozen paper config")
+        filtered_train, train_test_exclusions = exclude_math_train_test_overlaps(raw_train, raw_test)
         split_rows = split_math_train(
-            raw_train,
+            filtered_train,
             seed=dataset.seed,
             primary_levels=dataset.primary_levels,
         )
@@ -613,6 +639,7 @@ def materialize_paper_dataset(config: Any, source_path: Any, output_dir: Any) ->
             "primary_levels": list(dataset.primary_levels),
             "train_fraction": dataset.train_fraction,
             "validation_tune_fraction": dataset.validation_tune_fraction,
+            "train_test_exclusions": train_test_exclusions,
         }
     else:
         raise ValueError(f"unsupported paper dataset: {dataset.name}")
