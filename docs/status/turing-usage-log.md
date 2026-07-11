@@ -594,3 +594,31 @@ No actions have been logged under this control policy yet.
 - Input remains the audited validation split; subset seed `20260713`, count 16. The official test split remains untouched.
 - Outputs are new immutable paths under `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/preflight-16`; no prior artifact will be resumed or overwritten.
 - CPU resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs. GPU resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:43:41+05:30
+
+- Standalone clone fast-forwarded cleanly to `a3a304afcb7129dbe32a4872a011fd1106f54510`; queue and preflight output path were empty.
+- Stratified subset materialization job: `13131`. Dependent one-GPU evaluation job: `13132`, array index 0 only, with `afterok:13131`.
+
+## 2026-07-11T22:43:41+05:30 - monitor MATH validation preflight jobs 13131-13132
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, subset manifest, predictions, failures, metrics, completion marker, and GPU telemetry after terminal states.
+- Purpose: verify stratification, exact answer extraction, malformed-template count, truncation, evaluator behavior, and all 16 raw responses before the full validation baseline.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:50:09+05:30
+
+- Job 13131 `COMPLETED` in 1 second and materialized 16 deterministic subject-level strata with subset SHA-256 `f0d1dcbf10517e14f1246abf290a1ad899ace8583f9dcdda547c1599e9b4bf62`.
+- Job 13132 index 0 `COMPLETED` in 3 minutes 7 seconds, exit `0:0`; accounted GPU time `0.0519` GPU-hours and observed peak telemetry memory was 24,506 MiB.
+- All 16 responses were non-empty and manually inspected; truncation was 0%, failure ledger was empty, generation metadata was complete, teacher-free was true, and no thinking markup or malformed chat-template output was present. Eleven responses used the balanced `FINAL:` stopper and five valid boxed responses ended by EOS.
+- Raw evaluator accuracy was 8/16. Manual review identified one explicit evaluator disagreement: `math-number_theory-train-649` answered option D, whose displayed value is 13 and matches the gold answer, but the deterministic scorer compared the letter to the numeric value.
+- Progression is stopped at the evaluator-audit gate until official MATH multiple-choice labels are mapped to their displayed values and the immutable predictions are rescored. This is an explicit root-cause correction, not an accuracy override.
+
+## 2026-07-11T22:50:09+05:30 - rescore and audit MATH validation preflight
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: after test-first implementation and full local verification, one BatchMode SSH fast-forward-only sync plus clean/output checks and exactly one CPU-only node01 rescore-and-audit submission.
+- Rescore rule: only an exact A-E final answer in an official MATH problem with explicit displayed choices is mapped to that choice value; malformed or duplicate choice structures fail explicitly. Original predictions remain immutable.
+- Manual audit labels cover all 16 responses with per-example notes. New outputs: `preflight-16/rescore` and `preflight-16/audit`; existing evaluation artifacts are unchanged.
+- Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs; 0 requested GPU-hours.

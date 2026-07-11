@@ -1,0 +1,16 @@
+{"id":"math-geometry-train-201","manual_correct":true,"notes":"The radius derivation is valid and the final value 6 exactly matches the reference."}
+{"id":"math-number_theory-train-818","manual_correct":true,"notes":"The base-6 addition is correct and 22_6 exactly matches the reference answer."}
+{"id":"math-intermediate_algebra-train-1200","manual_correct":false,"notes":"The submitted value 1 does not match the reference value 5/4 and the attempted derivation is invalid."}
+{"id":"math-geometry-train-427","manual_correct":false,"notes":"The submitted value 51 does not match the reference value 163; the line-of-sight geometry was oversimplified."}
+{"id":"math-counting_and_probability-train-234","manual_correct":true,"notes":"The complement calculation gives 215/216, exactly equivalent to the reference."}
+{"id":"math-algebra-train-427","manual_correct":true,"notes":"The expanded polynomial -3x^2 + 12x - 8 is algebraically identical to the reference."}
+{"id":"math-prealgebra-train-804","manual_correct":false,"notes":"The submitted angle 150 degrees does not match the reference angle 105 degrees."}
+{"id":"math-prealgebra-train-372","manual_correct":true,"notes":"The perimeter calculation is valid and the final value 15 exactly matches the reference."}
+{"id":"math-number_theory-train-649","manual_correct":true,"notes":"The response selects option D, whose displayed value is 13, and its prose also identifies 13; this matches the reference."}
+{"id":"math-intermediate_algebra-train-388","manual_correct":true,"notes":"The proportionality subtraction correctly yields k = 18, matching the reference."}
+{"id":"math-precalculus-train-442","manual_correct":false,"notes":"The determinant expansion is incorrect and the submitted value 0 does not match the reference value 2."}
+{"id":"math-counting_and_probability-train-338","manual_correct":false,"notes":"The submitted value 11 does not match the reference value 931 and the bubble-pass reasoning is invalid."}
+{"id":"math-algebra-train-1616","manual_correct":true,"notes":"The repeated page number 33 is obtained from the correct triangular sum and matches the reference."}
+{"id":"math-precalculus-train-637","manual_correct":false,"notes":"The denominator identity is incorrectly asserted and the submitted value 1 does not match 241/220."}
+{"id":"math-geometry-train-97","manual_correct":false,"notes":"The altitude similarity ratio is reversed; the submitted value 75 does not match the reference value 64."}
+{"id":"math-number_theory-train-328","manual_correct":true,"notes":"The divisor-sum factorization is correct and the largest prime factor 31 matches the reference."}

@@ -20,6 +20,7 @@ _ALTERNATIVE_RE = re.compile(r"\b(?:or|and/or)\b", re.IGNORECASE)
 _MATH_SAFE_RE = re.compile(r"^[0-9A-Za-z\s+\-*/^=().,\[\]{}]+$")
 _MATH_UNIT_RE = re.compile(r"^(.*?)(?:\s+|\\\\text\{)([A-Za-z]+)\}?$")
 _MATH_INTERVAL_RE = re.compile(r"^([\[(])(.+),(.+)([\])])$")
+_MATH_CHOICE_MARKER_RE = re.compile(r"\\textbf\{\(([A-E])\)\}")
 
 
 def _require_text(value: Any, field: str) -> str:
@@ -306,6 +307,29 @@ def evaluate_math_answer(prediction: str, gold_answer: str) -> dict[str, Any]:
     }
 
 
+def _official_math_choice_answer(prediction: str, problem: str) -> tuple[str, str] | None:
+    selected = _last_boxed(prediction).strip().upper()
+    if re.fullmatch(r"[A-E]", selected) is None:
+        return None
+    markers = list(_MATH_CHOICE_MARKER_RE.finditer(problem))
+    if not markers:
+        return None
+    choices: dict[str, str] = {}
+    for index, marker in enumerate(markers):
+        label = marker.group(1)
+        if label in choices:
+            raise ValueError(f"official MATH problem contains duplicate choice label: {label}")
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(problem)
+        raw_answer = problem[marker.end() : end].strip().strip("$").strip()
+        mapped_answer = _latex_math(raw_answer).strip().strip("$").strip()
+        if not mapped_answer:
+            raise ValueError(f"official MATH problem contains an empty choice: {label}")
+        choices[label] = mapped_answer
+    if selected not in choices:
+        raise ValueError(f"selected official MATH choice is missing from problem: {selected}")
+    return selected, choices[selected]
+
+
 def _normalize_search_text(value: str) -> str:
     value = value.casefold()
     value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
@@ -406,6 +430,17 @@ def evaluate_domain_answer(
 
     if domain == "math":
         if example.get("source") == "EleutherAI/hendrycks_math" or "source_subject" in example:
+            choice = _official_math_choice_answer(prediction, str(example.get("problem", "")))
+            if choice is not None:
+                selected, mapped_answer = choice
+                result = evaluate_math_answer(mapped_answer, str(example["gold_answer"]))
+                return {
+                    **result,
+                    "evaluator_source": "deterministic_math_multiple_choice",
+                    "extracted_answer": prediction,
+                    "selected_choice": selected,
+                    "mapped_answer": mapped_answer,
+                }
             return evaluate_math_answer(prediction, str(example["gold_answer"]))
         return evaluate_gsm8k_answer(prediction, str(example["gold_answer"]))
     if domain == "search_qa":

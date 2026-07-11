@@ -53,12 +53,12 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
 echo "job_id=${SLURM_JOB_ID} account=${TURING_ACCOUNT} host=$(hostname) source_commit=${SOURCE_COMMIT}"
-uv run --frozen python -m text_feedback_dpo.cli rescore-evaluation \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli rescore-evaluation \
   --predictions "$PREDICTIONS" \
   --examples "$EXAMPLES" \
   --output-dir "$RESCORE_DIR" \
   --source-commit "$SOURCE_COMMIT"
-uv run --frozen python -m text_feedback_dpo.cli audit-evaluation \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli audit-evaluation \
   --config "$CONFIG" \
   --predictions "$RESCORE_DIR/predictions.jsonl" \
   --labels "$LABELS" \

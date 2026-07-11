@@ -108,6 +108,28 @@ class AnswerEvaluationTest(unittest.TestCase):
         self.assertTrue(result["correct"])
         self.assertEqual(result["evaluator_source"], "deterministic_math")
 
+    def test_official_math_multiple_choice_letter_is_mapped_to_its_answer(self):
+        problem = (
+            "Which value must divide $a$? "
+            "$\\textbf{(A)} \\text{ 5} \\qquad \\textbf{(B)} \\text{ 7} "
+            "\\qquad \\textbf{(C)} \\text{ 11} \\qquad \\textbf{(D)} \\text{ 13} "
+            "\\qquad \\textbf{(E)} \\text{ 17}$"
+        )
+        result = evaluate_domain_answer(
+            domain="math",
+            prediction="\\boxed{D}",
+            example={
+                "source": "EleutherAI/hendrycks_math",
+                "gold_answer": "13",
+                "problem": problem,
+            },
+        )
+
+        self.assertTrue(result["correct"], result)
+        self.assertEqual(result["evaluator_source"], "deterministic_math_multiple_choice")
+        self.assertEqual(result["selected_choice"], "D")
+        self.assertEqual(result["mapped_answer"], "13")
+
 
 if __name__ == "__main__":
     unittest.main()

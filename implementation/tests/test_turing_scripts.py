@@ -96,6 +96,8 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("DATASET_MANIFEST:?DATASET_MANIFEST is required", freeze_baseline)
         self.assertIn("SOURCE_COMMIT:?SOURCE_COMMIT is required", freeze_baseline)
         self.assertIn("FREEZE_OUTPUT:?FREEZE_OUTPUT is required", freeze_baseline)
+        rescore = Path("scripts/turing_rescore_evaluation.sh").read_text(encoding="utf-8")
+        self.assertEqual(rescore.count("uv run --frozen --no-sync"), 2)
         for name in (
             "turing_collect_array.sh",
             "turing_tune_paper.sh",
