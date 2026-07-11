@@ -485,3 +485,31 @@ No actions have been logged under this control policy yet.
 - Freeze wrapper verifies the live selection-time cache-manifest hash on node01 before preserving it and refuses any pre-existing output. Cache refresh cannot start if freeze fails.
 - Local evidence: full suite passes 200 tests, Ruff, compileall, all shell parsing, and diff checks.
 - Freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, 8 GiB, `00:30:00`, 0 GPUs. Cache-refresh resources: 2 tasks, 32 GiB, `02:00:00`, 0 GPUs. Total requested GPU-hours: 0.
+
+### Submission result - 2026-07-11T22:33:18+05:30
+
+- Standalone clone fast-forwarded cleanly to `d3c284720c8bda2db89b55b2fb67fd1be0c9941e`; queue was empty and both output files were absent.
+- Freeze job: `13124`. Dependent cache-refresh job: `13125` with `afterok:13124`.
+
+## 2026-07-11T22:33:18+05:30 - monitor decoding freeze and cache refresh jobs 13124-13125
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact freeze/cache manifests only after successful terminal states.
+- Purpose: verify selection-time cache preservation, final config binding, dependency enforcement, and exact refreshed model revisions before baseline work.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:33:35+05:30
+
+- Jobs 13124 and 13125 both `COMPLETED`, exit `0:0`, node01, elapsed `00:00:02` each, 0 GPUs.
+- Freeze binds selected profile `presence-1.5`, frozen config SHA-256 `d2fa3e60c02aae8d87018f4550e99bc593d2bb4610b5461d7e13db78523b01ae`, exact model revision, prompt protocol, dataset/audit hashes, and disjoint 12/32 IDs.
+- Selection-time cache-manifest SHA-256 `5c5f270b3e2a33d1163d56761cdffe0dfca1642cde6d401f1de19a94fca42b06` was verified on node01 and preserved before refresh.
+- Refreshed cache manifest retains exact Qwen3-4B/8B revisions and now binds the final config hash. Total accounted GPU-hours: 0.
+
+## 2026-07-11T22:34:09+05:30 - materialize one-example MATH validation micro and freeze baseline identity
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH clean/queue/output check, then exactly two node01 CPU-only submissions: a one-example `math_subject_level` validation subset materialization and the immutable teacher-free baseline freeze.
+- Source validation artifact: audited `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-materialized-v1/validation.jsonl.zst`; subset seed `20260713`, count 1.
+- Outputs: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/micro-one/validation.jsonl.zst` and `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/baseline-freeze.json`.
+- Frozen baseline source commit: `d3c284720c8bda2db89b55b2fb67fd1be0c9941e`.
+- Requested resources: each account `priyesh.shukla`, u22, node01, 2 tasks, at most 4 GiB, at most `00:15:00`, 0 GPUs, 0 requested GPU-hours.
