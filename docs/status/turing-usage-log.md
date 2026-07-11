@@ -89,3 +89,83 @@ No actions have been logged under this control policy yet.
 - Purpose: determine whether commit `15ec5fe` and official MATH artifacts are present and identify exact inputs for zero-GPU materialization.
 - Target paths: `/home/aryama.murthy/multilevel-feedback-dpo`, `/home/aryama.murthy/tfdpo-runs`, and `/scratch/node01/aryama.murthy/text-feedback-dpo`.
 - Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; no Turing state change.
+
+## 2026-07-11T21:09:03+05:30 - Qwen3 pre-submission cluster audit
+
+- Approval reference: user explicitly requested complete Qwen3 MATH-then-SearchQA execution and training on Turing; the repository records the active 2026-07-11 Asia/Kolkata god switch.
+- Bounded command set: one non-interactive BatchMode SSH command running `hostname`, `date`, `id`, `df`, `squeue`, `sacct`, `sacctmgr`, `git ls-remote`, and bounded `ls` checks for the proposed standalone clone and node01 scratch roots.
+- Purpose: verify SSH, Slurm account, queue, recent accounting, home capacity, pushed source commit, and absence or state of the standalone Qwen3 paths before any remote mutation or submission.
+- Target paths: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3` and `/scratch/node01/aryama.murthy/tfdpo-qwen3`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; read-only remote action.
+
+### Result - 2026-07-11T21:09:32+05:30
+
+- Exit status: 0; host `turing.iiit.ac.in`; no active jobs were listed.
+- Slurm association: account `priyesh.shukla`, QOS `high`.
+- Home storage: 36/50 GiB used, 15 GiB available.
+- GitHub branch: `agent/qwen3-math-searchqa` resolves to `7ffd5bd547b6ecba1d0adc8d959341e1fb93cea3`.
+- Both proposed standalone Qwen3 paths were absent. No remote state changed.
+
+## 2026-07-11T21:09:43+05:30 - create standalone Qwen3 source clone
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command that requires the destination to be absent, clones only `agent/qwen3-math-searchqa` from GitHub, verifies exact commit `7ffd5bd547b6ecba1d0adc8d959341e1fb93cea3`, checks clean status, and creates the compact persistent artifact/log root.
+- Purpose: replace the broken workstation worktree pointer with a clean standalone Turing repository before any Slurm work.
+- Target paths: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3` and `/home/aryama.murthy/tfdpo-qwen3-artifacts`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; creates source and artifact directories in Turing home.
+
+### Result - 2026-07-11T21:09:49+05:30
+
+- Exit status: 128 during `git clone`; no Slurm resources allocated.
+- Failure: Git `index-pack` could not create a thread and exited with `Resource temporarily unavailable` on the login node.
+- Safety response: exact-commit verification and artifact-directory creation did not run. No retry or alternate clone method was attempted before diagnosis.
+
+## 2026-07-11T21:10:20+05:30 - diagnose Turing clone thread failure
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one read-only BatchMode SSH command inspecting user process/thread counts, `ulimit`, memory, filesystem capacity, and the bounded partial clone layout/status.
+- Purpose: distinguish user process exhaustion, memory pressure, storage pressure, and partial-repository state before selecting a corrective action.
+- Target path: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; read-only remote action.
+
+### Result - 2026-07-11T21:10:40+05:30
+
+- Exit status: 0.
+- Evidence: user limit 200 processes, only 7 live user threads, 275 GiB available RAM, 15 GiB available home storage, and no partial destination remained.
+- Finding: persistent user-process exhaustion, memory pressure, disk pressure, and dirty partial-clone state are contradicted by current evidence. The failure occurred specifically while Git selected `index-pack` threading on the login host.
+
+## 2026-07-11T21:10:52+05:30 - inspect Git clone concurrency inputs
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one read-only BatchMode SSH command printing visible CPU count and system/global Git `pack.threads` configuration.
+- Purpose: test the hypothesis that Git's automatic pack threading can exceed the 200-process login-node limit despite a low steady-state user thread count.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; read-only remote action.
+
+### Result - 2026-07-11T21:11:12+05:30
+
+- Exit status: 0.
+- Evidence: the login node exposes 144 CPUs and neither global nor system Git config caps `pack.threads`.
+- Hypothesis: automatic high-core-count `index-pack` concurrency exhausted the effective login-node thread allowance during clone.
+
+## 2026-07-11T21:11:27+05:30 - retry standalone clone with one pack thread
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: repeat the exact standalone single-branch clone with only `git -c pack.threads=1`, then verify exact commit, clean status, and create compact artifact/log directories.
+- Purpose: test and correct the diagnosed login-node clone-concurrency failure without altering repository content or history.
+- Target paths: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3` and `/home/aryama.murthy/tfdpo-qwen3-artifacts`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; creates source and artifact directories in Turing home.
+
+### Result - 2026-07-11T21:11:49+05:30
+
+- Exit status: 0.
+- Root cause confirmed: capping Git pack work to one thread allowed the same clone to complete.
+- Standalone clone is clean on `agent/qwen3-math-searchqa` at `7ffd5bd547b6ecba1d0adc8d959341e1fb93cea3`.
+- Storage: source clone 970 KiB, artifact root 1.5 KiB, and home remains at 36/50 GiB used.
+
+## 2026-07-11T21:11:59+05:30 - synchronize logged Qwen3 source revision
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command fetching the Qwen3 branch with `pack.threads=1`, fast-forwarding only, and verifying exact expected commit and clean status.
+- Purpose: bring the standalone clone to the new source commit that includes this append-only cluster audit before Slurm setup.
+- Target path: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; fast-forward source update only.
