@@ -11,7 +11,7 @@ Select a Qwen3.5-2B non-thinking MATH decoding protocol that materially reduces 
 - Prompt requests step-by-step reasoning and one final `\boxed{}` answer.
 - Batch size is one on the local RTX 3050 6 GB GPU; CPU inference fallback is prohibited.
 - Every run preserves raw text, exact token counts, latency, finish reason, symbolic correctness, seed, config hash, model revision, and GPU telemetry.
-- A balanced non-empty boxed answer may terminate generation only when the profile explicitly enables `stop_on_boxed_answer`.
+- A balanced `FINAL: \\boxed{...}` answer may terminate generation only when the profile explicitly enables `stop_after_final_answer`.
 
 ## Candidate Grid
 

@@ -63,6 +63,8 @@ def complete_final_answer_end(text: str) -> int | None:
         elif text[index] == "}":
             depth -= 1
             if depth == 0:
+                if not text[match.end() : index].strip():
+                    return None
                 return index + 1
     return None
 
@@ -74,12 +76,20 @@ class FinalAnswerStoppingCriteria:
         self.tokenizer = tokenizer
         self.prompt_tokens = prompt_tokens
 
-    def __call__(self, input_ids: object, _scores: object, **_kwargs: object) -> bool:
+    def __call__(self, input_ids: object, _scores: object, **_kwargs: object) -> object:
         if len(input_ids) != 1:
             raise ValueError("final-answer stopping requires single-example generation")
         generated = input_ids[0][self.prompt_tokens :]
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
-        return complete_final_answer_end(text) is not None
+        try:
+            import torch
+        except ImportError as exc:
+            raise ImportError("torch is required for final-answer stopping") from exc
+        return torch.tensor(
+            [complete_final_answer_end(text) is not None],
+            dtype=torch.bool,
+            device=getattr(input_ids, "device", None),
+        )
 
 
 def generate_model_result(
@@ -140,6 +150,7 @@ def generate_model_result(
             temperature=temperature,
             top_p=float(generation_kwargs.get("top_p", 1.0)),
             top_k=int(generation_kwargs.get("top_k", 50)),
+            min_p=float(generation_kwargs.get("min_p", 0.0)),
             logits_processor=logits_processor,
         )
     if stop_after_final_answer:
@@ -148,6 +159,11 @@ def generate_model_result(
         model_generation_kwargs["stopping_criteria"] = StoppingCriteriaList(
             [FinalAnswerStoppingCriteria(tokenizer=tokenizer, prompt_tokens=int(encoded["input_ids"].shape[-1]))]
         )
+    repetition_penalty = float(generation_kwargs.get("repetition_penalty", 1.0))
+    if repetition_penalty <= 0:
+        raise ValueError("repetition_penalty must be positive")
+    if repetition_penalty != 1.0:
+        model_generation_kwargs["repetition_penalty"] = repetition_penalty
     output_ids = model.generate(**model_generation_kwargs)
     prompt_tokens = int(encoded["input_ids"].shape[-1])
     generated = output_ids[0][prompt_tokens:]

@@ -2,6 +2,8 @@ import unittest
 from types import ModuleType
 from unittest import mock
 
+import torch
+
 from text_feedback_dpo.models import (
     FakeModelProvider,
     FinalAnswerStoppingCriteria,
@@ -67,7 +69,19 @@ class ModelProviderTest(unittest.TestCase):
         text = "work\nFINAL: \\boxed{\\frac{1}{2}}"
         self.assertEqual(complete_final_answer_end(text), len(text))
         self.assertIsNone(complete_final_answer_end("FINAL: \\boxed{\\frac{1}{2}"))
+        self.assertIsNone(complete_final_answer_end("FINAL: \\boxed{}"))
         self.assertIsNone(complete_final_answer_end("provisional \\boxed{4}"))
+
+    def test_final_answer_stopping_criterion_returns_one_boolean_per_sequence(self):
+        tokenizer = mock.Mock()
+        tokenizer.decode.return_value = "Reason.\nFINAL: \\boxed{4}"
+        criterion = FinalAnswerStoppingCriteria(tokenizer=tokenizer, prompt_tokens=2)
+
+        result = criterion(torch.tensor([[10, 11, 12]]), None)
+
+        self.assertEqual(result.dtype, torch.bool)
+        self.assertEqual(tuple(result.shape), (1,))
+        self.assertTrue(result.item())
 
     def test_fake_model_provider_returns_configured_text(self):
         provider = FakeModelProvider({"student": "hello"})
@@ -97,6 +111,7 @@ class ModelProviderTest(unittest.TestCase):
 
         fake_transformers = ModuleType("transformers")
         fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+        fake_transformers.StoppingCriteriaList = FakeStoppingCriteriaList
         with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
             output = provider.generate(
                 "student",
@@ -105,7 +120,10 @@ class ModelProviderTest(unittest.TestCase):
                 temperature=1.0,
                 top_p=0.95,
                 top_k=20,
+                min_p=0.05,
                 presence_penalty=1.5,
+                repetition_penalty=1.05,
+                stop_after_final_answer=True,
             )
 
         self.assertEqual(output, "decoded")
@@ -114,6 +132,9 @@ class ModelProviderTest(unittest.TestCase):
         self.assertEqual(fake_model.generate_kwargs["temperature"], 1.0)
         self.assertEqual(fake_model.generate_kwargs["top_p"], 0.95)
         self.assertEqual(fake_model.generate_kwargs["top_k"], 20)
+        self.assertEqual(fake_model.generate_kwargs["min_p"], 0.05)
+        self.assertEqual(fake_model.generate_kwargs["repetition_penalty"], 1.05)
+        self.assertEqual(len(fake_model.generate_kwargs["stopping_criteria"]), 1)
         processors = fake_model.generate_kwargs["logits_processor"]
         self.assertEqual(len(processors), 1)
         self.assertIsInstance(processors[0], PresencePenaltyLogitsProcessor)
