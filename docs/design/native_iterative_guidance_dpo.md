@@ -200,6 +200,7 @@ This anchor must be logged separately from DPO loss.
 - Final-r2 comparison job `13053` produced 13 balanced final-answer stops, three EOS
   stops, and zero truncations on the same 16 examples. Automated accuracy was 9/16,
   but manual audit corrected it to 8/16 after finding one confident evaluator false
-  positive on a nested fraction/exponent gold answer. Termination and memory gates pass;
-  evaluator promotion remains gated on the deterministic LaTeX scorer repair and an
-  immutable rescore.
+  positive on a nested fraction/exponent gold answer. Deterministic LaTeX scorer repair
+  commit `9df4d13` and CPU job `13058` then produced an immutable rescore with 8/16
+  corrected accuracy, zero model-judgment fallbacks, and 16/16 manual agreement. The
+  complete validation baseline is the current gate.

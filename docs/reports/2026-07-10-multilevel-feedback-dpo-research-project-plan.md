@@ -445,9 +445,11 @@ in the gold LaTeX caused a deterministic parse failure and the 9B fallback marke
 answer correct. A balanced-group deterministic LaTeX repair now parses nested
 fractions/exponents, `\\dfrac`, and LaTeX thousands separators. Local rescoring changes
 only that decision, yields 8/16 accuracy with zero model-judgment fallbacks, and passes
-all 177 tests with one skip. The original job artifacts remain immutable. Promotion to
-the full baseline requires a source-bound rescore artifact and a passing audit; DPO
-collection or training must not start from the uncorrected `13053` metrics file.
+all 178 tests with one skip. The original job artifacts remain immutable. Source-bound
+rescore job `13058` at commit `9df4d1391c3ef9e337499e7f10ad1c3bcbdb3ea9`
+then reproduced that correction and passed with 16/16 manual agreement, complete
+metadata, teacher-free status, and zero truncation. DPO collection or training must not
+use the uncorrected `13053` metrics file.
 
 ## 7. Experimental Matrix
 
@@ -833,9 +835,9 @@ Exit criterion: local unit tests verify objective selection, metrics, manifests,
 Exit criterion: at least 95% manual agreement, at most 5% truncation, complete metadata, no teacher context, and memory below 90%.
 
 Current result: `13053` passes truncation, metadata, teacher-free, failure, and memory
-gates. Its original evaluator agreement is 93.75%. The deterministic scorer repair
-rescored all 16 decisions consistently with manual review locally; an immutable
-source-bound rescore and audit are the remaining Phase 3 gates.
+gates. Its original evaluator agreement is 93.75%; immutable rescore/audit job `13058`
+passes with 100% agreement and no failed gates. Phase 3 is complete. Full validation is
+the active Phase 4 gate under source commit `9df4d13`.
 
 ### Phase 4: Full Base Baseline
 
@@ -953,8 +955,8 @@ Repeat baseline, collection, LN-DPO, GRPO, evaluation, and statistics only after
 | 2026-07-10 | Teacher returns slight hint, not corrected rollout | Keeps chosen response student-generated | Approved |
 | 2026-07-10 | Use native Qwen output, not XML | Method should fit model style rather than force formatting | Approved |
 | 2026-07-10 | Student ceiling 8,192 tokens | Avoids low artificial ceiling while retaining a hard bound | Approved |
-| 2026-07-11 | Replace `qwen-nonthinking-r1` with `qwen-nonthinking-final-r2` | Stop valid balanced final boxes deterministically and retain a larger emergency bound | Termination validated by `13053`; scorer rescore pending |
-| 2026-07-11 | Repair balanced LaTeX answer parsing before promotion | Manual audit found one false-positive model judgment after nested fraction/exponent parse failure | Implemented locally; immutable rescore required |
+| 2026-07-11 | Replace `qwen-nonthinking-r1` with `qwen-nonthinking-final-r2` | Stop valid balanced final boxes deterministically and retain a larger emergency bound | Validated by `13053` and audited rescore `13058` |
+| 2026-07-11 | Repair balanced LaTeX answer parsing before promotion | Manual audit found one false-positive model judgment after nested fraction/exponent parse failure | Complete; immutable rescore passes 16/16 audit |
 | 2026-07-11 | Student ceiling 16,384 and combined ceiling 18,432 | User-directed doubled completion ceiling with 2,048 prompt-token headroom | Approved; supersedes 8,192 setting |
 | 2026-07-10 | Baseline before research | Establishes teacher-free reference and evaluator validity | Approved |
 | 2026-07-10 | GSM8K is diagnostic only | Base accuracy and low pair yield make it weak for the main claim | Approved |
