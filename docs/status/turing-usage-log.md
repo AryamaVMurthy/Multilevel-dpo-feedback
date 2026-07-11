@@ -513,3 +513,29 @@ No actions have been logged under this control policy yet.
 - Outputs: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/micro-one/validation.jsonl.zst` and `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/baseline-freeze.json`.
 - Frozen baseline source commit: `d3c284720c8bda2db89b55b2fb67fd1be0c9941e`.
 - Requested resources: each account `priyesh.shukla`, u22, node01, 2 tasks, at most 4 GiB, at most `00:15:00`, 0 GPUs, 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:35:05+05:30
+
+- Standalone clone fast-forwarded cleanly to `5b410ef881d1b9f0ce857e155ce92320bb1a39cc`; queue and both target paths were empty.
+- Micro materialization job: `13126`. Baseline-freeze job: `13127`.
+
+## 2026-07-11T22:35:05+05:30 - monitor baseline micro materialization and freeze jobs 13126-13127
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, and compact manifests only after successful terminal states.
+- Purpose: verify the one-example stratum selection, copied dataset identity, and final teacher-free baseline binding before the first GPU evaluation.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:35:26+05:30
+
+- Jobs 13126 and 13127 both `COMPLETED`, exit `0:0`, node01, elapsed `00:00:01`, 0 GPUs.
+- Micro example: `math-geometry-train-201`; source validation SHA-256 `b2b93cab808a73617fff62f1db023a2d526dcc7387158cba24c0b5e72fc26372`; output SHA-256 `7b447b2d019d2b1b0b2777643d5da2e03403ca212966dda9840b4f5fed1a45c0`.
+- Baseline freeze binds source commit `d3c284720c8bda2db89b55b2fb67fd1be0c9941e`, final config hash, exact 4B checkpoint, exact 8B evaluator, prompt protocol, dataset manifest, seeds, and teacher-free status.
+
+## 2026-07-11T22:35:44+05:30 - run one-example teacher-free MATH baseline micro
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH clean/queue/output check and exactly one node01 one-GPU base-checkpoint evaluation submission with array index 0 only.
+- Input: immutable one-example validation subset and baseline freeze above. No adapter, teacher guidance, validation expansion, or test access.
+- Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/micro-one/evaluation/shard-0000` plus GPU telemetry.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
