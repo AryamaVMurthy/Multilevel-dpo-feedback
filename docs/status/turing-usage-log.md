@@ -693,3 +693,29 @@ No actions have been logged under this control policy yet.
 - Job 13136 `COMPLETED` in 1 second, exit `0:0`, with 0 GPUs.
 - The exact row is canonical zero-based index 23 of 402, stratum `math:algebra:level4`, row hash `85bdde528a309c56dfe6c78851f8a6304771b6c95e4acc7fdf24d6225aedfdf5`, in validation file SHA-256 `b2b93cab808a73617fff62f1db023a2d526dcc7387158cba24c0b5e72fc26372`.
 - Next bounded submission under the already logged diagnostic action: create `baseline-freeze-v3.json` bound to the complete-observability commit, then run array index 23 with `NUM_SHARDS=402` into a fresh diagnostic directory. This deterministically selects only the failed example while preserving its original per-ID generation seed.
+
+### Diagnostic submission result - 2026-07-11T23:02:17+05:30
+
+- Standalone clone fast-forwarded cleanly to `814166ec7232e5611f4309d93ca9e099d2b438e8`; queue, freeze, and diagnostic output were empty.
+- Baseline freeze-v3 job: `13137`. Dependent exact one-row diagnostic job: `13138`, array index 23 only with `NUM_SHARDS=402` and `afterok:13137`.
+
+## 2026-07-11T23:02:17+05:30 - monitor evaluator failure reproduction jobs 13137-13138
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, and either the complete failure ledger or success artifacts after terminal state.
+- Purpose: capture every evaluator serialization attempt and the exact student response for root-cause analysis without advancing the baseline.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Reproduction result - 2026-07-11T23:06:06+05:30
+
+- Job 13137 `COMPLETED` in 1 second. Exact one-row job 13138 index 23 reproduced the failure and exited `1:0` after 20 seconds; accounted GPU time `0.0056` GPU-hours and peak observed telemetry memory was 24,086 MiB.
+- The student response is mathematically correct, ends with `FINAL: \\boxed{\\left( -\\frac{1}{8}, \\frac{1}{2} \\right)}`, and has SHA-256 `3e57526229cc67bbe9f06007c30d8ca7a88ed0aa3a26ad96a8f948cc928772b3`.
+- All three 8B evaluator attempts were identical in judgment but invalid JSON because the answer string contained unescaped LaTeX backslashes. The generic repair prompt repeated the same invalid serialization three times. The complete raw attempts and parse failures are now preserved in the diagnostic ledger.
+- Root cause is evaluator output serialization, not student generation, mathematical evaluation, memory, or model-cache lookup.
+
+## 2026-07-11T23:06:06+05:30 - verify plain-ASCII evaluator serialization repair
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: after test-first prompt correction and full local verification, one BatchMode SSH fast-forward-only sync and clean/output checks; create `baseline-freeze-v4.json`, then rerun only validation array index 23 of 402 in a fresh `evaluation-v2` diagnostic directory.
+- Correction stays agentic: the evaluator prompt and its explicit repair-feedback loop require plain-ASCII answers and explain JSON backslash escaping. No parser fallback, string substitution, fabricated judgment, or silent default is added.
+- Freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs. Diagnostic resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.

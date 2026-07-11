@@ -3,6 +3,7 @@ import unittest
 from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
     build_evaluator_prompt,
+    build_evaluator_repair_prompt,
     build_guidance_critic_prompt,
     build_guidance_guard_prompt,
     make_model_guidance_critic,
@@ -330,6 +331,14 @@ class NativePipelineTest(unittest.TestCase):
         self.assertIn("at most 160 characters", evaluator_prompt.lower())
         self.assertIn("do not use quotation marks", evaluator_prompt.lower())
         self.assertIn("single line", evaluator_prompt.lower())
+        self.assertIn("plain ascii", evaluator_prompt.lower())
+        self.assertIn("do not use latex", evaluator_prompt.lower())
+        repair_prompt = build_evaluator_repair_prompt(
+            original_prompt=evaluator_prompt,
+            raw='{"answer":"\\boxed{4}"}',
+            error="model output does not contain a valid JSON object",
+        )
+        self.assertIn("double every backslash", repair_prompt.lower())
         self.assertIn("exactly one token: safe or unsafe", guard_prompt.lower())
         self.assertIn("safe example", guard_prompt.lower())
         self.assertIn("unsafe example", guard_prompt.lower())
