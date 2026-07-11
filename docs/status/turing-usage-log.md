@@ -622,3 +622,30 @@ No actions have been logged under this control policy yet.
 - Rescore rule: only an exact A-E final answer in an official MATH problem with explicit displayed choices is mapped to that choice value; malformed or duplicate choice structures fail explicitly. Original predictions remain immutable.
 - Manual audit labels cover all 16 responses with per-example notes. New outputs: `preflight-16/rescore` and `preflight-16/audit`; existing evaluation artifacts are unchanged.
 - Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs; 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:51:04+05:30
+
+- Standalone clone fast-forwarded cleanly to `1f551d1981fa4188788e11e650b551bd21c80294`; queue and both output paths were empty.
+- CPU rescore-and-audit job: `13133`.
+
+## 2026-07-11T22:51:04+05:30 - monitor MATH preflight rescore and audit job 13133
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, rescore manifest, audit JSON, disagreement ledger, and report/hash checks after terminal state.
+- Purpose: require at least 95% agreement across all 16 manual labels, complete metadata, teacher-free status, and at most 5% truncation before full validation.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:52:19+05:30
+
+- Job 13133 `COMPLETED` in 1 second, exit `0:0`, with 0 GPUs.
+- Immutable rescore changed exactly one decision, `math-number_theory-train-649`, from incorrect to correct; accuracy is now 9/16 and four cases explicitly required model judgment. Rescored predictions SHA-256 is `e8fe408c9cd2962b3a10b38a46362337b0f96fe9d671a5579bf2138a53084dfb`.
+- Audit passes every gate: 16/16 manual agreement (100% versus required 95%), complete generation metadata, teacher-free true, 0% truncation versus maximum 5%, zero disagreements, and a non-empty HTML report.
+- The stratified validation preflight gate passes. The original predictions and raw metrics remain preserved alongside the explicit rescore provenance.
+
+## 2026-07-11T22:52:19+05:30 - re-freeze corrected baseline and run full MATH validation
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks; submit one CPU-only immutable baseline re-freeze bound to the corrected evaluator commit, then one array-index-0 one-GPU evaluation over all 402 audited validation examples with an `afterok` dependency.
+- The original baseline freeze remains preserved. Corrected freeze output is `math/baseline/baseline-freeze-v2.json`; evaluation output is the fresh `math/baseline/full-validation/evaluation` directory.
+- Input is only the audited Level 4-5 validation split. The official test split remains untouched and no model selection uses test data.
+- Freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs. Evaluation resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
