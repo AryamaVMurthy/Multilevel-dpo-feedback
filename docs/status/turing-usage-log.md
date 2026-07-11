@@ -325,3 +325,31 @@ No actions have been logged under this control policy yet.
 - Correction evidence: the 435-row half-rounding regression now passes; the complete local suite passes 191 tests, Ruff, compileall, shell parsing, and diff checks.
 - Dataset and output remain `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-materialized-v1` and `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-dataset-audit.json`.
 - Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 16 GiB, `00:30:00`, 0 GPUs, 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:40:45+05:30
+
+- Standalone clone fast-forwarded cleanly to `331b032b25af62d897a8991e818f97696f45e5dc`; the queue was empty and the failed attempt had left no audit JSON.
+- Slurm job ID: `13118`.
+
+## 2026-07-11T21:40:45+05:30 - monitor corrected MATH dataset audit job 13118
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and the compact audit JSON only after successful completion.
+- Purpose: obtain the independent acceptance evidence required before any GPU preflight.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:41:01+05:30
+
+- Job 13118: `COMPLETED`, exit `0:0`, node01, elapsed `00:00:01`, MaxRSS `612 KiB`, 0 GPUs.
+- Audit status: `passed`; roles are 3,589 train, 402 validation, and 5,000 official test; nested validation is 270 tune and 132 confirmation; overlap quarantine count is four.
+- Manifest content SHA-256: `6986f3e9a68540117cc51ca3045feb7dc797a4cf965919b925b4bb6270d76858`; manifest file SHA-256: `2c72bb66f5a742e4caf3c04b396265314ff38cc3c5ce68323063e39cdddbb3e7`; source artifact SHA-256: `20a10a84deaf42018c4634c4fcc3eaf0fcd013fcba4db7a19b93ac0a807f33bf`.
+- Immutable compact evidence: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-dataset-audit.json`.
+- Total accounted GPU-hours: 0.
+
+## 2026-07-11T21:43:41+05:30 - deploy and run exact Qwen3 one-GPU preflight
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with one-thread Git fetch and fast-forward-only update, source/status/queue/storage checks, then submission of exactly one node01 one-GPU `turing_model_load_smoke.sh` job; no training or evaluation dataset access.
+- Purpose: verify the staged exact Qwen3-4B/8B snapshots offline, CUDA and BF16 without fallback, non-thinking chat generation for both models, and the complete 252-projection rank-16 student LoRA inventory.
+- Model cache: `/scratch/aryama.murthy/tfdpo-qwen3/models`; immutable report: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-model-preflight.json`.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `00:30:00`; 0.5 requested GPU-hours.
