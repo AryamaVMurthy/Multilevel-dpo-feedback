@@ -82,3 +82,5 @@ predictions and examples after a deterministic scorer repair. It preserves the o
 evaluator-result hash per row, performs no model calls, and never overwrites source
 artifacts. The audited final-r2 labels for Turing job `13053` are tracked at
 `audits/math-final-r2-job13053-labels.jsonl`.
+Run the paired CPU-only rescore and audit on Turing through
+`scripts/turing_rescore_evaluation.sh`.
