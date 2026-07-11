@@ -33,6 +33,17 @@ PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+def build_sweep_prompt(example: dict[str, Any]) -> str:
+    from text_feedback_dpo.prompts import build_native_student_prompt
+
+    if example.get("domain") != "math":
+        raise ValueError("MATH decoding sweep requires domain=math")
+    problem = example.get("problem")
+    if not isinstance(problem, str) or not problem.strip():
+        raise ValueError("MATH decoding sweep example requires a non-empty problem")
+    return build_native_student_prompt(problem=problem, domain="math")
+
+
 def protocol_valid_correct(
     *,
     symbolic_correct: bool,

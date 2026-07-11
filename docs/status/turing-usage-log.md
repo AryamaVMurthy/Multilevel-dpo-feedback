@@ -393,3 +393,25 @@ No actions have been logged under this control policy yet.
 - Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact manifest/selection files only after terminal state.
 - Purpose: capture per-profile progress, failures, resource use, and the exact three-profile promotion without reading validation or test artifacts.
 - Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+## 2026-07-11T21:55:47+05:30 - cancel protocol-invalid decoding screening job 13120
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH `scancel 13120`, followed only by read-only `sacct` and bounded log inspection.
+- Stop reason: code review found that the sweep constructed an ad hoc MATH prompt instead of the frozen `build_native_student_prompt` used by baseline, collection, and inference. Selecting presence penalty under a different prompt would violate the freeze protocol.
+- The partial output contains nine diagnostic records and must never be promoted or resumed into a paper run. It remains at `screening-v1` with no completed selection manifest.
+- Requested resources: cancellation only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:56:04+05:30
+
+- Job 13120: `CANCELLED`, node01, elapsed `00:07:02`, one GPU; accounted partial diagnostic time `0.1172` GPU-hours.
+- Twelve presence-0 records completed before cancellation; no selection manifest was created. The entire `screening-v1` directory is permanently diagnostic and excluded from paper promotion.
+- Progression remains stopped until exact prompt identity is regression-tested and a new output directory is used.
+
+## 2026-07-11T21:56:51+05:30 - deploy prompt-identity correction and rerun decoding screening
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with one-thread Git fetch and fast-forward-only update, exact clean/queue/artifact checks, then submission of exactly one node01 one-GPU decoding screening job into a new immutable output directory.
+- Correction evidence: sweep prompts are now constructed only by `build_native_student_prompt`; exact byte identity with baseline is regression-tested; every prompt hash and frozen prompt-protocol ID is written into the sweep manifest and records. Full local gate passes 196 tests, Ruff, compileall, shell parsing, and diff checks.
+- Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/decoding/screening-v2`; `screening-v1` remains excluded diagnostics.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.

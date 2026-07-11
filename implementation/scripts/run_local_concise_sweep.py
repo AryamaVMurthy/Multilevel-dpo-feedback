@@ -17,6 +17,7 @@ from text_feedback_dpo.answer_evaluation import evaluate_math_answer
 from text_feedback_dpo.benchmarks import extract_math_boxed_answer
 from text_feedback_dpo.concise_sweep import (
     PROFILES,
+    build_sweep_prompt,
     promote_profiles,
     protocol_valid_correct,
     stratified_subset,
@@ -139,6 +140,7 @@ def main() -> None:
     example_ids = [str(row["id"]) for row in subset]
     if set(example_ids) & excluded_ids:
         raise RuntimeError("decoding confirmation overlaps screening examples")
+    prompts = {str(row["id"]): build_sweep_prompt(row) for row in subset}
 
     student = config.models["student"]
     expected_identity = (student["id"], student["revision"])
@@ -167,6 +169,11 @@ def main() -> None:
         "count": count,
         "max_new_tokens": max_new_tokens,
         "profiles": {name: {**PROFILES[name], "max_new_tokens": max_new_tokens} for name in profiles},
+        "prompt_protocol": config.collection["prompt_protocol"],
+        "prompt_sha256_by_id": {
+            row_id: hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            for row_id, prompt in prompts.items()
+        },
         "example_ids": example_ids,
         "excluded_example_ids": sorted(excluded_ids),
         "promotion_manifest_sha256": promotion_sha256,
@@ -197,11 +204,7 @@ def main() -> None:
             )
             torch.manual_seed(task_seed)
             torch.cuda.manual_seed_all(task_seed)
-            prompt = (
-                f"{example['problem']}\n\n"
-                "Solve the problem carefully. End with exactly one line of the form "
-                "FINAL: \\boxed{answer}."
-            )
+            prompt = prompts[str(example["id"])]
             torch.cuda.reset_peak_memory_stats()
             started = time.perf_counter()
             result = generate_model_result(
@@ -245,6 +248,7 @@ def main() -> None:
                 "peak_gpu_memory_mib": torch.cuda.max_memory_allocated() / 2**20,
                 "seed": task_seed,
                 "source_commit": args.source_commit,
+                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             }
             with records_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")

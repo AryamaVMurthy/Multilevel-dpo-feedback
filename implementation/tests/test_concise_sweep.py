@@ -2,15 +2,28 @@ import unittest
 
 from text_feedback_dpo.concise_sweep import (
     PROFILES,
+    build_sweep_prompt,
     promote_profiles,
     protocol_valid_correct,
     stratified_subset,
     summarize_records,
     validate_sweep_records,
 )
+from text_feedback_dpo.prompts import build_native_student_prompt
 
 
 class ConciseSweepTest(unittest.TestCase):
+    def test_sweep_prompt_is_byte_identical_to_frozen_baseline_prompt(self):
+        example = {
+            "id": "m1",
+            "domain": "math",
+            "problem": "Compute 2 + 2.",
+        }
+        self.assertEqual(
+            build_sweep_prompt(example),
+            build_native_student_prompt(problem=example["problem"], domain="math"),
+        )
+
     def test_profiles_freeze_official_controls_and_efficiency_candidates(self):
         self.assertEqual(tuple(PROFILES), ("presence-0", "presence-0.5", "presence-1", "presence-1.5", "presence-2"))
         self.assertEqual({profile["presence_penalty"] for profile in PROFILES.values()}, {0.0, 0.5, 1.0, 1.5, 2.0})
