@@ -33,5 +33,7 @@ export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 uv sync --frozen
+VERIFY_TMP="$SHARED_PROJECT_ENV/environment_verified.txt.tmp"
 uv run --frozen python -c 'import sys; print(sys.executable); print(sys.version)' \
-  > "$SHARED_PROJECT_ENV/environment_verified.txt"
+  > "$VERIFY_TMP"
+mv "$VERIFY_TMP" "$SHARED_PROJECT_ENV/environment_verified.txt"

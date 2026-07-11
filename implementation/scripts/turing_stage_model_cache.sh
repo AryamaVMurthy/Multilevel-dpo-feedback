@@ -40,6 +40,10 @@ mkdir -p "$MODEL_CACHE_DIR"
 mkdir -p "$RUNTIME_ROOT"
 export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
+if [[ ! -f "$UV_PROJECT_ENVIRONMENT/environment_verified.txt" ]]; then
+  echo "ERROR: locked runtime verification is missing: $UV_PROJECT_ENVIRONMENT/environment_verified.txt" >&2
+  exit 1
+fi
 export UV_LINK_MODE=hardlink
 export HF_HOME="$MODEL_CACHE_DIR"
 export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"

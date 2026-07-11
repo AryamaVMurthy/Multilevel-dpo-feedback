@@ -34,6 +34,10 @@ SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
 export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
+if [[ ! -f "$UV_PROJECT_ENVIRONMENT/environment_verified.txt" ]]; then
+  echo "ERROR: locked runtime verification is missing: $UV_PROJECT_ENVIRONMENT/environment_verified.txt" >&2
+  exit 1
+fi
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"

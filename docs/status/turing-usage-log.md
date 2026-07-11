@@ -202,3 +202,15 @@ No actions have been logged under this control policy yet.
 - Installed locked runtime: Python 3.12.13, Torch 2.13.0+cu126, Transformers 5.13.0, TRL 1.8.0, PEFT 0.19.1, Datasets 5.0.0, and all other `uv.lock` packages.
 - GPU allocation and accounted GPU-hours: 0.
 - The verification file is node-local and not directly visible on the login host; successful job exit proves the script completed the verification command. The next node01 job must still check the runtime before use.
+
+## 2026-07-11T21:18:20+05:30 - synchronize dataset-staging fix
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command fetching with one pack thread, fast-forwarding only, and verifying commit `fa0b00f9c672f91f82ea4a9b7fb61f66b6bcf400` and clean status.
+- Purpose: deploy the tested node-local-runtime reuse fix before MATH source download.
+- Target path: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; fast-forward source update only.
+
+### Result - 2026-07-11T21:18:40+05:30
+
+- Exit status: 0; standalone clone fast-forwarded cleanly to `fa0b00f9c672f91f82ea4a9b7fb61f66b6bcf400`.

@@ -9,6 +9,8 @@ class TuringScriptTest(unittest.TestCase):
             "turing_stage_model_cache.sh",
             "turing_download_dataset_source.sh",
             "turing_download_math_source.sh",
+            "turing_download_dataset_source.sh",
+            "turing_download_math_source.sh",
             "turing_materialize_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_freeze_baseline.sh",
@@ -32,6 +34,8 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn('"$SHARED_UV_CACHE" != /scratch/*', setup)
         self.assertIn('"$SHARED_PROJECT_ENV" != /scratch/*', setup)
         self.assertIn("uv sync --frozen", setup)
+        self.assertIn("environment_verified.txt.tmp", setup)
+        self.assertIn('mv "$VERIFY_TMP" "$SHARED_PROJECT_ENV/environment_verified.txt"', setup)
         math_download = Path("scripts/turing_download_math_source.sh").read_text(encoding="utf-8")
         self.assertIn("CONFIG:?CONFIG is required", math_download)
         self.assertIn("EleutherAI/hendrycks_math", math_download)
@@ -110,6 +114,7 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required", grpo_setup)
         self.assertIn("environments/grpo", grpo_setup)
         self.assertIn("uv sync --project", grpo_setup)
+        self.assertIn("environment_verified.txt.tmp", grpo_setup)
         for name in ("turing_tune_paper.sh", "turing_train_paper.sh"):
             text = (Path("scripts") / name).read_text(encoding="utf-8")
             self.assertIn("GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required", text)
@@ -131,6 +136,7 @@ class TuringScriptTest(unittest.TestCase):
             self.assertNotIn("$HOME/tfdpo-runs", text, name)
             self.assertIn("RUNTIME_ROOT:?RUNTIME_ROOT is required", text, name)
             self.assertIn('"$RUNTIME_ROOT" != /scratch/*', text, name)
+            self.assertIn("environment_verified.txt", text, name)
     def test_model_load_smoke_script_has_required_gpu_checks(self):
         text = Path("scripts/turing_model_load_smoke.sh").read_text(encoding="utf-8")
         self.assertIn("#SBATCH -p u22", text)

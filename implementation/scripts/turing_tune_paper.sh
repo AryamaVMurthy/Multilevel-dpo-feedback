@@ -38,6 +38,10 @@ mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
 mkdir -p "$RUNTIME_ROOT"
 export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
 export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
+if [[ ! -f "$UV_PROJECT_ENVIRONMENT/environment_verified.txt" ]]; then
+  echo "ERROR: locked runtime verification is missing: $UV_PROJECT_ENVIRONMENT/environment_verified.txt" >&2
+  exit 1
+fi
 if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
   echo "ERROR: MODEL_CACHE_DIR is not present on $(hostname): $MODEL_CACHE_DIR" >&2
   exit 1
@@ -56,6 +60,10 @@ if [[ "$METHOD" == "grpo" ]]; then
     exit 1
   fi
   export UV_PROJECT_ENVIRONMENT="$GRPO_ENVIRONMENT"
+  if [[ ! -f "$UV_PROJECT_ENVIRONMENT/environment_verified.txt" ]]; then
+    echo "ERROR: locked GRPO runtime verification is missing: $UV_PROJECT_ENVIRONMENT/environment_verified.txt" >&2
+    exit 1
+  fi
   RUNNER=(uv run --project "$PROJECT_DIR/environments/grpo" --frozen --no-sync)
 else
   RUNNER=(uv run --frozen --no-sync)

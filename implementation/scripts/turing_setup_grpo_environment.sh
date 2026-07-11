@@ -32,6 +32,9 @@ cd "$PROJECT_DIR"
 
 echo "account=$TURING_ACCOUNT host=$(hostname) scratch_before=$(df -h /scratch | tail -1)"
 uv sync --project "$PROJECT_DIR/environments/grpo" --frozen --no-dev
+VERIFY_TMP="$GRPO_ENVIRONMENT/environment_verified.txt.tmp"
 uv run --project "$PROJECT_DIR/environments/grpo" --frozen --no-sync python -c \
-  'import torch, transformers, trl, vllm; print({"torch": torch.__version__, "transformers": transformers.__version__, "trl": trl.__version__, "vllm": vllm.__version__})'
+  'import torch, transformers, trl, vllm; print({"torch": torch.__version__, "transformers": transformers.__version__, "trl": trl.__version__, "vllm": vllm.__version__})' \
+  > "$VERIFY_TMP"
+mv "$VERIFY_TMP" "$GRPO_ENVIRONMENT/environment_verified.txt"
 echo "scratch_after=$(df -h /scratch | tail -1)"
