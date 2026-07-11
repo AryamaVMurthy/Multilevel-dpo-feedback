@@ -567,3 +567,30 @@ No actions have been logged under this control policy yet.
 - The failed `evaluation` directory from job 13128 remains diagnostic and will not be resumed or overwritten. Retry output is the fresh `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/micro-one/evaluation-v2` directory.
 - Local evidence: 200 tests pass with `PYTHONPATH=src`, Ruff passes, compileall passes, all shell scripts parse, and the diff check passes.
 - Lookup resources: account `priyesh.shukla`, u22, node01, 2 tasks, 16 GiB, `00:30:00`, 0 GPUs. Retry resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:42:06+05:30
+
+- Standalone clone fast-forwarded cleanly to `834562eee80ec6b3a6eb5d98780d1a1732cd73bd`; queue was empty and both new output paths were absent.
+- CPU offline-lookup job: `13129`. Dependent one-example GPU evaluation job: `13130`, array index 0 only, with `afterok:13129`.
+
+## 2026-07-11T22:42:06+05:30 - monitor offline lookup and baseline micro retry jobs 13129-13130
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, then compact lookup/prediction/metrics/completion artifacts only after successful terminal states.
+- Purpose: prove ID-plus-revision resolution from node-local offline cache, enforce dependency behavior, and manually inspect the only generated response before expanding the preflight.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:42:54+05:30
+
+- Job 13129 `COMPLETED` in 5 seconds and proved offline ID-plus-revision lookup for exact Qwen3-4B and Qwen3-8B with config SHA-256 `d2fa3e60c02aae8d87018f4550e99bc593d2bb4610b5461d7e13db78523b01ae`; lookup artifact SHA-256 is `3b651ceb7f4f1538f70fb79e7cee2dd6ac77194f6ed3202647414af10cd7cb21`.
+- Dependent job 13130 index 0 `COMPLETED` in 18 seconds, exit `0:0`; accounted GPU time `0.005` GPU-hours and observed peak telemetry memory was 24,038 MiB.
+- The only response ended exactly with `FINAL: \\boxed{6}`, contained no thinking markup, terminated through the balanced final-answer stopper, was not truncated, and matched the reference. The deterministic evaluator and pinned 8B evaluator both marked it correct with confidence 1.0 and no parse failures or regenerations.
+- Completion marker and hashes are present, failures are empty, teacher-free is true, and the frozen Qwen3-4B revision is exact. Manual one-example inspection gate passes.
+
+## 2026-07-11T22:42:54+05:30 - run stratified 16-example MATH validation preflight
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH clean/queue/output check; submit one CPU-only `math_subject_level` 16-example validation materialization on node01, then one array-index-0 GPU evaluation with an `afterok` dependency.
+- Input remains the audited validation split; subset seed `20260713`, count 16. The official test split remains untouched.
+- Outputs are new immutable paths under `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/preflight-16`; no prior artifact will be resumed or overwritten.
+- CPU resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs. GPU resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
