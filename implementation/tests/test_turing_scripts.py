@@ -13,6 +13,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_audit_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_decoding_sweep.sh",
+            "turing_freeze_decoding.sh",
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",
             "turing_merge_collection.sh",
@@ -77,6 +78,13 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", decoding)
         self.assertIn("run_local_concise_sweep.py", decoding)
         self.assertIn("nvidia-smi", decoding)
+        freeze_decoding = Path("scripts/turing_freeze_decoding.sh").read_text(encoding="utf-8")
+        self.assertIn("freeze-decoding", freeze_decoding)
+        self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", freeze_decoding)
+        self.assertIn("CACHE_PRESERVE_OUTPUT:?CACHE_PRESERVE_OUTPUT is required", freeze_decoding)
+        self.assertIn("DECODING_FREEZE_OUTPUT:?DECODING_FREEZE_OUTPUT is required", freeze_decoding)
+        self.assertIn("model-cache selection hash mismatch", freeze_decoding)
+        self.assertIn("uv run --frozen --no-sync", freeze_decoding)
         freeze_baseline = Path("scripts/turing_freeze_baseline.sh").read_text(encoding="utf-8")
         self.assertIn("freeze-baseline", freeze_baseline)
         self.assertIn("DATASET_MANIFEST:?DATASET_MANIFEST is required", freeze_baseline)
@@ -148,6 +156,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_audit_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_decoding_sweep.sh",
+            "turing_freeze_decoding.sh",
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",
             "turing_tune_paper.sh",

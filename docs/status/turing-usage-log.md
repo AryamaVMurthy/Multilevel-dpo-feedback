@@ -470,3 +470,18 @@ No actions have been logged under this control policy yet.
 - Frozen source commit: `5f31c5010a47db0b35603a99356c1c9c6ffa227e`; MATH config SHA-256 `d2fa3e60c02aae8d87018f4550e99bc593d2bb4610b5461d7e13db78523b01ae`; selected presence penalty `1.5`.
 - Freeze output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-decoding-freeze.json`; preserved selection cache manifest: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/model-cache-selection.json`.
 - Requested staging resources: account `priyesh.shukla`, u22, node01, 2 tasks, 32 GiB, `02:00:00`, 0 GPUs, 0 requested GPU-hours.
+
+### Failed control-plane attempt - 2026-07-11T22:31:36+05:30
+
+- Exit status: 1 before any freeze write or Slurm submission.
+- Explicit failure: the login host could not see node01-local `/scratch/aryama.murthy/tfdpo-qwen3/models/tfdpo-model-cache-manifest.json`.
+- No fallback was used; neither compact output existed afterward and no cache-refresh job was submitted.
+- Corrective action: run cache verification, preservation, and decoding freeze inside a tested node01 CPU job, then submit cache refresh with an `afterok` dependency.
+
+## 2026-07-11T22:32:40+05:30 - submit node-local decoding freeze and dependent cache refresh
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync and clean/output/queue checks, then exactly two node01 CPU-only submissions: `turing_freeze_decoding.sh` and `turing_stage_model_cache.sh` with `afterok` dependency on the freeze job.
+- Freeze wrapper verifies the live selection-time cache-manifest hash on node01 before preserving it and refuses any pre-existing output. Cache refresh cannot start if freeze fails.
+- Local evidence: full suite passes 200 tests, Ruff, compileall, all shell parsing, and diff checks.
+- Freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, 8 GiB, `00:30:00`, 0 GPUs. Cache-refresh resources: 2 tasks, 32 GiB, `02:00:00`, 0 GPUs. Total requested GPU-hours: 0.
