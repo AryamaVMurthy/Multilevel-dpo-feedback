@@ -22,21 +22,42 @@ class PaperExperimentConfigTest(unittest.TestCase):
             path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
             return load_paper_experiment(path)
 
-    def test_gsm8k_config_freezes_optimizer_search_and_nested_validation(self):
-        config = load_paper_experiment(Path("configs/paper/gsm8k.yaml"))
+    def test_math_config_freezes_exact_qwen3_protocol_and_optimizer_search(self):
+        config = load_paper_experiment(Path("configs/paper/math.yaml"))
 
-        self.assertEqual(config.schema_version, 3)
-        self.assertEqual(config.dataset.revision, "740312add88f781978c0658806c59bc2815b9866")
-        self.assertEqual(config.dataset.splits, {"train": 6726, "validation": 747, "test": 1319})
-        self.assertEqual(config.dataset.validation_roles, {"tune": 500, "confirm": 247})
+        self.assertEqual(config.schema_version, 4)
+        self.assertEqual(
+            config.models,
+            {
+                "student": {
+                    "id": "Qwen/Qwen3-4B",
+                    "revision": "1cfa9a7208912126459214e8b04321603b3df60c",
+                },
+                "teacher": {
+                    "id": "Qwen/Qwen3-8B",
+                    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+                },
+                "evaluator": {
+                    "id": "Qwen/Qwen3-8B",
+                    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+                },
+            },
+        )
         student = config.generation.roles["student"]
         self.assertFalse(student.enable_thinking)
         self.assertTrue(student.do_sample)
-        self.assertEqual(student.max_new_tokens, 16384)
+        self.assertEqual(student.max_new_tokens, 8192)
         self.assertTrue(student.stop_after_final_answer)
         self.assertEqual(
-            (student.temperature, student.top_p, student.top_k, student.presence_penalty),
-            (1.0, 1.0, 20, 2.0),
+            (
+                student.temperature,
+                student.top_p,
+                student.top_k,
+                student.min_p,
+                student.presence_penalty,
+                student.repetition_penalty,
+            ),
+            (0.7, 0.8, 20, 0.0, 0.0, 1.0),
         )
         for role, max_new_tokens in {
             "teacher": 64,
@@ -57,13 +78,25 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dpo_search.betas, (0.05, 0.1, 0.3, 0.5))
         self.assertEqual(config.grpo_search.kl_betas, (0.0, 0.001, 0.01, 0.04))
         self.assertEqual(config.lora.rank, 16)
-        self.assertEqual(config.lora.target_policy, "qwen35_text_linear")
+        self.assertEqual(config.lora.target_policy, "qwen3_text_linear")
         self.assertEqual(config.training["max_sequence_tokens"], 18432)
         self.assertTrue(config.evaluation["baseline_before_training"])
-        self.assertEqual(config.evaluation["generation_seed"], 20260710)
+        self.assertEqual(config.evaluation["generation_seed"], 20260711)
         self.assertEqual(config.evaluation["max_truncation_rate"], 0.05)
         self.assertEqual(config.evaluation["minimum_evaluator_audit_agreement"], 0.95)
         self.assertTrue(config.require_freeze_manifest_for_test)
+
+    def test_model_ids_and_revisions_are_exact_and_post_trained(self):
+        for role, field, invalid in (
+            ("student", "id", "Qwen/Qwen3-4B-Base"),
+            ("student", "revision", "0" * 40),
+            ("teacher", "id", "Qwen/Qwen3-8B-Base"),
+            ("evaluator", "revision", "f" * 40),
+        ):
+            value = self._load_mapping("configs/paper/math.yaml")
+            value["models"][role][field] = invalid
+            with self.assertRaisesRegex(ValueError, rf"models\.{role}\.{field}.*exact frozen Qwen3"):
+                self._write_and_load(value)
 
     def test_searchqa_config_has_disjoint_auxiliary_hparam_roles(self):
         config = load_paper_experiment(Path("configs/paper/searchqa8k.yaml"))
@@ -72,7 +105,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.splits, {"train": 5000, "validation": 1000, "test": 2000})
         self.assertEqual(config.dataset.auxiliary_hparam, {"train": 2000, "validation": 500})
         self.assertFalse(config.generation.roles["student"].stop_after_final_answer)
-        self.assertEqual(config.collection["prompt_protocol"], "qwen-nonthinking-r1")
+        self.assertEqual(config.collection["prompt_protocol"], "qwen3-nonthinking-r1")
 
     def test_math_config_pins_all_subjects_and_derives_primary_split_counts(self):
         config = load_paper_experiment(Path("configs/paper/math.yaml"))
@@ -86,7 +119,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.validation_tune_fraction, 2 / 3)
         self.assertEqual(len(config.dataset.subjects), 7)
         self.assertTrue(config.generation.roles["student"].stop_after_final_answer)
-        self.assertEqual(config.collection["prompt_protocol"], "qwen-nonthinking-final-r2")
+        self.assertEqual(config.collection["prompt_protocol"], "qwen3-nonthinking-final-r1")
 
     def test_math_config_rejects_noncanonical_subject_order_or_primary_levels(self):
         value = self._load_mapping("configs/paper/math.yaml")
@@ -127,11 +160,22 @@ class PaperExperimentConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"optimizer\.warmup_ratio.*deprecated"):
             self._write_and_load(value)
 
-    def test_non_16384_student_completion_budget_fails(self):
-        value = self._load_mapping("configs/paper/gsm8k.yaml")
+    def test_non_8192_student_completion_budget_fails(self):
+        value = self._load_mapping("configs/paper/math.yaml")
         value["generation"]["student"]["max_new_tokens"] = 2048
 
-        with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*16384"):
+        with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*8192"):
+            self._write_and_load(value)
+
+    def test_every_role_rejects_thinking_or_generation_above_ceiling(self):
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["generation"]["teacher"]["enable_thinking"] = True
+        with self.assertRaisesRegex(ValueError, r"generation\.teacher.*enable_thinking=false"):
+            self._write_and_load(value)
+
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["generation"]["evaluator"]["max_new_tokens"] = 8193
+        with self.assertRaisesRegex(ValueError, r"generation\.evaluator\.max_new_tokens.*8192"):
             self._write_and_load(value)
 
     def test_math_requires_final_answer_stopping(self):
@@ -148,7 +192,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
 
         value = self._load_mapping("configs/paper/math.yaml")
         value["generation"]["student"]["top_p"] = 0.95
-        with self.assertRaisesRegex(ValueError, "top_p=1.0"):
+        with self.assertRaisesRegex(ValueError, "top_p=0.8"):
             self._write_and_load(value)
 
     def test_primary_dpo_objective_and_length_ablation_grid_are_frozen(self):
@@ -184,10 +228,10 @@ class PaperExperimentConfigTest(unittest.TestCase):
             self._write_and_load(value)
 
     def test_cli_validation_returns_identity_and_frozen_protocol(self):
-        result = run_validate_paper_config(Path("configs/paper/gsm8k.yaml"))
+        result = run_validate_paper_config(Path("configs/paper/math.yaml"))
 
-        self.assertEqual(result["experiment_id"], "qwen35-paper-gsm8k")
-        self.assertEqual(result["dataset"], "gsm8k")
+        self.assertEqual(result["experiment_id"], "qwen3-paper-math-level45")
+        self.assertEqual(result["dataset"], "math")
         self.assertTrue(result["require_freeze_manifest_for_test"])
 
     def test_materialize_cli_validates_config_before_delegating(self):

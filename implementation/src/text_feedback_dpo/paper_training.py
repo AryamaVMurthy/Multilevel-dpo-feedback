@@ -219,6 +219,12 @@ def train_paper_grpo(
             max_steps=max_steps,
             candidate=effective_candidate,
             max_completion_length=config.generation.roles["student"].max_new_tokens,
+            temperature=float(config.generation.roles["student"].temperature),
+            top_p=float(config.generation.roles["student"].top_p),
+            top_k=int(config.generation.roles["student"].top_k),
+            min_p=float(config.generation.roles["student"].min_p),
+            presence_penalty=float(config.generation.roles["student"].presence_penalty),
+            repetition_penalty=float(config.generation.roles["student"].repetition_penalty),
         ),
         seed=seed,
     )

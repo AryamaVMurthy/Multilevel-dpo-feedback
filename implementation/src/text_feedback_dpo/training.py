@@ -168,9 +168,29 @@ def build_paper_grpo_config_kwargs(
     max_steps: int,
     candidate: Any,
     max_completion_length: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    min_p: float,
+    presence_penalty: float,
+    repetition_penalty: float,
 ) -> dict[str, Any]:
     if max_completion_length <= 0:
         raise ValueError("max_completion_length must be positive")
+    if max_completion_length > 8192:
+        raise ValueError("max_completion_length must not exceed 8192")
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if not 0 < top_p <= 1:
+        raise ValueError("top_p must be in (0, 1]")
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if not 0 <= min_p <= 1:
+        raise ValueError("min_p must be between 0 and 1")
+    if not 0 <= presence_penalty <= 2:
+        raise ValueError("presence_penalty must be between 0 and 2")
+    if repetition_penalty <= 0:
+        raise ValueError("repetition_penalty must be positive")
     profile = build_optimizer_profile(
         learning_rate=float(candidate.learning_rate),
         weight_decay=0.01,
@@ -196,14 +216,17 @@ def build_paper_grpo_config_kwargs(
         "loss_type": str(candidate.loss_type),
         "scale_rewards": "group",
         "mask_truncated_completions": True,
-        "temperature": 1.0,
-        "top_p": 1.0,
-        "top_k": 20,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "repetition_penalty": repetition_penalty,
+        "chat_template_kwargs": {"enable_thinking": False},
         "use_vllm": True,
         "vllm_mode": "colocate",
         "vllm_gpu_memory_utilization": 0.25,
         "vllm_max_model_length": max_completion_length + 2048,
-        "generation_kwargs": {"presence_penalty": 2.0},
+        "generation_kwargs": {"presence_penalty": presence_penalty},
         **profile,
     }
 

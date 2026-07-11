@@ -1,7 +1,8 @@
 # Multilevel DPO Feedback
 
 This repository contains the implementation and paper-scale execution protocol for
-multilevel-feedback DPO with Qwen3.5.
+multilevel-feedback DPO with the pinned post-trained Qwen3-4B student and Qwen3-8B
+privileged roles.
 
 Current status:
 
@@ -9,16 +10,11 @@ Current status:
 - Canonical living method: `docs/design/native_iterative_guidance_dpo.md`.
 - Paper design and execution plan: `docs/plans/`.
 - Tested implementation and Turing workflows: `implementation/`.
-- Current state: MATH Levels 4-5 is the primary benchmark. The thinking-mode baseline
-  diagnostic failed its termination gate, and the primary student protocol is now
-  explicit non-thinking `qwen-nonthinking-final-r2` with balanced final-box stopping
-  and a 16,384-token emergency ceiling. Job `13053` eliminated truncation on the same
-  16-example diagnostic used by the earlier mode comparisons. Source-bound CPU rescore
-  job `13058` corrected the one false-positive model-evaluator decision and passed the
-  16/16 manual audit. The complete 402-example MATH validation attempt was stopped at
-  user request after shard 0 completed; its 58 predictions are preserved, and only
-  shards 1-6 remain. Collection and training remain blocked until the baseline resumes,
-  merges, and passes audit.
+- Current state: MATH Levels 4-5 is the primary benchmark and SearchQA-8K is strictly
+  secondary. Active paper configs use schema 4, explicit non-thinking
+  `qwen3-nonthinking-final-r1`, balanced final-box stopping, and an 8,192-token
+  generation ceiling. Earlier Qwen3.5 jobs and reports are preserved as diagnostics
+  only and must never be merged into Qwen3 paper artifacts.
 
 Run the basic local pipeline:
 

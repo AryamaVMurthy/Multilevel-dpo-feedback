@@ -1,6 +1,11 @@
 # Native Iterative Guidance DPO
 
-Status: active experiment specification
+> Historical protocol note: Qwen3.5-specific identities, architecture notes, and job
+> results below are preserved diagnostic evidence. Active paper runs use the pinned
+> Qwen3 schema-4 configs in `implementation/configs/paper/` and the current
+> `training_hyperparameter_protocol.md`; the two artifact families must not be mixed.
+
+Status: historical Qwen3.5 diagnostic specification
 
 This document adapts the V1 textual-feedback DPO research method to Qwen3.5's native
 chat protocol. The research object is the preference-data construction method, not a

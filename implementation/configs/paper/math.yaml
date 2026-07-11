@@ -1,5 +1,5 @@
-schema_version: 3
-experiment_id: qwen35-paper-math-level45
+schema_version: 4
+experiment_id: qwen3-paper-math-level45
 dataset:
   name: math
   config: all_subjects
@@ -16,18 +16,20 @@ dataset:
   train_fraction: 0.9
   validation_tune_fraction: 0.6666666666666666
 models:
-  student: {id: Qwen/Qwen3.5-2B, revision: 15852e8c16360a2fea060d615a32b45270f8a8fc}
-  teacher: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
-  evaluator: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
+  student: {id: Qwen/Qwen3-4B, revision: 1cfa9a7208912126459214e8b04321603b3df60c}
+  teacher: {id: Qwen/Qwen3-8B, revision: b968826d9c46dd6066d109eabc6255188de91218}
+  evaluator: {id: Qwen/Qwen3-8B, revision: b968826d9c46dd6066d109eabc6255188de91218}
 generation:
   student:
     enable_thinking: false
     do_sample: true
-    max_new_tokens: 16384
-    temperature: 1.0
-    top_p: 1.0
+    max_new_tokens: 8192
+    temperature: 0.7
+    top_p: 0.8
     top_k: 20
-    presence_penalty: 2.0
+    min_p: 0.0
+    presence_penalty: 0.0
+    repetition_penalty: 1.0
     stop_after_final_answer: true
   teacher: {enable_thinking: false, do_sample: false, max_new_tokens: 64}
   evaluator: {enable_thinking: false, do_sample: false, max_new_tokens: 256}
@@ -37,15 +39,15 @@ collection:
   max_guidance_steps: 3
   max_guidance_regenerations: 2
   shard_size: 256
-  artifact_schema: paper-v2
-  prompt_protocol: qwen-nonthinking-final-r2
+  artifact_schema: paper-v3
+  prompt_protocol: qwen3-nonthinking-final-r1
 lora:
   rank: 16
   alpha: 32
   dropout: 0.05
   dtype: bfloat16
   quantization: none
-  target_policy: qwen35_text_linear
+  target_policy: qwen3_text_linear
   excluded_components: [vision, multimodal_projector, embeddings, output_head]
 optimizer:
   name: adamw_torch_fused

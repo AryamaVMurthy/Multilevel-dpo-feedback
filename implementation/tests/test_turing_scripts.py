@@ -29,6 +29,8 @@ class TuringScriptTest(unittest.TestCase):
             self.assertNotIn("/home/$USER/.cache", text, name)
         setup = Path("scripts/turing_setup_environment.sh").read_text(encoding="utf-8")
         self.assertIn("SHARED_UV_CACHE:?SHARED_UV_CACHE is required", setup)
+        self.assertIn('"$SHARED_UV_CACHE" != /scratch/*', setup)
+        self.assertIn('"$SHARED_PROJECT_ENV" != /scratch/*', setup)
         self.assertIn("uv sync --frozen", setup)
         math_download = Path("scripts/turing_download_math_source.sh").read_text(encoding="utf-8")
         self.assertIn("CONFIG:?CONFIG is required", math_download)
@@ -43,6 +45,7 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn('"$MODEL_CACHE_DIR" != /scratch/*', stage_cache)
         self.assertIn("snapshot_download", stage_cache)
         self.assertIn("tfdpo-model-cache-manifest.json", stage_cache)
+        self.assertIn("validate-paper-config", stage_cache)
         preflight = Path("scripts/turing_materialize_preflight_subset.sh").read_text(encoding="utf-8")
         self.assertIn("materialize-preflight-subset", preflight)
         self.assertIn("SOURCE_PATH:?SOURCE_PATH is required", preflight)
@@ -108,13 +111,32 @@ class TuringScriptTest(unittest.TestCase):
             text = (Path("scripts") / name).read_text(encoding="utf-8")
             self.assertIn("GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required", text)
             self.assertIn('uv run --project "$PROJECT_DIR/environments/grpo" --frozen --no-sync', text)
+
+    def test_paper_runtime_environments_never_fall_back_to_home_storage(self):
+        for name in (
+            "turing_stage_model_cache.sh",
+            "turing_materialize_preflight_subset.sh",
+            "turing_freeze_baseline.sh",
+            "turing_collect_array.sh",
+            "turing_tune_paper.sh",
+            "turing_train_paper.sh",
+            "turing_evaluate_paper.sh",
+            "turing_merge_evaluations.sh",
+            "turing_rescore_evaluation.sh",
+        ):
+            text = (Path("scripts") / name).read_text(encoding="utf-8")
+            self.assertNotIn("$HOME/tfdpo-runs", text, name)
+            self.assertIn("RUNTIME_ROOT:?RUNTIME_ROOT is required", text, name)
+            self.assertIn('"$RUNTIME_ROOT" != /scratch/*', text, name)
     def test_model_load_smoke_script_has_required_gpu_checks(self):
         text = Path("scripts/turing_model_load_smoke.sh").read_text(encoding="utf-8")
         self.assertIn("#SBATCH -p u22", text)
         self.assertIn("#SBATCH --gres=gpu:1", text)
         self.assertIn("set -euo pipefail", text)
         self.assertIn("module load u22/cuda/12.4", text)
-        self.assertIn("Qwen/Qwen3.5-2B", text)
+        self.assertIn("Qwen/Qwen3-4B", text)
+        self.assertIn("1cfa9a7208912126459214e8b04321603b3df60c", text)
+        self.assertIn("revision=model_revision", text)
         self.assertIn("torch.cuda.is_available()", text)
         self.assertNotIn("|| true", text)
 

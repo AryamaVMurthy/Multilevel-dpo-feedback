@@ -40,12 +40,14 @@ def extract_math_boxed_answer(solution: str) -> tuple[str, str]:
     index += 1
     depth = 1
     for end in range(index, len(text)):
-        if text[end] == "{": depth += 1
+        if text[end] == "{":
+            depth += 1
         elif text[end] == "}":
             depth -= 1
             if depth == 0:
                 answer = text[index:end].strip()
-                if not answer: raise ValueError("MATH solution has an empty boxed final answer")
+                if not answer:
+                    raise ValueError("MATH solution has an empty boxed final answer")
                 return answer, "last_balanced_boxed"
     raise ValueError("MATH solution has an unbalanced boxed final answer")
 

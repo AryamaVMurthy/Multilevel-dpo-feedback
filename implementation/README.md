@@ -52,18 +52,23 @@ Primary paper student generation settings:
 ```yaml
 enable_thinking: false
 stop_after_final_answer: true
-max_new_tokens: 16384
-temperature: 1.0
-top_p: 1.0
+max_new_tokens: 8192
+temperature: 0.7
+top_p: 0.8
 top_k: 20
-presence_penalty: 2.0
+min_p: 0.0
+presence_penalty: 0.0  # selected later by the frozen train-only sweep
+repetition_penalty: 1.0
 ```
 
-`temperature`, `top_p`, and `top_k` are passed directly to Hugging Face Transformers `generate()`. `presence_penalty` is not a native Transformers `GenerationConfig` field, so this repo applies it through a custom logits processor that subtracts the penalty from tokens already present in the sequence. This is explicit and tested; it is not mapped silently to `repetition_penalty`.
+`temperature`, `top_p`, `top_k`, `min_p`, and `repetition_penalty` are passed explicitly
+to generation. `presence_penalty` is applied through the repository's tested logits
+processor for Transformers collection and through the explicit vLLM generation kwargs
+for GRPO; it is never silently mapped to a different field.
 
-MATH generation uses the frozen `qwen-nonthinking-final-r2` contract. A tokenizer-aware
+MATH generation uses the frozen `qwen3-nonthinking-final-r1` contract. A tokenizer-aware
 stopping criterion recognizes one balanced `FINAL: \boxed{...}` answer, stops at its
-closing brace, and records `finish_reason=final_answer`. The 16,384-token value is an
+closing brace, and records `finish_reason=final_answer`. The 8,192-token value is an
 emergency ceiling for outputs that emit neither EOS nor a valid final marker.
 
 The paper plan applies these sampled settings only to student rollouts; every role uses

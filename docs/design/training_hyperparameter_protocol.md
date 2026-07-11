@@ -1,6 +1,6 @@
 # Training Hyperparameter Protocol
 
-Status: approved and reverified against current official documentation on 2026-07-10
+Status: Qwen3 protocol approved and reverified against current official documentation on 2026-07-11
 
 This document is the canonical optimizer, LoRA coverage, hyperparameter search, and
 model-selection protocol for the paper-scale MATH Levels 4-5 study and secondary
@@ -16,7 +16,8 @@ are runtime checks only and are not approved paper settings.
 | [TRL GRPO trainer](https://huggingface.co/docs/trl/grpo_trainer) | official software documentation | KL beta, clipping, update count, loss variants, reward scaling, truncation masking |
 | [Transformers TrainingArguments](https://github.com/huggingface/transformers/blob/main/src/transformers/training_args.py) | official source | fused AdamW, Adam coefficients, scheduler, warmup, weight decay, clipping |
 | [PEFT LoRA guide](https://github.com/huggingface/peft/blob/main/docs/source/developer_guides/quantization.md) | official software documentation | broad linear-module targeting support |
-| [Qwen3.5-2B model card](https://huggingface.co/Qwen/Qwen3.5-2B) | official model documentation | model identity, architecture, chat template, non-thinking text sampling, and thinking-loop warning |
+| [Qwen3-4B model card](https://huggingface.co/Qwen/Qwen3-4B) | official model documentation | post-trained model identity, 36-layer dense architecture, chat template, and non-thinking sampling |
+| [Qwen3-8B model card](https://huggingface.co/Qwen/Qwen3-8B) | official model documentation | post-trained privileged-role identity and chat template |
 | [Direct Preference Optimization](https://papers.neurips.cc/paper_files/paper/2023/file/a85b405ed65c6477a4fe8302b5e06ce7-Paper-Conference.pdf) | peer-reviewed NeurIPS 2023 paper | standard DPO objective and beta sensitivity |
 | [Beta-DPO](https://proceedings.neurips.cc/paper_files/paper/2024/file/ea888178abdb6fc233226d12321d754f-Paper-Conference.pdf) | peer-reviewed NeurIPS 2024 paper | evidence that DPO performance is beta-sensitive |
 
@@ -29,41 +30,41 @@ defaults may select another loss variant, and explicitly enables
 `mask_truncated_completions`. DPO sets `max_length` for the combined
 prompt/completion sequence; removed legacy DPO length arguments are prohibited. The
 locked package APIs are inspected in a model-load preflight before any candidate run.
-The paper config fixes DPO `max_length=18432` to provide 2,048 tokens of prompt
-headroom around the 16,384-token student emergency completion ceiling, and fixes GRPO
-`max_completion_length=16384`.
-These values are explicit config inputs rather than trainer defaults.
-The official Qwen3.5-2B model card reports a native 262,144-token context, so 16,384 is
-model-supported. The primary paper protocol uses its recommended non-thinking text
-profile: temperature `1.0`, top-p `1.0`, top-k `20`, and presence penalty `2.0`. The
-same card warns that the 2B checkpoint can enter thinking loops; the failed MATH
-thinking-mode diagnostic is therefore preserved as an ablation, while exact EOS/length
-metadata and the 5% truncation gate remain mandatory for every mode.
+The generation ceiling and GRPO `max_completion_length` are exactly 8,192 tokens;
+DPO's 18,432 combined-sequence limit leaves explicit prompt headroom and is not a
+generation allowance. Qwen3-4B natively supports the resulting context length.
+
+The primary starting profile is the official Qwen3 non-thinking recommendation:
+temperature `0.7`, top-p `0.8`, top-k `20`, and min-p `0`. Repetition penalty is
+explicitly `1.0`. Presence penalty is selected only through the prespecified,
+train-only termination study and may range from 0 through 2. Exact finish metadata and
+the 5% truncation gate remain mandatory.
 
 For MATH, the ceiling is an emergency bound rather than the normal stopping mechanism.
 The student emits a bounded derivation followed by `FINAL: \boxed{...}`; a balanced-box
 stopping criterion records `finish_reason=final_answer` at the closing brace. The full
-16,384-token allocation is used only when neither EOS nor a valid final marker appears.
+8,192-token allocation is used only when neither EOS nor a valid final marker appears.
 
 TRL 1.8 exposes temperature, top-p, and top-k directly, but Transformers generation
 does not implement OpenAI-style presence penalty as a `GenerationConfig` field. Paper
 GRPO therefore uses TRL's vLLM rollout path with explicit
-`generation_kwargs={"presence_penalty": 2.0}`. vLLM is isolated in
+`generation_kwargs={"presence_penalty": <frozen train-only selection>}`. vLLM is isolated in
 `implementation/environments/grpo/` because its PyTorch constraint differs from the
 main collection/DPO environment. The first profile is colocated vLLM at 25% GPU memory;
 an OOM or memory-gate failure does not permit dropping the penalty and instead triggers
 the prespecified two-GPU server-mode preflight for every GRPO candidate.
 
-## Qwen3.5 LoRA Coverage Gate
+## Qwen3 LoRA Coverage Gate
 
-Qwen3.5-2B has a hybrid text architecture: 18 linear-attention layers and six
-full-attention layers. Targeting only `q_proj`, `k_proj`, `v_proj`, and `o_proj`
-therefore does not establish adequate text-backbone coverage.
+Qwen3-4B is a 36-layer dense causal language model. Every layer must expose the same
+seven audited text projections: attention `q_proj`, `k_proj`, `v_proj`, and `o_proj`,
+plus MLP `gate_proj`, `up_proj`, and `down_proj`. Missing or unexpected layer
+projections fail the coverage gate.
 
 Before training, load the pinned model revision and inventory every named trainable
 module. Build an explicit text-backbone-only linear-module target set that:
 
-- includes the linear-attention, full-attention, and MLP projections;
+- includes all seven attention and MLP projections in every transformer layer;
 - excludes the vision encoder, multimodal projector, embeddings, and output head;
 - resolves to a nonempty, expected module list;
 - records every matched module name and shape;

@@ -96,7 +96,9 @@ def paper_generation_kwargs(config: Any, *, role: str) -> dict[str, Any]:
             temperature=profile.temperature,
             top_p=profile.top_p,
             top_k=profile.top_k,
+            min_p=profile.min_p,
             presence_penalty=profile.presence_penalty,
+            repetition_penalty=profile.repetition_penalty,
         )
     if profile.stop_after_final_answer:
         kwargs["stop_after_final_answer"] = True

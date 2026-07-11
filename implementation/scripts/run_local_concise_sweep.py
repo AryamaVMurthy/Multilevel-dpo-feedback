@@ -14,7 +14,13 @@ from datasets import load_dataset
 
 from text_feedback_dpo.answer_evaluation import evaluate_math_answer
 from text_feedback_dpo.benchmarks import convert_math_row, extract_math_boxed_answer
-from text_feedback_dpo.concise_sweep import PROFILES, promote_profiles, stratified_subset, summarize_records
+from text_feedback_dpo.concise_sweep import (
+    PROFILES,
+    promote_profiles,
+    protocol_valid_correct,
+    stratified_subset,
+    summarize_records,
+)
 from text_feedback_dpo.models import TransformersModelProvider
 
 
@@ -75,6 +81,8 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--exclude-manifest", type=Path)
     args = parser.parse_args()
+    if args.max_new_tokens <= 0 or args.max_new_tokens > 8192:
+        raise ValueError("max-new-tokens must be between 1 and the frozen 8192-token ceiling")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required; refusing CPU fallback")
     if args.output_dir.exists() and not args.output_dir.is_dir():
@@ -150,7 +158,12 @@ def main() -> None:
                 "extracted_answer": extracted_answer,
                 "answer_extraction_method": extraction_method,
                 "response": result.text,
-                "correct": bool(evaluation["correct"]),
+                "symbolic_correct": bool(evaluation["correct"]),
+                "correct": protocol_valid_correct(
+                    symbolic_correct=bool(evaluation["correct"]),
+                    terminated=result.terminated,
+                    truncated=result.truncated,
+                ),
                 "evaluation": evaluation,
                 "prompt_tokens": result.prompt_tokens,
                 "generated_tokens": result.generated_tokens,

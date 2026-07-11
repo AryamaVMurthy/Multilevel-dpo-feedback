@@ -16,11 +16,16 @@ SUBSET_COUNT="${SUBSET_COUNT:?SUBSET_COUNT is required}"
 SUBSET_SEED="${SUBSET_SEED:?SUBSET_SEED is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
 if [[ ! -d /scratch || ! -w /scratch ]]; then
   echo "ERROR: /scratch is not writable; refusing home cache fallback" >&2
+  exit 1
+fi
+if [[ "$RUNTIME_ROOT" != /scratch/* ]]; then
+  echo "ERROR: RUNTIME_ROOT must be node-local /scratch storage: $RUNTIME_ROOT" >&2
   exit 1
 fi
 if [[ ! -f "$SOURCE_PATH" ]]; then
@@ -32,8 +37,9 @@ if [[ ! -f "$DATASET_MANIFEST" ]]; then
   exit 1
 fi
 mkdir -p "$(dirname "$OUTPUT_PATH")"
-export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
-export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
+mkdir -p "$RUNTIME_ROOT"
+export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
 export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"

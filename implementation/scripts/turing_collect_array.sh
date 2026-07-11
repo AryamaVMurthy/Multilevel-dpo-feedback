@@ -20,6 +20,7 @@ NUM_SHARDS="${NUM_SHARDS:?NUM_SHARDS is required}"
 SHARD_INDEX="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 SOURCE_COMMIT="${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
+RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -27,10 +28,15 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
   echo "ERROR: /scratch is not writable; refusing home cache fallback" >&2
   exit 1
 fi
+if [[ "$RUNTIME_ROOT" != /scratch/* ]]; then
+  echo "ERROR: RUNTIME_ROOT must be node-local /scratch storage: $RUNTIME_ROOT" >&2
+  exit 1
+fi
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}_${SHARD_INDEX}"
 mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
-export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
-export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
+mkdir -p "$RUNTIME_ROOT"
+export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
   echo "ERROR: MODEL_CACHE_DIR is not present on $(hostname): $MODEL_CACHE_DIR" >&2

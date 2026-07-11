@@ -15,13 +15,31 @@ _COMMON = {
 }
 
 PROFILES: dict[str, dict[str, Any]] = {
-    "qwen-reasoning": {**_COMMON, "do_sample": True, "temperature": 1.0, "top_p": 1.0, "top_k": 40, "presence_penalty": 2.0},
-    "qwen-general": {**_COMMON, "do_sample": True, "temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5},
-    "conservative": {**_COMMON, "do_sample": True, "temperature": 0.6, "top_p": 0.9, "top_k": 20, "presence_penalty": 0.0},
-    "low-diversity": {**_COMMON, "do_sample": True, "temperature": 0.5, "top_p": 0.8, "top_k": 20, "presence_penalty": 0.0},
-    "mild-repeat": {**_COMMON, "do_sample": True, "temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 0.5, "repetition_penalty": 1.05},
-    "greedy": {**_COMMON, "do_sample": False, "presence_penalty": 0.0},
+    name: {
+        **_COMMON,
+        "do_sample": True,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "presence_penalty": penalty,
+    }
+    for name, penalty in (
+        ("presence-0", 0.0),
+        ("presence-0.5", 0.5),
+        ("presence-1", 1.0),
+        ("presence-1.5", 1.5),
+        ("presence-2", 2.0),
+    )
 }
+
+
+def protocol_valid_correct(
+    *,
+    symbolic_correct: bool,
+    terminated: bool | None,
+    truncated: bool | None,
+) -> bool:
+    return symbolic_correct and terminated is True and truncated is False
 
 
 def _rank(value: str, seed: int) -> str:
@@ -68,11 +86,16 @@ def summarize_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]
     for profile, values in sorted(groups.items()):
         tokens = [int(value["generated_tokens"]) for value in values]
         latencies = [float(value["latency_seconds"]) for value in values]
+        total_tokens = sum(tokens)
+        if total_tokens <= 0:
+            raise ValueError(f"profile {profile} has no generated tokens")
+        correct = sum(bool(value["correct"]) for value in values)
         summaries.append({
             "profile": profile,
             "examples": len(values),
-            "correct": sum(bool(value["correct"]) for value in values),
-            "accuracy": sum(bool(value["correct"]) for value in values) / len(values),
+            "correct": correct,
+            "accuracy": correct / len(values),
+            "correct_per_million_tokens": correct * 1_000_000 / total_tokens,
             "median_tokens": statistics.median(tokens),
             "mean_tokens": statistics.fmean(tokens),
             "max_tokens": max(tokens),
@@ -87,16 +110,12 @@ def promote_profiles(summaries: Iterable[dict[str, Any]], *, count: int) -> list
     values = list(summaries)
     if count <= 0 or count > len(values):
         raise ValueError("promotion count must be within available profiles")
-    best_correct = max(int(value["correct"]) for value in values)
-    eligible = [value for value in values if int(value["correct"]) >= best_correct - 1]
-    eligible.sort(key=lambda value: (
-        float(value["median_tokens"]),
+    values.sort(key=lambda value: (
+        -int(value["correct"]),
         int(value["truncated"]),
+        -float(value["correct_per_million_tokens"]),
+        float(value["median_tokens"]),
         float(value["mean_latency"]),
         str(value["profile"]),
     ))
-    if len(eligible) < count:
-        remainder = [value for value in values if value not in eligible]
-        remainder.sort(key=lambda value: (-int(value["correct"]), float(value["median_tokens"]), str(value["profile"])))
-        eligible.extend(remainder)
-    return [str(value["profile"]) for value in eligible[:count]]
+    return [str(value["profile"]) for value in values[:count]]

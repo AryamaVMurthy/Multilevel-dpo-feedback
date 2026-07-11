@@ -11,7 +11,8 @@
 
 set -euo pipefail
 
-MODEL_ID="Qwen/Qwen3.5-2B"
+MODEL_ID="Qwen/Qwen3-4B"
+MODEL_REVISION="1cfa9a7208912126459214e8b04321603b3df60c"
 RUN_DIR="runs/model-load-smoke"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 
@@ -44,6 +45,7 @@ echo "slurm_nnodes=${SLURM_NNODES:-unset}"
 echo "slurm_gpus_on_node=${SLURM_GPUS_ON_NODE:-unset}"
 echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "model_id=${MODEL_ID}"
+echo "model_revision=${MODEL_REVISION}"
 echo "start_time=$(date --iso-8601=seconds)"
 allocation_mismatch() {
   echo "ERROR: allocation_mismatch: $*" >&2
@@ -72,7 +74,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 run_dir = Path("runs/model-load-smoke")
 events_path = run_dir / "events.jsonl"
-model_id = "Qwen/Qwen3.5-2B"
+model_id = "Qwen/Qwen3-4B"
+model_revision = "1cfa9a7208912126459214e8b04321603b3df60c"
 
 def event(name, **fields):
     payload = {
@@ -87,19 +90,34 @@ def event(name, **fields):
 if not torch.cuda.is_available():
     raise RuntimeError("torch.cuda.is_available() is false; refusing CPU fallback")
 
-event("cuda_verified", gpu=torch.cuda.get_device_name(0), model_id=model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+event("cuda_verified", gpu=torch.cuda.get_device_name(0), model_id=model_id, model_revision=model_revision)
+tokenizer = AutoTokenizer.from_pretrained(model_id, revision=model_revision, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
+    revision=model_revision,
     device_map="auto",
     torch_dtype="auto",
     trust_remote_code=True,
 )
-prompt = "Return only the number: 2 + 2 ="
-inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-outputs = model.generate(**inputs, max_new_tokens=8)
+inputs = tokenizer.apply_chat_template(
+    [{"role": "user", "content": "Return only the number: 2 + 2 ="}],
+    add_generation_prompt=True,
+    enable_thinking=False,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
+).to(model.device)
+outputs = model.generate(
+    **inputs,
+    max_new_tokens=8,
+    do_sample=True,
+    temperature=0.7,
+    top_p=0.8,
+    top_k=20,
+    min_p=0.0,
+)
 completion = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
-event("model_generated", model_id=model_id, completion=completion)
+event("model_generated", model_id=model_id, model_revision=model_revision, completion=completion)
 PY
 
 echo "end_time=$(date --iso-8601=seconds)"

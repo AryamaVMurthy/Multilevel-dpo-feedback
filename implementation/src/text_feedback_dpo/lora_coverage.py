@@ -17,6 +17,15 @@ _DEFAULT_EXCLUDED = {
     "lm_head",
     "output_head",
 }
+_QWEN3_TEXT_PROJECTIONS = {
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+}
 
 
 @dataclass(frozen=True)
@@ -43,7 +52,7 @@ def _is_text_projection(name: str, *, excluded: set[str]) -> bool:
     parts = {part.casefold() for part in name.split(".")}
     if parts & excluded:
         return False
-    # Qwen3.5 stores projections beneath text transformer layer stacks. Requiring a layer path
+    # Qwen3 stores projections beneath text transformer layer stacks. Requiring a layer path
     # prevents accidental targeting of tokenizer embeddings, heads, and vision projections.
     return "layers" in parts and bool(parts & {"model", "language_model", "text_model", "backbone", "transformer"})
 
@@ -80,9 +89,19 @@ def discover_lora_coverage(
         raise ValueError("model must expose named_modules for LoRA coverage discovery")
     excluded = _DEFAULT_EXCLUDED | {str(item).casefold() for item in excluded_components}
     inventory: list[dict[str, Any]] = []
+    projections_by_layer: dict[str, set[str]] = {}
     for name, module in model.named_modules():
         if not name or not _is_linear_module(module) or not _is_text_projection(name, excluded=excluded):
             continue
+        parts = name.split(".")
+        layer_index = parts.index("layers")
+        if layer_index + 1 >= len(parts):
+            raise ValueError(f"Qwen3 text projection has no layer identifier: {name}")
+        projection = parts[-1]
+        if projection not in _QWEN3_TEXT_PROJECTIONS:
+            raise ValueError(f"unexpected Qwen3 text projection: {name}")
+        layer_path = ".".join(parts[: layer_index + 2])
+        projections_by_layer.setdefault(layer_path, set()).add(projection)
         in_features = int(module.in_features)
         out_features = int(module.out_features)
         if in_features <= 0 or out_features <= 0:
@@ -99,6 +118,14 @@ def discover_lora_coverage(
     inventory.sort(key=lambda item: str(item["name"]))
     if not inventory:
         raise ValueError("no text-backbone linear modules found for LoRA coverage")
+    for layer_path, projections in sorted(projections_by_layer.items()):
+        if projections != _QWEN3_TEXT_PROJECTIONS:
+            missing = sorted(_QWEN3_TEXT_PROJECTIONS - projections)
+            extra = sorted(projections - _QWEN3_TEXT_PROJECTIONS)
+            raise ValueError(
+                "incomplete Qwen3 projection inventory for "
+                f"{layer_path}: missing={missing}, extra={extra}"
+            )
     targets = tuple(str(item["name"]) for item in inventory)
     if expected_target_modules is not None and targets != tuple(expected_target_modules):
         raise ValueError("expected target inventory does not match discovered text projections")

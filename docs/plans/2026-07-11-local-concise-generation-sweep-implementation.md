@@ -1,6 +1,6 @@
 # Local Concise Generation Sweep Implementation Plan
 
-**Goal:** Implement and execute a reproducible train-only Qwen3.5-2B decoding sweep on the laptop GPU.
+**Goal:** Implement and execute the reproducible train-only Qwen3-4B presence-penalty sweep on Turing.
 
 **Architecture:** Extend the locked generation schema with explicit Qwen sampling fields and balanced-box stopping, then run deterministic profile/example tasks through one observable CLI. Artifacts are append-safe and summarized into Markdown, HTML, JSON, CSV, and plots.
 

@@ -15,6 +15,7 @@ PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 MODEL_CACHE_DIR="${MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required}"
 SOURCE_COMMIT="${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -26,14 +27,19 @@ if [[ "$MODEL_CACHE_DIR" != /scratch/* ]]; then
   echo "ERROR: MODEL_CACHE_DIR must be node-local /scratch storage: $MODEL_CACHE_DIR" >&2
   exit 1
 fi
+if [[ "$RUNTIME_ROOT" != /scratch/* ]]; then
+  echo "ERROR: RUNTIME_ROOT must be node-local /scratch storage: $RUNTIME_ROOT" >&2
+  exit 1
+fi
 if [[ ! -f "$CONFIG" ]]; then
   echo "ERROR: paper config does not exist: $CONFIG" >&2
   exit 1
 fi
 
 mkdir -p "$MODEL_CACHE_DIR"
-export UV_CACHE_DIR="$HOME/tfdpo-runs/uv_cache"
-export UV_PROJECT_ENVIRONMENT="$HOME/tfdpo-runs/project_venv"
+mkdir -p "$RUNTIME_ROOT"
+export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
 export UV_LINK_MODE=hardlink
 export HF_HOME="$MODEL_CACHE_DIR"
 export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"
@@ -42,6 +48,9 @@ cd "$PROJECT_DIR"
 
 echo "job_id=${SLURM_JOB_ID} account=${TURING_ACCOUNT} host=$(hostname) source_commit=${SOURCE_COMMIT}"
 echo "model_cache_dir=${MODEL_CACHE_DIR}"
+
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}src"
+uv run --frozen python -m text_feedback_dpo.cli validate-paper-config --config "$CONFIG"
 
 uv run --frozen python - "$CONFIG" "$MODEL_CACHE_DIR" "$SOURCE_COMMIT" <<'PY'
 import hashlib

@@ -20,6 +20,10 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
   echo "ERROR: /scratch is not writable; refusing hidden cache fallback" >&2
   exit 1
 fi
+if [[ "$SHARED_UV_CACHE" != /scratch/* || "$SHARED_PROJECT_ENV" != /scratch/* ]]; then
+  echo "ERROR: project environment and cache must use node-local /scratch" >&2
+  exit 1
+fi
 mkdir -p "$SHARED_UV_CACHE" "$SHARED_PROJECT_ENV"
 export UV_CACHE_DIR="$SHARED_UV_CACHE"
 export UV_PROJECT_ENVIRONMENT="$SHARED_PROJECT_ENV"

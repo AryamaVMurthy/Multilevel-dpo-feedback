@@ -19,17 +19,22 @@ class FakeLinear:
         self.weight = object()
 
 
-class FakeModel:
+class FakeQwen3Model:
     def __init__(self):
         self.modules = [
-            ("model.language_model.layers.0.linear_attn.in_proj_qkv", FakeLinear(8, 24)),
-            ("model.language_model.layers.0.linear_attn.out_proj", FakeLinear(8, 8)),
-            ("model.language_model.layers.0.mlp.gate_proj", FakeLinear(8, 16)),
-            ("model.language_model.layers.1.self_attn.q_proj", FakeLinear(8, 8)),
-            ("model.language_model.layers.1.self_attn.o_proj", FakeLinear(8, 8)),
+            *[
+                (f"model.layers.{layer}.self_attn.{projection}", FakeLinear(8, 8))
+                for layer in range(2)
+                for projection in ("q_proj", "k_proj", "v_proj", "o_proj")
+            ],
+            *[
+                (f"model.layers.{layer}.mlp.{projection}", FakeLinear(8, 16))
+                for layer in range(2)
+                for projection in ("gate_proj", "up_proj", "down_proj")
+            ],
             ("model.visual.blocks.0.q_proj", FakeLinear(8, 8)),
-            ("model.language_model.embed_tokens", FakeLinear(8, 8)),
-            ("model.language_model.lm_head", FakeLinear(8, 8)),
+            ("model.embed_tokens", FakeLinear(8, 8)),
+            ("lm_head", FakeLinear(8, 8)),
         ]
 
     def named_modules(self):
@@ -47,21 +52,30 @@ class FakeModel:
 
 class LoraCoverageTest(unittest.TestCase):
     def test_discovers_all_text_projection_classes_and_excludes_non_text_components(self):
-        coverage = discover_lora_coverage(FakeModel(), rank=16)
+        coverage = discover_lora_coverage(FakeQwen3Model(), rank=16)
 
         self.assertEqual(
             coverage.target_modules,
             (
-                "model.language_model.layers.0.linear_attn.in_proj_qkv",
-                "model.language_model.layers.0.linear_attn.out_proj",
-                "model.language_model.layers.0.mlp.gate_proj",
-                "model.language_model.layers.1.self_attn.o_proj",
-                "model.language_model.layers.1.self_attn.q_proj",
+                "model.layers.0.mlp.down_proj",
+                "model.layers.0.mlp.gate_proj",
+                "model.layers.0.mlp.up_proj",
+                "model.layers.0.self_attn.k_proj",
+                "model.layers.0.self_attn.o_proj",
+                "model.layers.0.self_attn.q_proj",
+                "model.layers.0.self_attn.v_proj",
+                "model.layers.1.mlp.down_proj",
+                "model.layers.1.mlp.gate_proj",
+                "model.layers.1.mlp.up_proj",
+                "model.layers.1.self_attn.k_proj",
+                "model.layers.1.self_attn.o_proj",
+                "model.layers.1.self_attn.q_proj",
+                "model.layers.1.self_attn.v_proj",
             ),
         )
         self.assertEqual(coverage.total_parameters, 175)
         self.assertEqual(coverage.trainable_parameters, 150)
-        self.assertEqual(coverage.inventory[0]["shape"], [24, 8])
+        self.assertEqual(coverage.inventory[0]["shape"], [16, 8])
         self.assertGreater(coverage.estimated_lora_parameters, 0)
 
     def test_empty_or_unexpected_inventory_fails_explicitly(self):
@@ -75,7 +89,20 @@ class LoraCoverageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no text-backbone linear modules"):
             discover_lora_coverage(Empty(), rank=16)
         with self.assertRaisesRegex(ValueError, "expected target inventory"):
-            discover_lora_coverage(FakeModel(), rank=16, expected_target_modules=("wrong",))
+            discover_lora_coverage(FakeQwen3Model(), rank=16, expected_target_modules=("wrong",))
+
+    def test_incomplete_or_unknown_qwen3_layer_projection_fails(self):
+        incomplete = FakeQwen3Model()
+        incomplete.modules = [
+            item for item in incomplete.modules if item[0] != "model.layers.1.self_attn.v_proj"
+        ]
+        with self.assertRaisesRegex(ValueError, "incomplete Qwen3 projection inventory"):
+            discover_lora_coverage(incomplete, rank=16)
+
+        unknown = FakeQwen3Model()
+        unknown.modules.append(("model.layers.0.self_attn.extra_proj", FakeLinear(8, 8)))
+        with self.assertRaisesRegex(ValueError, "unexpected Qwen3 text projection"):
+            discover_lora_coverage(unknown, rank=16)
 
 
 if __name__ == "__main__":

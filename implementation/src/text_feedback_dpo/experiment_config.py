@@ -7,6 +7,21 @@ from typing import Any, Mapping
 
 
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_FROZEN_MODELS = {
+    "student": {
+        "id": "Qwen/Qwen3-4B",
+        "revision": "1cfa9a7208912126459214e8b04321603b3df60c",
+    },
+    "teacher": {
+        "id": "Qwen/Qwen3-8B",
+        "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    },
+    "evaluator": {
+        "id": "Qwen/Qwen3-8B",
+        "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    },
+}
+_MAX_GENERATION_TOKENS = 8192
 _MATH_SUBJECTS = (
     "algebra",
     "counting_and_probability",
@@ -43,7 +58,9 @@ class RoleGenerationConfig:
     temperature: float | None
     top_p: float | None
     top_k: int | None
+    min_p: float | None
     presence_penalty: float | None
+    repetition_penalty: float | None
     stop_after_final_answer: bool
 
 
@@ -314,6 +331,11 @@ def _parse_models(value: object) -> dict[str, dict[str, str]]:
         if not isinstance(revision, str) or not _SHA_PATTERN.fullmatch(revision):
             raise ValueError(f"models.{role}.revision must be an immutable 40-character commit SHA")
         parsed[role] = {"id": str(role_value["id"]), "revision": revision}
+        for field in ("id", "revision"):
+            if parsed[role][field] != _FROZEN_MODELS[role][field]:
+                raise ValueError(
+                    f"models.{role}.{field} must match the exact frozen Qwen3 paper protocol"
+                )
     return parsed
 
 
@@ -333,7 +355,9 @@ def _parse_generation(value: object) -> GenerationConfig:
                 "temperature",
                 "top_p",
                 "top_k",
+                "min_p",
                 "presence_penalty",
+                "repetition_penalty",
                 "stop_after_final_answer",
             }
             _strict_keys(role_mapping, path, keys)
@@ -344,26 +368,33 @@ def _parse_generation(value: object) -> GenerationConfig:
                 temperature=_number(role_mapping["temperature"], f"{path}.temperature"),
                 top_p=_number(role_mapping["top_p"], f"{path}.top_p"),
                 top_k=_positive_int(role_mapping["top_k"], f"{path}.top_k"),
+                min_p=_number(role_mapping["min_p"], f"{path}.min_p"),
                 presence_penalty=_number(role_mapping["presence_penalty"], f"{path}.presence_penalty"),
+                repetition_penalty=_number(
+                    role_mapping["repetition_penalty"], f"{path}.repetition_penalty"
+                ),
                 stop_after_final_answer=_boolean(
                     role_mapping["stop_after_final_answer"], f"{path}.stop_after_final_answer"
                 ),
             )
-            if profile.max_new_tokens != 16384:
-                raise ValueError("generation.student.max_new_tokens must be exactly 16384")
+            if profile.max_new_tokens != _MAX_GENERATION_TOKENS:
+                raise ValueError("generation.student.max_new_tokens must be exactly 8192")
             actual = (
                 profile.enable_thinking,
                 profile.do_sample,
                 profile.temperature,
                 profile.top_p,
                 profile.top_k,
-                profile.presence_penalty,
+                profile.min_p,
+                profile.repetition_penalty,
             )
-            if actual != (False, True, 1.0, 1.0, 20, 2.0):
+            if actual != (False, True, 0.7, 0.8, 20, 0.0, 1.0):
                 raise ValueError(
-                    "generation.student must use non-thinking sampled temperature=1.0, "
-                    "top_p=1.0, top_k=20, presence_penalty=2.0"
+                    "generation.student must use non-thinking sampled temperature=0.7, "
+                    "top_p=0.8, top_k=20, min_p=0.0, repetition_penalty=1.0"
                 )
+            if profile.presence_penalty is None or not 0 <= profile.presence_penalty <= 2:
+                raise ValueError("generation.student.presence_penalty must be between 0 and 2")
         else:
             keys = {"enable_thinking", "do_sample", "max_new_tokens"}
             _strict_keys(role_mapping, path, keys)
@@ -374,16 +405,22 @@ def _parse_generation(value: object) -> GenerationConfig:
                 temperature=None,
                 top_p=None,
                 top_k=None,
+                min_p=None,
                 presence_penalty=None,
+                repetition_penalty=None,
                 stop_after_final_answer=False,
             )
+            if profile.max_new_tokens > _MAX_GENERATION_TOKENS:
+                raise ValueError(f"{path}.max_new_tokens must not exceed 8192")
             expected_tokens = {
                 "teacher": 64,
                 "evaluator": 256,
                 "guidance_guard": 8,
                 "guidance_critic": 8,
             }[role]
-            if profile.enable_thinking or profile.do_sample or profile.max_new_tokens != expected_tokens:
+            if profile.enable_thinking:
+                raise ValueError(f"{path} must use enable_thinking=false")
+            if profile.do_sample or profile.max_new_tokens != expected_tokens:
                 raise ValueError(
                     f"{path} must use non-thinking greedy decoding with max_new_tokens={expected_tokens}"
                 )
@@ -408,8 +445,8 @@ def _parse_lora(value: object) -> LoraConfig:
         raise ValueError("lora must use rank=16, alpha=32, dropout=0.05")
     if config.dtype != "bfloat16" or config.quantization != "none":
         raise ValueError("lora must use bfloat16 with no quantization")
-    if config.target_policy != "qwen35_text_linear":
-        raise ValueError("lora.target_policy must be qwen35_text_linear")
+    if config.target_policy != "qwen3_text_linear":
+        raise ValueError("lora.target_policy must be qwen3_text_linear")
     return config
 
 
@@ -574,11 +611,11 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
     )
     for field in ("max_guidance_steps", "max_guidance_regenerations", "shard_size"):
         _positive_int(collection[field], f"collection.{field}")
-    if collection["artifact_schema"] != "paper-v2":
-        raise ValueError("collection.artifact_schema must be paper-v2")
-    if collection["prompt_protocol"] not in {"qwen-nonthinking-r1", "qwen-nonthinking-final-r2"}:
+    if collection["artifact_schema"] != "paper-v3":
+        raise ValueError("collection.artifact_schema must be paper-v3")
+    if collection["prompt_protocol"] not in {"qwen3-nonthinking-r1", "qwen3-nonthinking-final-r1"}:
         raise ValueError(
-            "collection.prompt_protocol must be qwen-nonthinking-r1 or qwen-nonthinking-final-r2"
+            "collection.prompt_protocol must be qwen3-nonthinking-r1 or qwen3-nonthinking-final-r1"
         )
     training = _mapping(value["training"], "training")
     _strict_keys(
@@ -628,13 +665,13 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
     generation_config = _parse_generation(value["generation"])
     student_generation = generation_config.roles["student"]
     if dataset_config.name in {"math", "gsm8k"}:
-        if collection["prompt_protocol"] != "qwen-nonthinking-final-r2":
-            raise ValueError("math paper configs must use qwen-nonthinking-final-r2")
+        if collection["prompt_protocol"] != "qwen3-nonthinking-final-r1":
+            raise ValueError("math paper configs must use qwen3-nonthinking-final-r1")
         if not student_generation.stop_after_final_answer:
             raise ValueError("math paper configs must enable student final-answer stopping")
     else:
-        if collection["prompt_protocol"] != "qwen-nonthinking-r1":
-            raise ValueError("non-math paper configs must use qwen-nonthinking-r1")
+        if collection["prompt_protocol"] != "qwen3-nonthinking-r1":
+            raise ValueError("non-math paper configs must use qwen3-nonthinking-r1")
         if student_generation.stop_after_final_answer:
             raise ValueError("non-math paper configs must disable boxed final-answer stopping")
     return PaperExperimentConfig(
@@ -656,7 +693,7 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
 
 
 def validate_paper_experiment(config: PaperExperimentConfig) -> None:
-    if config.schema_version != 3:
-        raise ValueError("schema_version must be 3")
+    if config.schema_version != 4:
+        raise ValueError("schema_version must be 4")
     if not config.experiment_id.strip():
         raise ValueError("experiment_id must be non-empty")

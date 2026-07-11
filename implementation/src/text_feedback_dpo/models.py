@@ -107,7 +107,7 @@ def generate_model_result(
     if not hasattr(tokenizer, "apply_chat_template"):
         raise RuntimeError(
             "model tokenizer does not support apply_chat_template; refusing raw-text generation "
-            "because Qwen3.5 requires an explicit chat generation turn"
+            "because Qwen3 requires an explicit chat generation turn"
         )
     template_options = {
         "add_generation_prompt": True,

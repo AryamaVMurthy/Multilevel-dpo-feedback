@@ -38,7 +38,7 @@ class ScriptedProvider(ModelProvider):
 class CollectionTest(unittest.TestCase):
     def test_paper_generation_kwargs_are_explicit_and_role_specific(self):
         repo = Path(__file__).resolve().parents[1]
-        config = load_paper_experiment(repo / "configs" / "paper" / "gsm8k.yaml")
+        config = load_paper_experiment(repo / "configs" / "paper" / "math.yaml")
 
         student = paper_generation_kwargs(config, role="student")
         self.assertEqual(
@@ -46,11 +46,13 @@ class CollectionTest(unittest.TestCase):
             {
                 "enable_thinking": False,
                 "do_sample": True,
-                "max_new_tokens": 16384,
-                "temperature": 1.0,
-                "top_p": 1.0,
+                "max_new_tokens": 8192,
+                "temperature": 0.7,
+                "top_p": 0.8,
                 "top_k": 20,
-                "presence_penalty": 2.0,
+                "min_p": 0.0,
+                "presence_penalty": 0.0,
+                "repetition_penalty": 1.0,
                 "stop_after_final_answer": True,
             },
         )
@@ -112,7 +114,7 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(records[0]["generation_events"][0]["finish_reason"], "eos")
             protocol = json.loads((output_dir / "shard-0000" / "protocol.json").read_text())
             self.assertEqual(protocol["source_commit"], "a" * 40)
-            self.assertEqual(protocol["artifact_schema"], "paper-v2")
+            self.assertEqual(protocol["artifact_schema"], "paper-v3")
             self.assertIn("guidance_critic", protocol["role_generation"])
             completion = json.loads((output_dir / "shard-0000" / "complete.json").read_text())
             self.assertEqual(completion["protocol_hash"], protocol["protocol_hash"])

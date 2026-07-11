@@ -106,22 +106,45 @@ class TrainingProfileTest(unittest.TestCase):
             output_dir="out",
             max_steps=10,
             candidate=grpo_candidate,
-            max_completion_length=16384,
+            max_completion_length=8192,
+            temperature=0.7,
+            top_p=0.8,
+            top_k=20,
+            min_p=0.0,
+            presence_penalty=0.0,
+            repetition_penalty=1.0,
         )
-        self.assertEqual(grpo["max_completion_length"], 16384)
-        self.assertEqual(grpo["vllm_max_model_length"], 18432)
+        self.assertEqual(grpo["max_completion_length"], 8192)
+        self.assertEqual(grpo["vllm_max_model_length"], 10240)
         self.assertEqual(grpo["num_generations"], 4)
         self.assertEqual(grpo["generation_batch_size"], 4)
         self.assertEqual(grpo["epsilon"], 0.2)
         self.assertEqual(grpo["loss_type"], "grpo")
         self.assertEqual(grpo["beta"], 0.01)
         self.assertTrue(grpo["mask_truncated_completions"])
-        self.assertEqual(grpo["temperature"], 1.0)
-        self.assertEqual(grpo["top_p"], 1.0)
+        self.assertEqual(grpo["temperature"], 0.7)
+        self.assertEqual(grpo["top_p"], 0.8)
         self.assertEqual(grpo["top_k"], 20)
+        self.assertEqual(grpo["min_p"], 0.0)
+        self.assertEqual(grpo["repetition_penalty"], 1.0)
+        self.assertEqual(grpo["chat_template_kwargs"], {"enable_thinking": False})
         self.assertTrue(grpo["use_vllm"])
         self.assertEqual(grpo["vllm_mode"], "colocate")
-        self.assertEqual(grpo["generation_kwargs"], {"presence_penalty": 2.0})
+        self.assertEqual(grpo["generation_kwargs"], {"presence_penalty": 0.0})
+
+        with self.assertRaisesRegex(ValueError, "must not exceed 8192"):
+            build_paper_grpo_config_kwargs(
+                output_dir="out",
+                max_steps=10,
+                candidate=grpo_candidate,
+                max_completion_length=8193,
+                temperature=0.7,
+                top_p=0.8,
+                top_k=20,
+                min_p=0.0,
+                presence_penalty=0.0,
+                repetition_penalty=1.0,
+            )
 
 
 if __name__ == "__main__":
