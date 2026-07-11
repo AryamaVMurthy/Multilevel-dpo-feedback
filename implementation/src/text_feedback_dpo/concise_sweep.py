@@ -108,6 +108,29 @@ def validate_sweep_records(
         raise ValueError(f"incomplete sweep records: missing={missing}, unexpected={unexpected}")
 
 
+def validate_screening_context(
+    manifest: dict[str, Any],
+    *,
+    config_sha256: str,
+    dataset_manifest_sha256: str,
+    dataset_audit_sha256: str,
+    model_cache_manifest_sha256: str,
+    model: dict[str, str],
+) -> None:
+    if manifest.get("schema") != "math-decoding-sweep-v1" or manifest.get("stage") != "screening":
+        raise ValueError("confirmation requires a MATH screening sweep manifest")
+    expected = {
+        "config_sha256": config_sha256,
+        "dataset_manifest_sha256": dataset_manifest_sha256,
+        "dataset_audit_sha256": dataset_audit_sha256,
+        "model_cache_manifest_sha256": model_cache_manifest_sha256,
+        "model": model,
+    }
+    for field, value in expected.items():
+        if manifest.get(field) != value:
+            raise ValueError(f"screening context mismatch in {field}")
+
+
 def summarize_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:

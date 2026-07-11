@@ -23,6 +23,7 @@ from text_feedback_dpo.concise_sweep import (
     stratified_subset,
     summarize_records,
     validate_sweep_records,
+    validate_screening_context,
 )
 from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
 from text_feedback_dpo.io import read_jsonl_zst, write_json_atomic
@@ -119,8 +120,26 @@ def main() -> None:
         if args.promotion_manifest is None:
             raise ValueError("confirmation requires the screening selection manifest")
         promotion = json.loads(args.promotion_manifest.read_text(encoding="utf-8"))
-        if promotion.get("schema") != "math-decoding-sweep-selection-v1" or promotion.get("stage") != "screening":
+        if (
+            promotion.get("schema") != "math-decoding-sweep-selection-v1"
+            or promotion.get("stage") != "screening"
+            or promotion.get("status") != "passed"
+        ):
             raise ValueError("confirmation promotion manifest is not a screening selection")
+        screening_manifest_path = args.promotion_manifest.parent / "manifest.json"
+        if not screening_manifest_path.is_file():
+            raise FileNotFoundError("screening sweep manifest is missing beside its selection")
+        if promotion.get("sweep_manifest_sha256") != file_sha256(screening_manifest_path):
+            raise ValueError("screening selection does not match its sweep manifest")
+        screening_manifest = json.loads(screening_manifest_path.read_text(encoding="utf-8"))
+        validate_screening_context(
+            screening_manifest,
+            config_sha256=config_sha256,
+            dataset_manifest_sha256=file_sha256(args.dataset_manifest),
+            dataset_audit_sha256=file_sha256(args.dataset_audit),
+            model_cache_manifest_sha256=file_sha256(args.model_cache_manifest),
+            model=config.models["student"],
+        )
         promoted = promotion.get("promoted")
         if not isinstance(promoted, list) or len(promoted) != 3 or not all(name in PROFILES for name in promoted):
             raise ValueError("screening selection must promote exactly three known profiles")

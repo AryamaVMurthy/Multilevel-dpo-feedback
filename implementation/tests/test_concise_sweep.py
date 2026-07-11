@@ -8,6 +8,7 @@ from text_feedback_dpo.concise_sweep import (
     stratified_subset,
     summarize_records,
     validate_sweep_records,
+    validate_screening_context,
 )
 from text_feedback_dpo.prompts import build_native_student_prompt
 
@@ -83,6 +84,34 @@ class ConciseSweepTest(unittest.TestCase):
             validate_sweep_records(records[:-1], profiles=("a", "b"), example_ids=("x", "y"))
         with self.assertRaisesRegex(ValueError, "duplicate"):
             validate_sweep_records(records + [records[0]], profiles=("a", "b"), example_ids=("x", "y"))
+
+    def test_confirmation_requires_exact_screening_context_binding(self):
+        manifest = {
+            "schema": "math-decoding-sweep-v1",
+            "stage": "screening",
+            "config_sha256": "a",
+            "dataset_manifest_sha256": "b",
+            "dataset_audit_sha256": "c",
+            "model_cache_manifest_sha256": "d",
+            "model": {"id": "student", "revision": "rev"},
+        }
+        validate_screening_context(
+            manifest,
+            config_sha256="a",
+            dataset_manifest_sha256="b",
+            dataset_audit_sha256="c",
+            model_cache_manifest_sha256="d",
+            model={"id": "student", "revision": "rev"},
+        )
+        with self.assertRaisesRegex(ValueError, "config_sha256"):
+            validate_screening_context(
+                manifest,
+                config_sha256="changed",
+                dataset_manifest_sha256="b",
+                dataset_audit_sha256="c",
+                model_cache_manifest_sha256="d",
+                model={"id": "student", "revision": "rev"},
+            )
 
 
 if __name__ == "__main__":
