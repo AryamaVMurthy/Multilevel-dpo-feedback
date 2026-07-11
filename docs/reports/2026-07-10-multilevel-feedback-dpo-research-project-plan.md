@@ -367,6 +367,31 @@ evaluation, guidance collection, DPO pair prompts, adapted-checkpoint evaluation
 the GRPO comparison. Thinking mode remains a prespecified secondary ablation and may
 not replace the primary protocol after observing validation or test results.
 
+### 6.7 Non-Thinking Comparison Result
+
+The first `qwen-nonthinking-r1` comparison used pushed source commit
+`15ec5fe41cc9010a2c63ce787a706b2389d787f8` and Slurm job `13038` on the exact same
+16 examples as thinking-mode job `13021`. It completed without runtime failures in
+31 minutes 48 seconds.
+
+| Metric | Thinking `13021` | Non-thinking `13038` | Direction |
+| --- | ---: | ---: | --- |
+| Protocol-valid exact accuracy | 5/16 (31.25%) | 7/16 (43.75%) | improved |
+| EOS termination | 5/16 (31.25%) | 8/16 (50.00%) | improved |
+| Length truncation | 11/16 (68.75%) | 8/16 (50.00%) | improved but failed gate |
+| Mean generated tokens | 6,752.625 | 5,299.875 | reduced 21.5% |
+| Mean generation latency | 147.586 s | 115.278 s | reduced 21.9% |
+| Total wall time | 40:33 | 31:48 | reduced 21.6% |
+| Runtime failures | 0 | 0 | unchanged |
+
+All eight EOS-terminated non-thinking responses contained a boxed answer. Two additional
+responses emitted a box but continued until the 8,192-token ceiling, while six reached
+the ceiling without a box. Non-thinking mode is therefore retained as the primary mode,
+but `qwen-nonthinking-r1` remains a diagnostic profile because its 50% truncation rate
+fails the 5% paper gate. DPO collection and training remain blocked. The next protocol
+step is a fixed, disjoint train-only termination study within non-thinking mode; no
+validation or official-test result may select its prompt or sampling profile.
+
 ## 7. Experimental Matrix
 
 ### 7.1 Required Main Methods
@@ -739,11 +764,14 @@ Exit criterion: local unit tests verify objective selection, metrics, manifests,
 
 1. Create a deterministic train-only prompt-development subset across subjects and Levels 4-5.
 2. Implement the primary `qwen-nonthinking-r1` protocol using Qwen's non-thinking text sampling profile and a boxed-answer-and-stop prompt.
-3. Verify locally that the chat template receives `enable_thinking=false` and that thinking-mode or legacy sampling configs fail validation.
-4. Freeze the prompt, generation profile, config hash, and source commit before validation.
-5. Run one MATH example, then 16 stratified validation examples.
-6. Record protocol-valid accuracy, raw answer attainment, EOS/length termination, post-answer continuation, median generated tokens, and GPU cost.
-7. Manually audit every response and evaluator decision.
+3. Preserve job `13038` as a diagnostic; do not treat its globally hash-selected validation subset as prompt-selection data.
+4. On the disjoint train-only subset, compare a small prespecified non-thinking sampling grid around the official profile while keeping the boxed-answer-and-stop contract fixed. Thinking mode is not a candidate for promotion.
+5. Verify locally that the chat template receives `enable_thinking=false` and that thinking-mode configs fail validation.
+6. Select on protocol-valid correctness first, then truncation, median tokens, and GPU cost; manually inspect every truncated or post-box continuation.
+7. Freeze the winning non-thinking prompt, sampling profile, config hash, and source commit under a new protocol identifier before validation.
+8. Run one MATH example, then 16 genuinely stratified validation examples.
+9. Record protocol-valid accuracy, raw answer attainment, EOS/length termination, post-answer continuation, median generated tokens, and GPU cost.
+10. Manually audit every response and evaluator decision.
 
 Exit criterion: at least 95% manual agreement, at most 5% truncation, complete metadata, no teacher context, and memory below 90%.
 

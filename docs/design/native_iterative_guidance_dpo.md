@@ -189,3 +189,7 @@ This anchor must be logged separately from DPO loss.
 - Changed the primary paper student protocol to `qwen-nonthinking-r1`: explicit
   non-thinking mode, sampled `1.0/1.0/20/2.0` decoding, and a MATH boxed-answer-and-stop
   prompt. Thinking mode remains a separately labeled ablation.
+- Non-thinking comparison job `13038` improved valid accuracy from 5/16 to 7/16 and
+  reduced truncation from 11/16 to 8/16 on the same examples, but still failed the 5%
+  truncation gate. Non-thinking remains the primary mode; its sampling profile requires
+  a disjoint train-only termination study before DPO collection or training.
