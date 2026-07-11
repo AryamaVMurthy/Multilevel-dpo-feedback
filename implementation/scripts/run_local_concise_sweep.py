@@ -5,43 +5,31 @@ import argparse
 import csv
 import hashlib
 import json
+import os
+import re
 import time
 from pathlib import Path
 
 import torch
-import yaml
-from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from text_feedback_dpo.answer_evaluation import evaluate_math_answer
-from text_feedback_dpo.benchmarks import convert_math_row, extract_math_boxed_answer
+from text_feedback_dpo.benchmarks import extract_math_boxed_answer
 from text_feedback_dpo.concise_sweep import (
     PROFILES,
     promote_profiles,
     protocol_valid_correct,
     stratified_subset,
     summarize_records,
+    validate_sweep_records,
 )
-from text_feedback_dpo.models import TransformersModelProvider
+from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
+from text_feedback_dpo.io import read_jsonl_zst, write_json_atomic
+from text_feedback_dpo.models import generate_model_result
 
 
-def write_json(path: Path, value: object) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def load_rows(config: dict) -> list[dict]:
-    dataset = config["dataset"]
-    rows = []
-    for subject in dataset["subjects"]:
-        source = load_dataset(dataset["source"], subject, split="train", revision=dataset["revision"])
-        rows.extend(
-            convert_math_row(dict(row), subject=subject, source_split="train", index=index)
-            for index, row in enumerate(source)
-        )
-    if len(rows) != dataset["source_counts"]["train"]:
-        raise RuntimeError(f"MATH train count mismatch: {len(rows)}")
-    return rows
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def verify_cuda_placement(model: object) -> None:
@@ -51,12 +39,16 @@ def verify_cuda_placement(model: object) -> None:
     else:
         devices = {str(device) for device in device_map.values()}
     if not devices or any(device not in {"0", "cuda", "cuda:0"} for device in devices):
-        raise RuntimeError(f"model is not entirely on laptop GPU: devices={sorted(devices)}")
+        raise RuntimeError(f"model is not entirely on the allocated GPU: devices={sorted(devices)}")
+    floating_dtypes = {
+        parameter.dtype for parameter in model.parameters() if parameter.is_floating_point()
+    }
+    if floating_dtypes != {torch.bfloat16}:
+        raise RuntimeError(f"model parameters are not exclusively BF16: {sorted(map(str, floating_dtypes))}")
 
 
-def render_report(output_dir: Path, summaries: list[dict], promoted: list[str]) -> None:
-    write_json(output_dir / "summary.json", {"summaries": summaries, "promoted": promoted})
-    with (output_dir / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
+def render_report(output_dir: Path, summaries: list[dict], promoted: list[str], *, stage: str) -> None:
+    with (output_dir / "summary.csv").open("x", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(summaries[0]))
         writer.writeheader()
         writer.writerows(summaries)
@@ -65,90 +57,169 @@ def render_report(output_dir: Path, summaries: list[dict], promoted: list[str]) 
         for row in summaries
     )
     headers = "".join(f"<th>{key}</th>" for key in summaries[0])
-    html = f"""<!doctype html><meta charset='utf-8'><title>Concise generation sweep</title>
+    html = f"""<!doctype html><meta charset='utf-8'><title>MATH decoding sweep</title>
 <style>body{{font:14px system-ui;margin:32px;max-width:1200px}}table{{border-collapse:collapse}}th,td{{padding:7px 10px;border:1px solid #bbb;text-align:right}}th:first-child,td:first-child{{text-align:left}}</style>
-<h1>Local concise generation sweep</h1><p>Promoted: {', '.join(promoted)}</p><table><thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table>"""
+<h1>MATH train-only decoding sweep: {stage}</h1><p>Promoted: {', '.join(promoted)}</p><table><thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table>"""
     (output_dir / "report.html").write_text(html, encoding="utf-8")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--data-path", type=Path, required=True)
+    parser.add_argument("--dataset-manifest", type=Path, required=True)
+    parser.add_argument("--dataset-audit", type=Path, required=True)
+    parser.add_argument("--model-cache-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--count", type=int, default=12)
-    parser.add_argument("--seed", type=int, default=20260711)
-    parser.add_argument("--profiles", nargs="+", choices=sorted(PROFILES), default=sorted(PROFILES))
-    parser.add_argument("--max-new-tokens", type=int, default=4096)
-    parser.add_argument("--exclude-manifest", type=Path)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--stage", choices=("screening", "confirmation"), required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--promotion-manifest", type=Path)
     args = parser.parse_args()
-    if args.max_new_tokens <= 0 or args.max_new_tokens > 8192:
-        raise ValueError("max-new-tokens must be between 1 and the frozen 8192-token ceiling")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.source_commit):
+        raise ValueError("source-commit must be an immutable 40-character lowercase Git SHA")
+    if args.output_dir.exists():
+        raise FileExistsError(f"refusing existing sweep output directory: {args.output_dir}")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required; refusing CPU fallback")
-    if args.output_dir.exists() and not args.output_dir.is_dir():
-        raise RuntimeError(f"output path is not a directory: {args.output_dir}")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    config_bytes = args.config.read_bytes()
-    config = yaml.safe_load(config_bytes)
-    rows = load_rows(config)
-    excluded_ids: set[str] = set()
-    if args.exclude_manifest is not None:
-        excluded = json.loads(args.exclude_manifest.read_text(encoding="utf-8"))
-        excluded_ids = {str(value) for value in excluded.get("example_ids", [])}
-        if not excluded_ids:
-            raise RuntimeError("exclude manifest contains no example_ids")
-        rows = [row for row in rows if row["id"] not in excluded_ids]
-    subset = stratified_subset(rows, count=args.count, seed=args.seed)
+    if not torch.cuda.is_bf16_supported():
+        raise RuntimeError("allocated GPU does not support BF16; refusing dtype fallback")
+    config = load_paper_experiment(args.config)
+    validate_paper_experiment(config)
+    if config.dataset.name != "math":
+        raise ValueError("decoding sweep requires the frozen MATH experiment config")
+    config_sha256 = file_sha256(args.config)
+    dataset_manifest = json.loads(args.dataset_manifest.read_text(encoding="utf-8"))
+    dataset_audit = json.loads(args.dataset_audit.read_text(encoding="utf-8"))
+    cache_manifest = json.loads(args.model_cache_manifest.read_text(encoding="utf-8"))
+    if dataset_audit.get("schema") != "paper-dataset-audit-v1" or dataset_audit.get("status") != "passed":
+        raise ValueError("dataset audit is missing or not passed")
+    if dataset_audit.get("manifest_sha256") != file_sha256(args.dataset_manifest):
+        raise ValueError("dataset manifest hash does not match passed audit")
+    if dataset_audit.get("manifest_content_sha256") != dataset_manifest.get("content_sha256"):
+        raise ValueError("dataset content hash does not match passed audit")
+    if dataset_audit.get("artifact_sha256", {}).get("train.jsonl.zst") != file_sha256(args.data_path):
+        raise ValueError("train artifact hash does not match passed audit")
+    if cache_manifest.get("schema") != "tfdpo-model-cache-v1":
+        raise ValueError("model cache manifest schema mismatch")
+    if cache_manifest.get("config_sha256") != config_sha256:
+        raise ValueError("model cache config hash does not match sweep config")
+
+    if args.stage == "screening":
+        if args.promotion_manifest is not None:
+            raise ValueError("screening must not receive a promotion manifest")
+        count = 12
+        max_new_tokens = 4096
+        profiles = tuple(PROFILES)
+        promote_count = 3
+        excluded_ids: set[str] = set()
+        promotion_sha256 = None
+    else:
+        if args.promotion_manifest is None:
+            raise ValueError("confirmation requires the screening selection manifest")
+        promotion = json.loads(args.promotion_manifest.read_text(encoding="utf-8"))
+        if promotion.get("schema") != "math-decoding-sweep-selection-v1" or promotion.get("stage") != "screening":
+            raise ValueError("confirmation promotion manifest is not a screening selection")
+        promoted = promotion.get("promoted")
+        if not isinstance(promoted, list) or len(promoted) != 3 or not all(name in PROFILES for name in promoted):
+            raise ValueError("screening selection must promote exactly three known profiles")
+        excluded = promotion.get("example_ids")
+        if not isinstance(excluded, list) or len(excluded) != 12 or len(set(excluded)) != 12:
+            raise ValueError("screening selection must bind exactly 12 unique example IDs")
+        count = 32
+        max_new_tokens = 8192
+        profiles = tuple(promoted)
+        promote_count = 1
+        excluded_ids = {str(value) for value in excluded}
+        promotion_sha256 = file_sha256(args.promotion_manifest)
+
+    rows = read_jsonl_zst(args.data_path)
+    rows = [row for row in rows if str(row.get("id")) not in excluded_ids]
+    subset = stratified_subset(rows, count=count, seed=args.seed)
+    example_ids = [str(row["id"]) for row in subset]
+    if set(example_ids) & excluded_ids:
+        raise RuntimeError("decoding confirmation overlaps screening examples")
+
+    student = config.models["student"]
+    expected_identity = (student["id"], student["revision"])
+    matches = [
+        entry for entry in cache_manifest.get("models", [])
+        if (entry.get("id"), entry.get("revision")) == expected_identity
+    ]
+    if len(matches) != 1:
+        raise ValueError("model cache does not contain exactly one frozen student snapshot")
+    snapshot = Path(str(matches[0].get("snapshot_path", "")))
+    if not snapshot.is_dir():
+        raise FileNotFoundError(f"frozen student snapshot is missing: {snapshot}")
+
     manifest = {
-        "schema": "local-concise-sweep-v1",
-        "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
-        "model": config["models"]["student"],
+        "schema": "math-decoding-sweep-v1",
+        "stage": args.stage,
+        "source_commit": args.source_commit,
+        "config_sha256": config_sha256,
+        "dataset_manifest_sha256": file_sha256(args.dataset_manifest),
+        "dataset_audit_sha256": file_sha256(args.dataset_audit),
+        "train_artifact_sha256": file_sha256(args.data_path),
+        "model_cache_manifest_sha256": file_sha256(args.model_cache_manifest),
+        "model": student,
+        "snapshot_path": str(snapshot),
         "seed": args.seed,
-        "count": args.count,
-        "max_new_tokens": args.max_new_tokens,
-        "profiles": {name: {**PROFILES[name], "max_new_tokens": args.max_new_tokens} for name in args.profiles},
-        "example_ids": [row["id"] for row in subset],
-        "excluded_example_ids_sha256": hashlib.sha256(
-            json.dumps(sorted(excluded_ids), separators=(",", ":")).encode()
-        ).hexdigest() if excluded_ids else None,
+        "count": count,
+        "max_new_tokens": max_new_tokens,
+        "profiles": {name: {**PROFILES[name], "max_new_tokens": max_new_tokens} for name in profiles},
+        "example_ids": example_ids,
+        "excluded_example_ids": sorted(excluded_ids),
+        "promotion_manifest_sha256": promotion_sha256,
         "device": torch.cuda.get_device_name(0),
     }
-    manifest_path = args.output_dir / "manifest.json"
-    if manifest_path.exists() and json.loads(manifest_path.read_text()) != manifest:
-        raise RuntimeError("existing sweep manifest differs; use a new output directory")
-    write_json(manifest_path, manifest)
+    args.output_dir.mkdir(parents=True)
+    write_json_atomic(args.output_dir / "manifest.json", manifest)
     records_path = args.output_dir / "records.jsonl"
-    records = [json.loads(line) for line in records_path.read_text().splitlines()] if records_path.exists() else []
-    completed = {(row["profile"], row["id"]) for row in records}
-    provider = TransformersModelProvider(
-        model_ids={"student": config["models"]["student"]["id"]},
-        model_revisions={"student": config["models"]["student"]["revision"]},
+
+    tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        snapshot,
+        local_files_only=True,
+        dtype=torch.bfloat16,
+        device_map={"": 0},
+        attn_implementation="sdpa",
     )
-    model = provider._load("student")[1]
     verify_cuda_placement(model)
-    for profile_name in args.profiles:
-        generation = {**PROFILES[profile_name], "max_new_tokens": args.max_new_tokens}
+    records = []
+    for profile_name in profiles:
+        generation = {**PROFILES[profile_name], "max_new_tokens": max_new_tokens}
         for example in subset:
-            key = (profile_name, example["id"])
-            if key in completed:
-                continue
-            task_seed = int(hashlib.sha256(f"{args.seed}:{profile_name}:{example['id']}".encode()).hexdigest()[:8], 16)
+            task_seed = int(
+                hashlib.sha256(
+                    f"{args.seed}:{profile_name}:{example['id']}".encode()
+                ).hexdigest()[:8],
+                16,
+            )
             torch.manual_seed(task_seed)
             torch.cuda.manual_seed_all(task_seed)
             prompt = (
                 f"{example['problem']}\n\n"
-                "Please reason step by step. End with a line of the exact form "
+                "Solve the problem carefully. End with exactly one line of the form "
                 "FINAL: \\boxed{answer}."
             )
             torch.cuda.reset_peak_memory_stats()
             started = time.perf_counter()
-            result = provider.generate_result("student", prompt, **generation)
+            result = generate_model_result(
+                tokenizer=tokenizer,
+                model=model,
+                prompt=prompt,
+                generation_kwargs=generation,
+            )
             latency = time.perf_counter() - started
+            if not result.text.strip() or result.generated_tokens is None or result.generated_tokens <= 0:
+                raise RuntimeError(f"empty generation for {profile_name}/{example['id']}")
             try:
                 extracted_answer, extraction_method = extract_math_boxed_answer(result.text)
             except ValueError:
                 extracted_answer, extraction_method = result.text, "no_valid_box"
             evaluation = evaluate_math_answer(extracted_answer, example["gold_answer"])
+            evaluable = not bool(evaluation["requires_model_judgment"])
+            symbolic_correct = evaluable and bool(evaluation["correct"])
             record = {
                 "profile": profile_name,
                 "id": example["id"],
@@ -158,9 +229,10 @@ def main() -> None:
                 "extracted_answer": extracted_answer,
                 "answer_extraction_method": extraction_method,
                 "response": result.text,
-                "symbolic_correct": bool(evaluation["correct"]),
+                "evaluable": evaluable,
+                "symbolic_correct": symbolic_correct,
                 "correct": protocol_valid_correct(
-                    symbolic_correct=bool(evaluation["correct"]),
+                    symbolic_correct=symbolic_correct,
                     terminated=result.terminated,
                     truncated=result.truncated,
                 ),
@@ -172,16 +244,35 @@ def main() -> None:
                 "tokens_per_second": result.generated_tokens / latency,
                 "peak_gpu_memory_mib": torch.cuda.max_memory_allocated() / 2**20,
                 "seed": task_seed,
+                "source_commit": args.source_commit,
             }
             with records_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, sort_keys=True) + "\n")
                 handle.flush()
+                os.fsync(handle.fileno())
             records.append(record)
-            print(json.dumps({key: record[key] for key in ("profile", "id", "correct", "generated_tokens", "finish_reason", "latency_seconds", "peak_gpu_memory_mib")}), flush=True)
+            print(json.dumps({key: record[key] for key in (
+                "profile", "id", "correct", "evaluable", "generated_tokens",
+                "finish_reason", "latency_seconds", "peak_gpu_memory_mib",
+            )}, sort_keys=True), flush=True)
+
+    validate_sweep_records(records, profiles=profiles, example_ids=example_ids)
     summaries = summarize_records(records)
-    promoted = promote_profiles(summaries, count=min(3, len(summaries)))
-    render_report(args.output_dir, summaries, promoted)
-    print(json.dumps({"summaries": summaries, "promoted": promoted}, indent=2))
+    promoted = promote_profiles(summaries, count=promote_count)
+    selection = {
+        "schema": "math-decoding-sweep-selection-v1",
+        "status": "passed",
+        "stage": args.stage,
+        "sweep_manifest_sha256": file_sha256(args.output_dir / "manifest.json"),
+        "records_sha256": file_sha256(records_path),
+        "example_ids": example_ids,
+        "summaries": summaries,
+        "promoted": promoted,
+        "selected_profile": promoted[0] if args.stage == "confirmation" else None,
+    }
+    write_json_atomic(args.output_dir / "selection.json", selection)
+    render_report(args.output_dir, summaries, promoted, stage=args.stage)
+    print(json.dumps(selection, sort_keys=True))
 
 
 if __name__ == "__main__":

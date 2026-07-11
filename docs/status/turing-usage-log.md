@@ -353,3 +353,31 @@ No actions have been logged under this control policy yet.
 - Purpose: verify the staged exact Qwen3-4B/8B snapshots offline, CUDA and BF16 without fallback, non-thinking chat generation for both models, and the complete 252-projection rank-16 student LoRA inventory.
 - Model cache: `/scratch/aryama.murthy/tfdpo-qwen3/models`; immutable report: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-model-preflight.json`.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `00:30:00`; 0.5 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:44:19+05:30
+
+- Standalone clone fast-forwarded cleanly to `a96983c9619be7b7805eb8323339525bc505766a`; queue was empty, home usage remained 36/50 GiB, and no prior preflight report existed.
+- Slurm job ID: `13119`.
+
+## 2026-07-11T21:44:19+05:30 - monitor exact Qwen3 model preflight job 13119
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and the compact model report only after successful completion.
+- Purpose: capture model identity, non-thinking behavior, LoRA coverage, peak memory, latency, GPU, and failure evidence before decoding experiments.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:44:48+05:30
+
+- Job 13119: `COMPLETED`, exit `0:0`, node01, elapsed `00:00:18`, MaxRSS `1,001,208 KiB`, one RTX 6000 Ada GPU; accounted GPU time `0.005` GPU-hours.
+- Both exact frozen snapshots loaded offline in BF16 and generated non-thinking completions. Qwen3-4B peak allocated memory was `8,068,640,768` bytes; Qwen3-8B was `16,397,877,760` bytes.
+- Qwen3-4B exposed exactly 36 layers and 252 audited text projections; coverage SHA-256 `4a36eb07f8abc7ddfc0d44cd39c8fe3571f6daddca19f7b63bf55f2af8931644`; estimated rank-16 LoRA parameters `33,030,144`.
+- Immutable evidence: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-model-preflight.json`; config SHA-256 `58f9ec23ad48f5abb6f2dee8df9d9f8bc8cdc5da183791ac05b8de54551a9ee3`.
+
+## 2026-07-11T21:48:23+05:30 - deploy and run MATH train-only decoding screening
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with one-thread Git fetch and fast-forward-only update, clean source/queue/storage and artifact-absence checks, then submission of exactly one node01 one-GPU `turing_decoding_sweep.sh` screening job.
+- Purpose: evaluate all five frozen presence-penalty candidates on the same 12 deterministic stratified Level 4-5 training examples with a 4,096-token ceiling; rank by protocol-valid accuracy, truncation, correct answers per million tokens, median length, and latency.
+- Inputs are bound to the passed dataset audit and offline model-cache manifest. Validation and test roles are not read.
+- Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/decoding/screening-v1` plus sibling GPU telemetry; any existing output is a hard error.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.

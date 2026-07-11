@@ -78,6 +78,25 @@ def stratified_subset(rows: Iterable[dict[str, Any]], *, count: int, seed: int) 
     return selected
 
 
+def validate_sweep_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    profiles: Iterable[str],
+    example_ids: Iterable[str],
+) -> None:
+    expected = {(str(profile), str(row_id)) for profile in profiles for row_id in example_ids}
+    actual: set[tuple[str, str]] = set()
+    for record in records:
+        key = (str(record.get("profile", "")), str(record.get("id", "")))
+        if key in actual:
+            raise ValueError(f"duplicate sweep profile/example record: {key}")
+        actual.add(key)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        raise ValueError(f"incomplete sweep records: missing={missing}, unexpected={unexpected}")
+
+
 def summarize_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
@@ -100,6 +119,8 @@ def summarize_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]
             "mean_tokens": statistics.fmean(tokens),
             "max_tokens": max(tokens),
             "truncated": sum(value["finish_reason"] == "length" for value in values),
+            "truncation_rate": sum(value["finish_reason"] == "length" for value in values) / len(values),
+            "unevaluable": sum(not bool(value.get("evaluable", True)) for value in values),
             "final_answer_stops": sum(value["finish_reason"] == "final_answer" for value in values),
             "mean_latency": statistics.fmean(latencies),
         })

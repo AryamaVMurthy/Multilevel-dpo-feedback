@@ -5,6 +5,8 @@ from text_feedback_dpo.concise_sweep import (
     promote_profiles,
     protocol_valid_correct,
     stratified_subset,
+    summarize_records,
+    validate_sweep_records,
 )
 
 
@@ -45,6 +47,29 @@ class ConciseSweepTest(unittest.TestCase):
         self.assertTrue(protocol_valid_correct(symbolic_correct=True, terminated=True, truncated=False))
         self.assertFalse(protocol_valid_correct(symbolic_correct=True, terminated=False, truncated=True))
         self.assertFalse(protocol_valid_correct(symbolic_correct=True, terminated=None, truncated=None))
+
+    def test_sweep_completeness_requires_every_profile_example_pair_once(self):
+        records = [
+            {
+                "profile": profile,
+                "id": row_id,
+                "correct": profile == "a",
+                "generated_tokens": 10,
+                "latency_seconds": 1.0,
+                "finish_reason": "final_answer",
+                "evaluable": True,
+            }
+            for profile in ("a", "b")
+            for row_id in ("x", "y")
+        ]
+        validate_sweep_records(records, profiles=("a", "b"), example_ids=("x", "y"))
+        summary = summarize_records(records)
+        self.assertEqual(summary[0]["truncation_rate"], 0.0)
+        self.assertEqual(summary[0]["unevaluable"], 0)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            validate_sweep_records(records[:-1], profiles=("a", "b"), example_ids=("x", "y"))
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            validate_sweep_records(records + [records[0]], profiles=("a", "b"), example_ids=("x", "y"))
 
 
 if __name__ == "__main__":
