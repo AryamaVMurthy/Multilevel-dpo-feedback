@@ -62,6 +62,8 @@ if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
 fi
 export HF_HOME="$MODEL_CACHE_DIR"
 export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
@@ -95,4 +97,4 @@ EVALUATE_ARGS=(
 if [[ "$CHECKPOINT_KIND" == "adapter" ]]; then
   EVALUATE_ARGS+=(--checkpoint "$CHECKPOINT")
 fi
-uv run --frozen python -m text_feedback_dpo.cli evaluate-paper "${EVALUATE_ARGS[@]}"
+uv run --frozen --no-sync python -m text_feedback_dpo.cli evaluate-paper "${EVALUATE_ARGS[@]}"

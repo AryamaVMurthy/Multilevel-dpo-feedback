@@ -41,7 +41,6 @@ if [[ ! -f "$UV_PROJECT_ENVIRONMENT/environment_verified.txt" ]]; then
   echo "ERROR: locked runtime verification is missing: $UV_PROJECT_ENVIRONMENT/environment_verified.txt" >&2
   exit 1
 fi
-export HF_HOME="$SCRATCH_DIR/hf_cache"
 if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
   echo "ERROR: MODEL_CACHE_DIR is not present on $(hostname): $MODEL_CACHE_DIR" >&2
   exit 1
@@ -49,6 +48,8 @@ fi
 export HF_HOME="$MODEL_CACHE_DIR"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 export UV_CONCURRENT_DOWNLOADS=1
 export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
@@ -74,7 +75,7 @@ echo "job_id=${SLURM_JOB_ID} array_index=${SHARD_INDEX} account=${TURING_ACCOUNT
 echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES is required}"
 echo "scratch_before=$(df -h /scratch | tail -1)"
 cp "$CONFIG" "$SCRATCH_DIR/config.yaml"
-uv run --frozen python -m text_feedback_dpo.cli collect-shard \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli collect-shard \
   --config "$SCRATCH_DIR/config.yaml" \
   --dataset-dir "$DATASET_DIR" \
   --output-dir "$OUTPUT_DIR" \

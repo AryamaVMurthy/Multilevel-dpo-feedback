@@ -88,8 +88,12 @@ class TuringScriptTest(unittest.TestCase):
             "turing_train_paper.sh",
             "turing_evaluate_paper.sh",
         ):
-            self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", Path("scripts" / Path(name)).read_text(encoding="utf-8"), name)
-            self.assertIn("nvidia-smi", Path("scripts" / Path(name)).read_text(encoding="utf-8"), name)
+            text = Path("scripts" / Path(name)).read_text(encoding="utf-8")
+            self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", text, name)
+            self.assertIn("nvidia-smi", text, name)
+            self.assertIn("HF_HUB_OFFLINE=1", text, name)
+            self.assertIn("TRANSFORMERS_OFFLINE=1", text, name)
+            self.assertIn("--frozen --no-sync", text, name)
 
     def test_paper_scripts_have_role_specific_commands_and_cleanup_traps(self):
         collect = Path("scripts/turing_collect_array.sh").read_text(encoding="utf-8")
