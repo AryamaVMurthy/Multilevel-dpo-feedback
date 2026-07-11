@@ -16,7 +16,10 @@ from text_feedback_dpo.evaluators import (
     make_model_evaluator,
     make_model_guidance_guard,
 )
-from text_feedback_dpo.evaluation_audit import audit_checkpoint_evaluation
+from text_feedback_dpo.evaluation_audit import (
+    audit_checkpoint_evaluation,
+    rescore_checkpoint_evaluation,
+)
 from text_feedback_dpo.dataset_manifests import materialize_paper_dataset, materialize_preflight_subset
 from text_feedback_dpo.experiment_config import load_paper_experiment, validate_paper_experiment
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
@@ -1234,6 +1237,21 @@ def run_audit_evaluation(
     )
 
 
+def run_rescore_evaluation(
+    *,
+    predictions_path: Path,
+    examples_path: Path,
+    output_dir: Path,
+    source_commit: str,
+) -> dict[str, Any]:
+    return rescore_checkpoint_evaluation(
+        predictions_path=predictions_path,
+        examples_path=examples_path,
+        output_dir=output_dir,
+        source_commit=source_commit,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1350,6 +1368,11 @@ def main() -> None:
     audit_eval.add_argument("--labels", required=True, type=Path)
     audit_eval.add_argument("--output-dir", required=True, type=Path)
     audit_eval.add_argument("--minimum-labels", required=True, type=int)
+    rescore_eval = subparsers.add_parser("rescore-evaluation")
+    rescore_eval.add_argument("--predictions", required=True, type=Path)
+    rescore_eval.add_argument("--examples", required=True, type=Path)
+    rescore_eval.add_argument("--output-dir", required=True, type=Path)
+    rescore_eval.add_argument("--source-commit", required=True)
     args = parser.parse_args()
     if args.command == "basic-pipeline":
         result = run_basic_pipeline(
@@ -1492,6 +1515,13 @@ def main() -> None:
             labels_path=args.labels,
             output_dir=args.output_dir,
             minimum_labels=args.minimum_labels,
+        )
+    elif args.command == "rescore-evaluation":
+        result = run_rescore_evaluation(
+            predictions_path=args.predictions,
+            examples_path=args.examples,
+            output_dir=args.output_dir,
+            source_commit=args.source_commit,
         )
     else:
         raise SystemExit(f"unknown command: {args.command}")

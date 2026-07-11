@@ -1,0 +1,16 @@
+{"id":"math-algebra-train-90","manual_correct":false,"notes":"Three inverse applications give 3; response gives 1."}
+{"id":"math-algebra-train-257","manual_correct":true,"notes":"Inverse mappings give 2+3=5 and outer inverse 2."}
+{"id":"math-counting_and_probability-train-12","manual_correct":true,"notes":"Binomial probability C(10,8)/2^10 equals 45/1024."}
+{"id":"math-counting_and_probability-train-613","manual_correct":false,"notes":"Response derives 3600 but changes the final answer to 360."}
+{"id":"math-counting_and_probability-train-329","manual_correct":false,"notes":"Response counts only cases where digit 1 is paired and misses other valid pairs."}
+{"id":"math-geometry-train-71","manual_correct":true,"notes":"Volume sqrt(48*49*50) rounds to 343."}
+{"id":"math-geometry-train-97","manual_correct":true,"notes":"Right-triangle projection gives WZ=80^2/100=64."}
+{"id":"math-geometry-train-313","manual_correct":true,"notes":"Coordinate or centroid area calculation gives ratio 1."}
+{"id":"math-intermediate_algebra-train-388","manual_correct":true,"notes":"Denominator identity (x+y)+(z-y)=x+z gives k=7+11=18."}
+{"id":"math-intermediate_algebra-train-379","manual_correct":false,"notes":"Response guesses 2; the gold common difference is 3/2."}
+{"id":"math-number_theory-train-649","manual_correct":false,"notes":"Response selects E or 17; the required divisor is 13."}
+{"id":"math-prealgebra-train-1188","manual_correct":true,"notes":"There are 9 choices for the first digit and 10^6 remaining choices."}
+{"id":"math-prealgebra-train-336","manual_correct":true,"notes":"Radicals simplify to 13/4-5/4=2."}
+{"id":"math-prealgebra-train-439","manual_correct":false,"notes":"The seven-point lattice contains 8 triangles; response guesses 76."}
+{"id":"math-precalculus-train-643","manual_correct":false,"notes":"Response drops the 2^-99 magnitude and gives sqrt(3)-3 instead of 1/2^98."}
+{"id":"math-precalculus-train-158","manual_correct":false,"notes":"Response guesses 12; the angle condition gives 2535/463."}

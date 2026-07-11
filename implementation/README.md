@@ -76,3 +76,9 @@ Before any paper GPU job, stage the pinned model revisions on a specific compute
 local scratch and constrain subsequent GPU jobs to that same node. The CPU-only staging
 script writes `tfdpo-model-cache-manifest.json` alongside the Hugging Face cache; GPU
 wrappers reject a missing cache instead of downloading an untracked replacement.
+
+`rescore-evaluation` derives a new, hash-bound predictions artifact from immutable
+predictions and examples after a deterministic scorer repair. It preserves the original
+evaluator-result hash per row, performs no model calls, and never overwrites source
+artifacts. The audited final-r2 labels for Turing job `13053` are tracked at
+`audits/math-final-r2-job13053-labels.jsonl`.
