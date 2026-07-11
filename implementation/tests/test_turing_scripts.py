@@ -9,8 +9,6 @@ class TuringScriptTest(unittest.TestCase):
             "turing_stage_model_cache.sh",
             "turing_download_dataset_source.sh",
             "turing_download_math_source.sh",
-            "turing_download_dataset_source.sh",
-            "turing_download_math_source.sh",
             "turing_materialize_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_freeze_baseline.sh",
@@ -123,6 +121,9 @@ class TuringScriptTest(unittest.TestCase):
     def test_paper_runtime_environments_never_fall_back_to_home_storage(self):
         for name in (
             "turing_stage_model_cache.sh",
+            "turing_download_dataset_source.sh",
+            "turing_download_math_source.sh",
+            "turing_materialize_dataset.sh",
             "turing_materialize_preflight_subset.sh",
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",

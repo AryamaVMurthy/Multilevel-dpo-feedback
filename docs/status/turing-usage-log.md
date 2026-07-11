@@ -214,3 +214,49 @@ No actions have been logged under this control policy yet.
 ### Result - 2026-07-11T21:18:40+05:30
 
 - Exit status: 0; standalone clone fast-forwarded cleanly to `fa0b00f9c672f91f82ea4a9b7fb61f66b6bcf400`.
+
+## 2026-07-11T21:20:40+05:30 - synchronize verified-runtime gate
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync with one pack thread, exact commit verification, and clean-status check.
+- Purpose: deploy the tested verified-runtime requirement before model and dataset staging.
+- Expected commit: `a126bde37394ec4384fc6deb73496f9b48963b28`.
+- Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours.
+
+### Result - 2026-07-11T21:20:55+05:30
+
+- Exit status: 0; standalone clone fast-forwarded cleanly to `a126bde37394ec4384fc6deb73496f9b48963b28`.
+
+## 2026-07-11T21:21:06+05:30 - submit Qwen3 model and full MATH source staging
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command rechecking source commit/status, queue, and home capacity, then submitting exactly two node01 CPU-only jobs: `turing_stage_model_cache.sh` and `turing_download_math_source.sh`.
+- Source: standalone clone at `a126bde37394ec4384fc6deb73496f9b48963b28`; config `implementation/configs/paper/math.yaml`.
+- Model target: `/scratch/aryama.murthy/tfdpo-qwen3/models`; runtime root `/scratch/aryama.murthy/tfdpo-qwen3/runtime`.
+- Dataset target: `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-source`; exact official counts 7,500 train and 5,000 test across seven subjects.
+- Model-staging resources: account `priyesh.shukla`, u22, node01, 2 tasks, 32 GiB, 02:00:00, 0 GPUs.
+- MATH-download resources: account `priyesh.shukla`, u22, node01, 2 tasks, 32 GiB, 01:00:00, 0 GPUs.
+- Total requested GPU-hours: 0.
+
+### Submission result - 2026-07-11T21:21:27+05:30
+
+- Exit status: 0.
+- Model staging job: `13113`.
+- Full MATH source job: `13114`.
+- Pre-submit queue was empty and home storage remained 36/50 GiB used.
+
+## 2026-07-11T21:21:39+05:30 - monitor staging jobs 13113 and 13114
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, and bounded stdout/stderr for both jobs; after terminal state, a short node01 Slurm verification job may inspect node-local model/data manifests only after a separate logged submission.
+- Purpose: capture exact state, exit code, node, elapsed resources, download errors, and artifact readiness without assuming login-node visibility into node-local scratch.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:29:18+05:30
+
+- Job 13113: `COMPLETED`, exit `0:0`, node01, elapsed 00:07:36, MaxRSS 24,376,104 KiB, 0 GPUs.
+- Model manifest schema `tfdpo-model-cache-v1`, config SHA-256 `58f9ec23ad48f5abb6f2dee8df9d9f8bc8cdc5da183791ac05b8de54551a9ee3`, source commit `a126bde37394ec4384fc6deb73496f9b48963b28`.
+- Frozen snapshots: Qwen3-4B revision `1cfa9a7208912126459214e8b04321603b3df60c` and Qwen3-8B revision `b968826d9c46dd6066d109eabc6255188de91218`.
+- Job 13114: `COMPLETED`, exit `0:0`, node01, elapsed 00:01:23, MaxRSS 179,692 KiB, 0 GPUs.
+- MATH job generated all seven official subject train/test splits and passed the aggregate 7,500 train / 5,000 test count check.
+- Total accounted GPU-hours: 0.
