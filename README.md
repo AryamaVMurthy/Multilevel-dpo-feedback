@@ -12,8 +12,10 @@ Current status:
 - Current state: MATH Levels 4-5 is the primary benchmark. The thinking-mode baseline
   diagnostic failed its termination gate, and the primary student protocol is now
   explicit non-thinking `qwen-nonthinking-final-r2` with balanced final-box stopping
-  and a 16,384-token emergency ceiling. Full collection and training remain
-  gated on the replacement baseline preflight.
+  and a 16,384-token emergency ceiling. Job `13053` eliminated truncation on the same
+  16-example diagnostic used by the earlier mode comparisons, but manual audit found
+  one false-positive model-evaluator decision. Full collection and training remain
+  gated on the deterministic scorer repair, immutable rescore, and full baseline audit.
 
 Run the basic local pipeline:
 

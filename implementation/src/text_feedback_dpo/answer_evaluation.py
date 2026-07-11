@@ -111,6 +111,48 @@ def _last_boxed(value: str) -> str:
     raise ValueError("unbalanced boxed MATH answer")
 
 
+def _braced_group(value: str, start: int) -> tuple[str, int] | None:
+    if start >= len(value) or value[start] != "{":
+        return None
+    depth = 1
+    for index in range(start + 1, len(value)):
+        if value[index] == "{":
+            depth += 1
+        elif value[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return value[start + 1 : index], index + 1
+    return None
+
+
+def _replace_grouped_latex_math(value: str) -> str:
+    output: list[str] = []
+    index = 0
+    fraction_macros = ("\\dfrac", "\\tfrac", "\\frac")
+    while index < len(value):
+        macro = next((name for name in fraction_macros if value.startswith(name, index)), None)
+        if macro is not None:
+            numerator = _braced_group(value, index + len(macro))
+            if numerator is not None:
+                denominator = _braced_group(value, numerator[1])
+                if denominator is not None:
+                    output.append(
+                        f"(({_replace_grouped_latex_math(numerator[0])})/"
+                        f"({_replace_grouped_latex_math(denominator[0])}))"
+                    )
+                    index = denominator[1]
+                    continue
+        if value.startswith("\\sqrt", index):
+            radicand = _braced_group(value, index + len("\\sqrt"))
+            if radicand is not None:
+                output.append(f"sqrt({_replace_grouped_latex_math(radicand[0])})")
+                index = radicand[1]
+                continue
+        output.append(value[index])
+        index += 1
+    return "".join(output)
+
+
 def _latex_math(value: str) -> str:
     value = _last_boxed(value).strip()
     value = value.replace("\\left", "").replace("\\right", "")
@@ -118,14 +160,11 @@ def _latex_math(value: str) -> str:
     value = value.replace("\\pi", "pi")
     value = value.replace("\\infty", "oo")
     value = value.replace("\\{", "{").replace("\\}", "}")
+    for spacing in ("\\!", "\\,", "\\;", "\\:", "\\quad", "\\qquad"):
+        value = value.replace(spacing, "")
     value = re.sub(r"\\text\{([^{}]+)\}", r" \1", value)
-    fraction = re.compile(r"\\frac\{([^{}]+)\}\{([^{}]+)\}")
-    square_root = re.compile(r"\\sqrt\{([^{}]+)\}")
-    previous = None
-    while value != previous:
-        previous = value
-        value = fraction.sub(r"(\1)/(\2)", value)
-        value = square_root.sub(r"sqrt(\1)", value)
+    value = _replace_grouped_latex_math(value)
+    value = re.sub(r"(?<=\d),(?=\d)", "", value)
     value = value.replace("{", "(").replace("}", ")")
     value = value.replace("^", "**")
     return " ".join(value.split())

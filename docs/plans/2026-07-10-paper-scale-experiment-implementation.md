@@ -16,6 +16,13 @@ paper defaults.
 
 ## Current Execution State
 
+Superseding MATH checkpoint, 2026-07-11: final-r2 diagnostic job `13053` completed on
+the same 16 records as the earlier MATH mode comparisons with zero truncations, 13
+balanced final-answer stops, and peak memory 29,503 MiB. Manual audit corrected one
+evaluator false positive, making accuracy 8/16 and original evaluator agreement 15/16.
+The deterministic balanced-LaTeX scorer repair passes the full local suite; Tasks 17-27
+remain blocked until a source-bound rescore/audit and the full MATH baseline pass.
+
 Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`. Baseline/R2 protocol commit
 `ea45bd7b1a47ea32c1a9dc3df330d593829da5ff` passed a one-example GPU micro; the
 post-micro observability correction is locally verified and awaiting its source commit.

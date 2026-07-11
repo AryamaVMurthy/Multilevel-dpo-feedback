@@ -197,3 +197,9 @@ This anchor must be logged separately from DPO loss.
 - Replaced the prompt-only stop request with `qwen-nonthinking-final-r2`: at most six
   numbered steps, one exact `FINAL: \boxed{answer}` line, tokenizer-level balanced-box
   stopping, and a 16,384-token emergency ceiling with 18,432-token training context.
+- Final-r2 comparison job `13053` produced 13 balanced final-answer stops, three EOS
+  stops, and zero truncations on the same 16 examples. Automated accuracy was 9/16,
+  but manual audit corrected it to 8/16 after finding one confident evaluator false
+  positive on a nested fraction/exponent gold answer. Termination and memory gates pass;
+  evaluator promotion remains gated on the deterministic LaTeX scorer repair and an
+  immutable rescore.

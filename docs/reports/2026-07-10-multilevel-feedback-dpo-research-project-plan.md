@@ -412,8 +412,42 @@ the frozen generation contract rather than relying on prompt compliance alone:
 
 The higher ceiling does not convert length-limited outputs into valid answers. It only
 prevents a still-useful derivation from being clipped while deterministic final-answer
-stopping handles compliant responses early. This protocol requires a new train-only
-preflight and invalidates every earlier baseline freeze.
+stopping handles compliant responses early. This protocol invalidated every earlier
+baseline freeze and required a new preflight.
+
+The replacement comparison used source commit
+`092a31e66f35e435fdbeb2c0e298f153850e65aa` and Slurm job `13053` on byte-identical
+records to jobs `13021` and `13038`. It completed in 35 minutes 54 seconds with no
+runtime failure and remained below 30 GiB peak GPU memory.
+
+| Metric | Non-thinking r1 `13038` | Final-r2 `13053` | Interpretation |
+| --- | ---: | ---: | --- |
+| Automated exact accuracy | 7/16 (43.75%) | 9/16 (56.25%) | improved before audit |
+| Manually audited accuracy | not separately corrected | 8/16 (50.00%) | one automated false positive removed |
+| Final-answer stops | 0/16 | 13/16 | balanced stopper exercised |
+| EOS stops | 8/16 | 3/16 | valid fallback termination |
+| Length truncation | 8/16 (50.00%) | 0/16 (0.00%) | passes 5% gate |
+| Median generated tokens | 7,873.5 | 3,959.5 | reduced 49.7% |
+| Mean generated tokens | 5,299.875 | 5,810.25 | increased 9.6% |
+| Mean generation latency | 115.278 s | 130.035 s | increased 12.8% |
+| Total wall time | 31:48 | 35:54 | increased 12.9% |
+| Peak GPU memory | about 24.8 GiB | 29,503 MiB | below 90% gate |
+
+All 16 responses contained a boxed answer. Thirteen used the exact complete
+`FINAL: \boxed{...}` contract and stopped immediately; three terminated by EOS. No
+response reached 16,384 tokens. The termination, truncation, metadata, failure, and
+memory gates therefore pass.
+
+Manual review agreed with 15 of 16 stored evaluator decisions (93.75%), below the 95%
+agreement gate. For `math-precalculus-train-643`, the gold answer is `1/2^98`; the
+student answered `sqrt(3)-3` after dropping the recurrence magnitude, but nested braces
+in the gold LaTeX caused a deterministic parse failure and the 9B fallback marked the
+answer correct. A balanced-group deterministic LaTeX repair now parses nested
+fractions/exponents, `\\dfrac`, and LaTeX thousands separators. Local rescoring changes
+only that decision, yields 8/16 accuracy with zero model-judgment fallbacks, and passes
+all 177 tests with one skip. The original job artifacts remain immutable. Promotion to
+the full baseline requires a source-bound rescore artifact and a passing audit; DPO
+collection or training must not start from the uncorrected `13053` metrics file.
 
 ## 7. Experimental Matrix
 
@@ -787,7 +821,7 @@ Exit criterion: local unit tests verify objective selection, metrics, manifests,
 
 1. Create a deterministic train-only prompt-development subset across subjects and Levels 4-5.
 2. Implement the primary `qwen-nonthinking-final-r2` protocol using Qwen's non-thinking text sampling profile, bounded six-step prompt, balanced final-box stopping, and a 16,384-token emergency ceiling.
-3. Preserve job `13038` as a diagnostic; do not treat its globally hash-selected validation subset as prompt-selection data.
+3. Preserve jobs `13038` and `13053` as diagnostics; do not treat their globally hash-selected validation subset as prompt-selection data.
 4. On the disjoint train-only subset, compare a small prespecified non-thinking sampling grid around the official profile while keeping the boxed-answer-and-stop contract fixed. Thinking mode is not a candidate for promotion.
 5. Verify locally that the chat template receives `enable_thinking=false` and that thinking-mode configs fail validation.
 6. Select on protocol-valid correctness first, then truncation, median tokens, and GPU cost; manually inspect every truncated or post-box continuation.
@@ -797,6 +831,11 @@ Exit criterion: local unit tests verify objective selection, metrics, manifests,
 10. Manually audit every response and evaluator decision.
 
 Exit criterion: at least 95% manual agreement, at most 5% truncation, complete metadata, no teacher context, and memory below 90%.
+
+Current result: `13053` passes truncation, metadata, teacher-free, failure, and memory
+gates. Its original evaluator agreement is 93.75%. The deterministic scorer repair
+rescored all 16 decisions consistently with manual review locally; an immutable
+source-bound rescore and audit are the remaining Phase 3 gates.
 
 ### Phase 4: Full Base Baseline
 
@@ -914,7 +953,8 @@ Repeat baseline, collection, LN-DPO, GRPO, evaluation, and statistics only after
 | 2026-07-10 | Teacher returns slight hint, not corrected rollout | Keeps chosen response student-generated | Approved |
 | 2026-07-10 | Use native Qwen output, not XML | Method should fit model style rather than force formatting | Approved |
 | 2026-07-10 | Student ceiling 8,192 tokens | Avoids low artificial ceiling while retaining a hard bound | Approved |
-| 2026-07-11 | Replace `qwen-nonthinking-r1` with `qwen-nonthinking-final-r2` | Stop valid balanced final boxes deterministically and retain a larger emergency bound | Approved; requires new preflight |
+| 2026-07-11 | Replace `qwen-nonthinking-r1` with `qwen-nonthinking-final-r2` | Stop valid balanced final boxes deterministically and retain a larger emergency bound | Termination validated by `13053`; scorer rescore pending |
+| 2026-07-11 | Repair balanced LaTeX answer parsing before promotion | Manual audit found one false-positive model judgment after nested fraction/exponent parse failure | Implemented locally; immutable rescore required |
 | 2026-07-11 | Student ceiling 16,384 and combined ceiling 18,432 | User-directed doubled completion ceiling with 2,048 prompt-token headroom | Approved; supersedes 8,192 setting |
 | 2026-07-10 | Baseline before research | Establishes teacher-free reference and evaluator validity | Approved |
 | 2026-07-10 | GSM8K is diagnostic only | Base accuracy and low pair yield make it weak for the main claim | Approved |

@@ -66,12 +66,22 @@ class AnswerEvaluationTest(unittest.TestCase):
     def test_math_accepts_rational_decimal_and_simple_algebraic_equivalence(self):
         for prediction, gold in (
             ("\\frac{1}{2}", "0.5"),
+            ("45/1024", "\\dfrac{45}{1024}"),
+            ("9000000", "9,\\!000,\\!000"),
+            ("\\frac{1}{1+\\frac{1}{2}}", "2/3"),
             ("\\boxed{(x+1)^2}", "x^2+2*x+1"),
             ("2*(a+b)", "2*a+2*b"),
         ):
             result = evaluate_math_answer(prediction, gold)
             self.assertTrue(result["correct"], result)
             self.assertEqual(result["evaluator_source"], "deterministic_math")
+
+    def test_math_nested_fraction_exponent_is_deterministically_incorrect(self):
+        result = evaluate_math_answer("\\sqrt{3}-3", "\\frac{1}{2^{98}}")
+
+        self.assertFalse(result["correct"], result)
+        self.assertFalse(result["requires_model_judgment"], result)
+        self.assertIsNone(result["error_code"])
 
     def test_math_accepts_set_interval_and_unit_equivalence(self):
         cases = (
