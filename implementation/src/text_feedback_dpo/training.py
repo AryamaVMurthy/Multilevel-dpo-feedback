@@ -197,13 +197,13 @@ def build_paper_grpo_config_kwargs(
         "scale_rewards": "group",
         "mask_truncated_completions": True,
         "temperature": 1.0,
-        "top_p": 0.95,
+        "top_p": 1.0,
         "top_k": 20,
         "use_vllm": True,
         "vllm_mode": "colocate",
         "vllm_gpu_memory_utilization": 0.25,
         "vllm_max_model_length": 10240,
-        "generation_kwargs": {"presence_penalty": 1.5},
+        "generation_kwargs": {"presence_penalty": 2.0},
         **profile,
     }
 

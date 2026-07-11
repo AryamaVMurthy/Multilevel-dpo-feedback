@@ -2,9 +2,9 @@
 
 Status: active experiment specification
 
-This document adapts the V1 textual-feedback DPO research method to Qwen's native
-thinking behavior. The research object is the preference-data construction method,
-not a particular XML response format.
+This document adapts the V1 textual-feedback DPO research method to Qwen3.5's native
+chat protocol. The research object is the preference-data construction method, not a
+particular XML response format or extended-thinking behavior.
 
 ## Research invariants
 
@@ -23,17 +23,17 @@ not a particular XML response format.
 ## Qwen adaptation
 
 The student is not required to emit XML tags, hidden reasoning markers, branch names,
-or a prescribed reflection format. The prompt asks Qwen to reason naturally and give
-a concise final answer. Raw model output is retained exactly.
+or a prescribed reflection format. The MATH prompt asks Qwen to use only as much
+reasoning as needed, emit one boxed final answer, and stop immediately afterward. Raw
+model output is retained exactly.
 
-Role-level generation controls are explicit: the student keeps the configured native
-generation behavior, while teacher guidance and evaluator judgments use Qwen's
-supported non-thinking chat-template mode so short guidance and machine-readable
-judgments do not spend their entire output budget on internal reasoning. This is a
-serialization control for those roles, not a student-format constraint.
+Role-level generation controls are explicit: every role uses Qwen's supported
+non-thinking chat-template mode. The student remains sampled, while teacher guidance
+and evaluator judgments are greedy so short guidance and machine-readable judgments
+do not spend their output budget on internal reasoning.
 
-The student uses sampled thinking-mode decoding with temperature `1.0`, top-p `0.95`,
-top-k `20`, presence penalty `1.5`, and at most 8,192 new tokens. The teacher,
+The student uses sampled non-thinking decoding with temperature `1.0`, top-p `1.0`,
+top-k `20`, presence penalty `2.0`, and at most 8,192 new tokens. The teacher,
 evaluator, leakage guard, and guidance critic use explicit non-thinking greedy profiles
 with maximum output budgets of 64, 256, eight, and eight tokens respectively. These
 profiles are independently hashed and logged; structured roles never inherit student
@@ -179,3 +179,13 @@ This anchor must be logged separately from DPO loss.
   token/finish metadata, failure ledgers, manual evaluator-agreement gates, GPU
   telemetry, and one-time test markers. Any later student-prompt or inference-profile
   change invalidates and blocks on a complete baseline rerun.
+
+### 2026-07-11
+
+- MATH thinking-mode diagnostic job `13021` completed without runtime failures but
+  truncated 11 of 16 generations at 8,192 tokens. Nine truncated responses already
+  contained deterministically gold-equivalent answers, isolating termination as the
+  dominant nuisance variable.
+- Changed the primary paper student protocol to `qwen-nonthinking-r1`: explicit
+  non-thinking mode, sampled `1.0/1.0/20/2.0` decoding, and a MATH boxed-answer-and-stop
+  prompt. Thinking mode remains a separately labeled ablation.

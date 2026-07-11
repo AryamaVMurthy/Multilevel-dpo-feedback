@@ -19,7 +19,7 @@ This project studies whether a small reasoning model can learn more effectively 
 
 For every successful trajectory, the first correct response is the chosen completion. Standard preference construction pairs it only with the initial wrong response. Multilevel preference construction pairs it with every preceding wrong response. A pair-budget-matched multilevel control separates the benefit of attempt diversity from the benefit of simply having more optimizer examples. Gold answers, hints, evaluator outputs, and retry metadata never enter the DPO prompt. The trained student must solve teacher-free at inference time.
 
-The original design proposed rigid XML trajectories, teacher-written corrected rollouts, GSM8K as the first math benchmark, and ordinary sequence-summed DPO. Empirical work invalidated several of those choices. Qwen3.5 performs more naturally without XML constraints. GSM8K is too easy for the 2B post-trained checkpoint and produces very few useful preference trajectories. A 16-example teacher-free GSM8K preflight reached 81.25 percent exact accuracy while two responses hit the full 8,192-token ceiling, showing that the dominant issue was verbosity and thinking-loop behavior rather than insufficient arithmetic ability. The project therefore moves to the official MATH competition dataset, with Levels 4-5 as the primary study, while preserving GSM8K artifacts as diagnostics only.
+The original design proposed rigid XML trajectories, teacher-written corrected rollouts, GSM8K as the first math benchmark, and ordinary sequence-summed DPO. Empirical work invalidated several of those choices. Qwen3.5 performs more naturally without XML constraints. GSM8K is too easy for the 2B post-trained checkpoint and produces very few useful preference trajectories. A 16-example teacher-free GSM8K preflight reached 81.25 percent exact accuracy while two responses hit the full 8,192-token ceiling. A subsequent 16-example MATH Levels 4-5 thinking-mode diagnostic reached only 31.25 percent protocol-valid accuracy because 11 of 16 generations hit the ceiling, although nine of those 11 already contained a deterministically gold-equivalent extracted answer. This establishes failure to terminate, rather than answer discovery, as a dominant nuisance variable. The primary student protocol therefore uses the same post-trained Qwen3.5-2B checkpoint in explicit non-thinking mode with a boxed-answer-and-stop prompt. Thinking mode remains a labeled secondary ablation. The project uses the official MATH competition dataset, with Levels 4-5 as the primary study, while preserving GSM8K and thinking-mode artifacts as diagnostics only.
 
 The primary preference objective will be length-normalized DPO, implemented with the locked TRL `sigmoid_norm` loss for both standard and multilevel pair construction. Length-desensitized DPO, using `ld_alpha` to downweight verbose response tails, is a separately labeled ablation. The two mechanisms are not silently combined in the primary result. This keeps the paper claim interpretable: the main comparison isolates preference construction under the same length-normalized objective.
 
@@ -62,7 +62,7 @@ The intended contribution is not a new answer generator or a rigid reasoning for
 - an iterative collection policy that stops at the first correct response;
 - a multilevel preference group that preserves every failure before success;
 - a fair matched-pair control that isolates trajectory diversity;
-- a length-aware objective and evaluation protocol suitable for native long-thinking models.
+- a length-aware objective and evaluation protocol that keeps completion-length effects observable without making extended thinking a prerequisite.
 
 ## 2. Evolution of the Design
 
@@ -72,7 +72,7 @@ The original July 2026 design proposed Qwen3-4B-Instruct as student, a stronger 
 
 ### 2.2 Why the Original Format Was Rejected
 
-The project objective is to evaluate multilevel feedback, not XML compliance. Strict tags made parsing and format correction dominate the experiment, constrained Qwen's native thinking behavior, and introduced failure modes unrelated to mathematical reasoning. The current design preserves raw native generations exactly and delegates answer extraction to a dedicated evaluator. No `<think>`, `<reflect>`, tool tag, or corrected-rollout format is required.
+The project objective is to evaluate multilevel feedback, not XML compliance. Strict tags made parsing and format correction dominate the experiment and introduced failure modes unrelated to mathematical reasoning. The current design preserves raw model generations exactly and delegates answer extraction to a dedicated evaluator. No `<think>`, `<reflect>`, tool tag, or corrected-rollout format is required. The sole output contract for MATH is a clearly identifiable final `\boxed{}` answer followed by termination.
 
 ### 2.3 Why Teacher-Written Corrected Rollouts Were Rejected
 
@@ -96,7 +96,7 @@ Native reasoning responses vary substantially in length. Sequence-summed log pro
 
 | Role | Model | Privileged information | Thinking | Decoding | Maximum new tokens |
 | --- | --- | --- | --- | --- | ---: |
-| Student | Qwen3.5-2B post-trained | Problem, accumulated safe hints | Enabled | Sampled | 8192 |
+| Student | Qwen3.5-2B post-trained | Problem, accumulated safe hints | Disabled | Sampled | 8192 |
 | Teacher | Qwen3.5-9B post-trained | Problem, gold solution, failed response, evaluator result | Disabled | Greedy | 64 |
 | Evaluator | Qwen3.5-9B post-trained | Problem, gold answer/solution, student response | Disabled | Greedy | 256 |
 | Guidance guard | Qwen3.5-9B post-trained | Problem, gold answer, accumulated hints | Disabled | Greedy | 8 |
@@ -108,19 +108,19 @@ The teacher, evaluator, guard, and critic may reuse the same pinned 9B weights, 
 
 The approved student profile is:
 
-- `enable_thinking=true`;
+- `enable_thinking=false`;
 - `do_sample=true`;
 - `temperature=1.0`;
-- `top_p=0.95`;
+- `top_p=1.0`;
 - `top_k=20`;
-- `presence_penalty=1.5`;
+- `presence_penalty=2.0`;
 - `max_new_tokens=8192`.
 
-The 8,192 value is a ceiling, not a target. Exact prompt tokens, generated tokens, EOS termination, length termination, latency, and finish reason must be recorded. A length-truncated response is incorrect even when an intermediate number matches the gold answer.
+This is Qwen's recommended sampled non-thinking text profile, with a project-specific 8,192-token ceiling to preserve the fixed training sequence budget. The ceiling is not a target. Exact prompt tokens, generated tokens, EOS termination, length termination, latency, and finish reason must be recorded. A length-truncated response is incorrect even when an intermediate number matches the gold answer.
 
 ### 3.3 Attempt Zero
 
-The student receives only the original problem and the frozen native-Qwen solving prompt. It does not receive the gold answer, reference solution, evaluator rubric, teacher hint, or information about future retries. The raw response is stored without rewriting.
+The student receives only the original problem and the frozen non-thinking boxed-answer-and-stop prompt. It does not receive the gold answer, reference solution, evaluator rubric, teacher hint, or information about future retries. The raw response is stored without rewriting.
 
 ### 3.4 Evaluation
 
@@ -347,6 +347,26 @@ Two responses hit exactly 8,192 tokens and were marked incorrect despite the eva
 6. One-second telemetry is needed because short evaluator memory peaks can be missed at ten-second intervals.
 7. No full GSM8K baseline, collection, or training should continue. Existing GSM8K artifacts remain diagnostics only.
 
+### 6.6 MATH Thinking-Mode Diagnostic and Mode Decision
+
+The first immutable MATH Levels 4-5 diagnostic used source commit
+`4c77ff6fac3eb43c89a9a742c7901b5427ab2b7a` and Slurm job `13021`. It evaluated
+16 teacher-free examples with Qwen3.5-2B thinking mode under the former
+`qwen-native-r2` protocol. The run completed with no runtime failures in 40 minutes
+33 seconds, but only five responses terminated with EOS. Eleven hit exactly 8,192
+tokens, yielding a 68.75% truncation rate and 31.25% protocol-valid accuracy. Nine of
+the eleven truncated responses already contained a deterministically gold-equivalent
+extracted answer before the mandatory truncation override.
+
+This result is diagnostic-only. It demonstrates that thinking-mode termination is a
+large nuisance variable that would dominate pair construction, training cost, and
+held-out scoring. Because the research contribution is multilevel feedback rather
+than extended reasoning, the primary protocol now uses explicit non-thinking mode.
+The mode, prompt, and non-thinking sampling profile must be identical for baseline
+evaluation, guidance collection, DPO pair prompts, adapted-checkpoint evaluation, and
+the GRPO comparison. Thinking mode remains a prespecified secondary ablation and may
+not replace the primary protocol after observing validation or test results.
+
 ## 7. Experimental Matrix
 
 ### 7.1 Required Main Methods
@@ -406,7 +426,7 @@ The unsafe no-guard condition must never feed unreviewed hints into a full run. 
 1. Primary `sigmoid_norm` length-normalized DPO.
 2. Length-desensitized DPO with `ld_alpha` in `{0.25, 0.50, 0.75}`.
 3. Optional one-seed sequence-summed sigmoid DPO diagnostic.
-4. Native prompt versus official MATH boxed-answer prompt on train-only preflight data.
+4. Primary non-thinking protocol versus the frozen thinking-mode diagnostic profile.
 5. No loop stopping versus token-level anomalous-loop stopping, only if the detector is frozen and all stopped responses are marked invalid.
 6. Response-SFT anchor off versus annealed-to-zero anchor.
 
@@ -665,7 +685,7 @@ GPU telemetry is sampled every second for paper jobs. Monitor utilization, memor
 
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
-| Qwen3.5-2B thinking loops | High cost and invalid responses | 8,192 ceiling, EOS logging, truncation override, train-only prompt study, optional frozen token-level loop detector |
+| Accidental thinking-mode reactivation | High cost, invalid responses, and protocol mismatch | Hard config validation of `enable_thinking=false`, frozen protocol hash, EOS logging, and thinking mode only as a separately labeled ablation |
 | MATH answer-equivalence errors | False reward or preference labels | Symbolic normalizer plus 9B adjudication plus manual audits |
 | Teacher leaks answer | Invalid scientific claim | Slight-hint contract, accumulated semantic guard, manual leakage audit |
 | Teacher gives wrong hint | Student is pushed away from solution | Separate privileged correctness critic and bounded regeneration |
@@ -718,11 +738,12 @@ Exit criterion: local unit tests verify objective selection, metrics, manifests,
 ### Phase 3: Prompt and Baseline Preflight
 
 1. Create a deterministic train-only prompt-development subset across subjects and Levels 4-5.
-2. Compare the current native prompt with the official boxed-answer MATH prompt while keeping sampling fixed.
-3. Select on correctness first, then truncation and median tokens.
-4. Freeze the selected prompt under a new protocol identifier.
+2. Implement the primary `qwen-nonthinking-r1` protocol using Qwen's non-thinking text sampling profile and a boxed-answer-and-stop prompt.
+3. Verify locally that the chat template receives `enable_thinking=false` and that thinking-mode or legacy sampling configs fail validation.
+4. Freeze the prompt, generation profile, config hash, and source commit before validation.
 5. Run one MATH example, then 16 stratified validation examples.
-6. Manually audit every response and evaluator decision.
+6. Record protocol-valid accuracy, raw answer attainment, EOS/length termination, post-answer continuation, median generated tokens, and GPU cost.
+7. Manually audit every response and evaluator decision.
 
 Exit criterion: at least 95% manual agreement, at most 5% truncation, complete metadata, no teacher context, and memory below 90%.
 
@@ -925,13 +946,13 @@ The next execution sequence is:
 Solve the following mathematics problem.
 
 Reason step by step using only as much detail as the problem needs. Put the final
-answer in a clearly identifiable boxed form.
+answer in `\boxed{}` and stop immediately after the boxed answer.
 
 Problem:
 {problem}
 ```
 
-The exact wording must be selected on train-only preflight data and then frozen. The prompt must not mention the gold solution, teacher, evaluator, retries, or preference training.
+This wording and the `qwen-nonthinking-r1` protocol identifier are frozen before validation. The prompt must not mention the gold solution, teacher, evaluator, retries, or preference training.
 
 ### Privileged Teacher Prompt Intent
 

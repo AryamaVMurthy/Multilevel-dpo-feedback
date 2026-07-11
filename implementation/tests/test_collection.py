@@ -44,13 +44,13 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(
             student,
             {
-                "enable_thinking": True,
+                "enable_thinking": False,
                 "do_sample": True,
                 "max_new_tokens": 8192,
                 "temperature": 1.0,
-                "top_p": 0.95,
+                "top_p": 1.0,
                 "top_k": 20,
-                "presence_penalty": 1.5,
+                "presence_penalty": 2.0,
             },
         )
         self.assertEqual(

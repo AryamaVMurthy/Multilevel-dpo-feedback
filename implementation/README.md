@@ -47,20 +47,22 @@ sbatch -A <account> --job-name=tfdpo-basic-pairs \
 
 These two commands are legacy runtime smokes. They do not authorize paper training.
 
-Current smoke generation settings:
+Primary paper student generation settings:
 
 ```yaml
+enable_thinking: false
 temperature: 1.0
-top_p: 0.95
+top_p: 1.0
 top_k: 20
-presence_penalty: 1.5
+presence_penalty: 2.0
 ```
 
 `temperature`, `top_p`, and `top_k` are passed directly to Hugging Face Transformers `generate()`. `presence_penalty` is not a native Transformers `GenerationConfig` field, so this repo applies it through a custom logits processor that subtracts the penalty from tokens already present in the sequence. This is explicit and tested; it is not mapped silently to `repetition_penalty`.
 
-The paper plan applies these sampling settings only to student rollouts. Teacher,
-evaluator, and guidance-guard roles use separately configured non-thinking decoding
-profiles. See `../docs/plans/2026-07-10-paper-scale-experiment-implementation.md` for
+The paper plan applies these sampled settings only to student rollouts; every role uses
+explicit non-thinking mode. Teacher, evaluator, and guidance-guard roles use separately
+configured greedy decoding profiles. See
+`../docs/plans/2026-07-10-paper-scale-experiment-implementation.md` for
 the exact execution order, storage gates, and artifact requirements.
 
 Before any paper GPU job, stage the pinned model revisions on a specific compute node's

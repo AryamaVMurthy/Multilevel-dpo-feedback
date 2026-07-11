@@ -520,8 +520,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_rewards.py'
 **Step 3: Implement shared reward functions**
 
 Use the same evaluation result schema as held-out scoring. Configure four generations,
-generation batch divisibility, max completion length 8192, temperature 1.0, top-p 0.95,
-top-k 20, presence penalty 1.5 through supported generation kwargs, completion logging,
+generation batch divisibility, max completion length 8192, non-thinking chat templating,
+temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0 through supported generation kwargs, completion logging,
 and truncated-completion masking. Configure the primary baseline explicitly as original
 `loss_type="grpo"`, one policy iteration, clipping epsilon `0.2`, and within-group reward
 scaling. Configure DAPO only through the separately named `dapo_sensitivity` profile.
@@ -802,8 +802,8 @@ permit full collection or training.
 - Modify: `implementation/tests/test_models.py`
 - Modify: `implementation/tests/test_guidance_policy.py`
 
-Write failing tests proving that the student alone uses thinking plus sampled
-`1.0/0.95/20/1.5` decoding and 8,192 tokens. Require teacher greedy non-thinking
+Write failing tests proving that the student uses explicit non-thinking mode plus
+sampled `1.0/1.0/20/2.0` decoding and 8,192 tokens. Require teacher greedy non-thinking
 decoding with 64 tokens, evaluator greedy non-thinking decoding with 256 tokens, and
 guard greedy non-thinking decoding with eight tokens. Greedy profiles must omit
 temperature, top-p, top-k, and presence penalty instead of passing ignored values.
@@ -915,8 +915,8 @@ No test job starts until every selected run and validation prediction artifact p
 Generate four completions per prompt with original `loss_type="grpo"`, one policy
 iteration, clipping epsilon `0.2`, within-group scaling, and truncation masking. Audit
 every completion, reward, optimizer field, and gradient update.
-Use the isolated frozen vLLM environment so presence penalty `1.5` is actually applied;
-temperature `1.0`, top-p `0.95`, top-k `20`, and the 8,192-token ceiling are explicit.
+Use the isolated frozen vLLM environment so presence penalty `2.0` is actually applied;
+non-thinking mode, temperature `1.0`, top-p `1.0`, top-k `20`, and the 8,192-token ceiling are explicit.
 Start with colocated vLLM at 25% device memory. If and only if the measured preflight
 fails the memory gate, run the documented two-GPU server-mode profile and then use that
 same profile for all GRPO candidates and seeds. Never omit presence penalty as a hidden

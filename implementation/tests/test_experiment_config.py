@@ -30,12 +30,12 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.splits, {"train": 6726, "validation": 747, "test": 1319})
         self.assertEqual(config.dataset.validation_roles, {"tune": 500, "confirm": 247})
         student = config.generation.roles["student"]
-        self.assertTrue(student.enable_thinking)
+        self.assertFalse(student.enable_thinking)
         self.assertTrue(student.do_sample)
         self.assertEqual(student.max_new_tokens, 8192)
         self.assertEqual(
             (student.temperature, student.top_p, student.top_k, student.presence_penalty),
-            (1.0, 0.95, 20, 1.5),
+            (1.0, 1.0, 20, 2.0),
         )
         for role, max_new_tokens in {
             "teacher": 64,
@@ -127,6 +127,17 @@ class PaperExperimentConfigTest(unittest.TestCase):
         value["generation"]["student"]["max_new_tokens"] = 2048
 
         with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*8192"):
+            self._write_and_load(value)
+
+    def test_paper_student_rejects_thinking_mode_or_old_sampling_profile(self):
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["generation"]["student"]["enable_thinking"] = True
+        with self.assertRaisesRegex(ValueError, "non-thinking sampled"):
+            self._write_and_load(value)
+
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["generation"]["student"]["top_p"] = 0.95
+        with self.assertRaisesRegex(ValueError, "top_p=1.0"):
             self._write_and_load(value)
 
     def test_primary_dpo_objective_and_length_ablation_grid_are_frozen(self):

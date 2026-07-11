@@ -116,11 +116,11 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(grpo["beta"], 0.01)
         self.assertTrue(grpo["mask_truncated_completions"])
         self.assertEqual(grpo["temperature"], 1.0)
-        self.assertEqual(grpo["top_p"], 0.95)
+        self.assertEqual(grpo["top_p"], 1.0)
         self.assertEqual(grpo["top_k"], 20)
         self.assertTrue(grpo["use_vllm"])
         self.assertEqual(grpo["vllm_mode"], "colocate")
-        self.assertEqual(grpo["generation_kwargs"], {"presence_penalty": 1.5})
+        self.assertEqual(grpo["generation_kwargs"], {"presence_penalty": 2.0})
 
 
 if __name__ == "__main__":

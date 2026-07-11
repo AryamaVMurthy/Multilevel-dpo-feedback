@@ -354,10 +354,10 @@ def _parse_generation(value: object) -> GenerationConfig:
                 profile.top_k,
                 profile.presence_penalty,
             )
-            if actual != (True, True, 1.0, 0.95, 20, 1.5):
+            if actual != (False, True, 1.0, 1.0, 20, 2.0):
                 raise ValueError(
-                    "generation.student must use thinking and sampled temperature=1.0, "
-                    "top_p=0.95, top_k=20, presence_penalty=1.5"
+                    "generation.student must use non-thinking sampled temperature=1.0, "
+                    "top_p=1.0, top_k=20, presence_penalty=2.0"
                 )
         else:
             keys = {"enable_thinking", "do_sample", "max_new_tokens"}
@@ -570,8 +570,8 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         _positive_int(collection[field], f"collection.{field}")
     if collection["artifact_schema"] != "paper-v2":
         raise ValueError("collection.artifact_schema must be paper-v2")
-    if collection["prompt_protocol"] != "qwen-native-r2":
-        raise ValueError("collection.prompt_protocol must be qwen-native-r2")
+    if collection["prompt_protocol"] != "qwen-nonthinking-r1":
+        raise ValueError("collection.prompt_protocol must be qwen-nonthinking-r1")
     training = _mapping(value["training"], "training")
     _strict_keys(
         training,

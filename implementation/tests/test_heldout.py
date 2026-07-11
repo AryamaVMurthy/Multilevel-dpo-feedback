@@ -127,7 +127,7 @@ class HeldoutTest(unittest.TestCase):
             dataset_manifest_sha256="c" * 64,
             student_model={"id": "student", "revision": "d" * 40},
             evaluator_model={"id": "evaluator", "revision": "e" * 40},
-            prompt_protocol="qwen-native-r2",
+            prompt_protocol="qwen-nonthinking-r1",
             student_generation={"temperature": 1.0, "max_new_tokens": 8192},
             evaluator_generation={"do_sample": False, "max_new_tokens": 256},
             generation_seed=20260710,

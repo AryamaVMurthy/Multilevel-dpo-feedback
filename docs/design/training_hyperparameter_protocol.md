@@ -16,7 +16,7 @@ are runtime checks only and are not approved paper settings.
 | [TRL GRPO trainer](https://huggingface.co/docs/trl/grpo_trainer) | official software documentation | KL beta, clipping, update count, loss variants, reward scaling, truncation masking |
 | [Transformers TrainingArguments](https://github.com/huggingface/transformers/blob/main/src/transformers/training_args.py) | official source | fused AdamW, Adam coefficients, scheduler, warmup, weight decay, clipping |
 | [PEFT LoRA guide](https://github.com/huggingface/peft/blob/main/docs/source/developer_guides/quantization.md) | official software documentation | broad linear-module targeting support |
-| [Qwen3.5-2B model card](https://huggingface.co/Qwen/Qwen3.5-2B) | official model documentation | model identity, architecture, chat template, thinking-mode sampling, and thinking-loop warning |
+| [Qwen3.5-2B model card](https://huggingface.co/Qwen/Qwen3.5-2B) | official model documentation | model identity, architecture, chat template, non-thinking text sampling, and thinking-loop warning |
 | [Direct Preference Optimization](https://papers.neurips.cc/paper_files/paper/2023/file/a85b405ed65c6477a4fe8302b5e06ce7-Paper-Conference.pdf) | peer-reviewed NeurIPS 2023 paper | standard DPO objective and beta sensitivity |
 | [Beta-DPO](https://proceedings.neurips.cc/paper_files/paper/2024/file/ea888178abdb6fc233226d12321d754f-Paper-Conference.pdf) | peer-reviewed NeurIPS 2024 paper | evidence that DPO performance is beta-sensitive |
 
@@ -33,16 +33,17 @@ The paper config fixes DPO `max_length=10240` to provide 2,048 tokens of prompt
 headroom around the 8,192-token student completion ceiling, and fixes GRPO
 `max_completion_length=8192`.
 These values are explicit config inputs rather than trainer defaults.
-The official Qwen3.5-2B model card reports a native 262,144-token context and recommends
-substantially larger thinking outputs for difficult tasks, so 8,192 is model-supported.
-The same card warns that the 2B checkpoint can enter thinking loops; exact EOS/length
-finish metadata and the 5% truncation gate therefore remain mandatory rather than
-assuming that a larger ceiling guarantees termination.
+The official Qwen3.5-2B model card reports a native 262,144-token context, so 8,192 is
+model-supported. The primary paper protocol uses its recommended non-thinking text
+profile: temperature `1.0`, top-p `1.0`, top-k `20`, and presence penalty `2.0`. The
+same card warns that the 2B checkpoint can enter thinking loops; the failed MATH
+thinking-mode diagnostic is therefore preserved as an ablation, while exact EOS/length
+metadata and the 5% truncation gate remain mandatory for every mode.
 
 TRL 1.8 exposes temperature, top-p, and top-k directly, but Transformers generation
 does not implement OpenAI-style presence penalty as a `GenerationConfig` field. Paper
 GRPO therefore uses TRL's vLLM rollout path with explicit
-`generation_kwargs={"presence_penalty": 1.5}`. vLLM is isolated in
+`generation_kwargs={"presence_penalty": 2.0}`. vLLM is isolated in
 `implementation/environments/grpo/` because its PyTorch constraint differs from the
 main collection/DPO environment. The first profile is colocated vLLM at 25% GPU memory;
 an OOM or memory-gate failure does not permit dropping the penalty and instead triggers

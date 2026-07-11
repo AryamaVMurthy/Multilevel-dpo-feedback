@@ -66,10 +66,19 @@ def build_native_student_prompt(
             "Use it to reconsider the problem, but solve it yourself:\n"
             f"{guidance}\n"
         )
+    if domain == "math":
+        task_instruction = (
+            "Reason step by step using only as much detail as the problem needs. "
+            "Put the final answer in \\boxed{} and stop immediately after the boxed answer."
+        )
+    else:
+        task_instruction = (
+            "Use only as much explanation as the question needs, give one concise final answer, "
+            "and stop immediately after that answer."
+        )
     return f"""Solve the following {domain.replace("_", " ")} problem.
 
-Solve it carefully, checking the relevant relationships and calculations. When ready,
-give a concise final answer.
+{task_instruction}
 {evidence_text}{guidance_text}
 Problem:
 {problem}

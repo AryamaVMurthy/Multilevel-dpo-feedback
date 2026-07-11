@@ -1,7 +1,7 @@
 # Multilevel DPO Feedback
 
 This repository contains the implementation and paper-scale execution protocol for
-native multilevel-feedback DPO with Qwen3.5.
+multilevel-feedback DPO with Qwen3.5.
 
 Current status:
 
@@ -9,8 +9,10 @@ Current status:
 - Canonical living method: `docs/design/native_iterative_guidance_dpo.md`.
 - Paper design and execution plan: `docs/plans/`.
 - Tested implementation and Turing workflows: `implementation/`.
-- Current state: GSM8K data is materialized and the 64-example collection preflight is
-  running. Full collection and training remain gated; SearchQA-8K follows GSM8K.
+- Current state: MATH Levels 4-5 is the primary benchmark. The thinking-mode baseline
+  diagnostic failed its termination gate, and the primary student protocol is now
+  explicit non-thinking `qwen-nonthinking-r1`. Full collection and training remain
+  gated on the replacement baseline preflight.
 
 Run the basic local pipeline:
 

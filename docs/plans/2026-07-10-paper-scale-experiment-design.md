@@ -42,7 +42,7 @@ protocol?
 - Three seeds for primary LoRA results.
 - Optional full-parameter ablation: one GSM8K seed for standard DPO and multilevel DPO.
 - No XML response format and no formatting loss.
-- Student sampling: temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5.
+- Student sampling: non-thinking mode, temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0.
 - Student completion budget: 8192 tokens.
 - Original GRPO is the primary online-RL baseline; a DAPO-loss run is labeled only as
   a sensitivity analysis.
@@ -54,7 +54,7 @@ being evaluated. They are not silently reused for machine-readable control roles
 
 | Role | Thinking | Decoding | Maximum new tokens | Purpose |
 | --- | --- | --- | ---: | --- |
-| student | enabled | sampled: temperature 1.0, top-p 0.95, top-k 20, presence penalty 1.5 | 8192 | natural problem solving and retries |
+| student | disabled | sampled: temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0 | 8192 | concise boxed-answer problem solving and retries |
 | teacher | disabled | greedy | 64 | one very slight answer-free hint |
 | evaluator | disabled | greedy | 256 | structured answer extraction and judgment |
 | guidance guard | disabled | greedy | 8 | exact `SAFE` or `UNSAFE` verdict |
@@ -63,8 +63,8 @@ being evaluated. They are not silently reused for machine-readable control roles
 Each role profile is explicit in the config and run manifest. Greedy roles do not
 receive ignored sampling parameters. Evaluator repair and teacher regeneration are
 bounded, separately logged turns with the prior invalid raw output and error included;
-exhaustion is a hard failure. This separation does not constrain the student's native
-thinking or response format.
+exhaustion is a hard failure. The student protocol requires no XML structure, but MATH
+does require one boxed final answer followed by termination.
 
 ## Dataset Protocol
 

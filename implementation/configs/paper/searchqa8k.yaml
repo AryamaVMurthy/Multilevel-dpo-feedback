@@ -16,13 +16,13 @@ models:
   evaluator: {id: Qwen/Qwen3.5-9B, revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a}
 generation:
   student:
-    enable_thinking: true
+    enable_thinking: false
     do_sample: true
     max_new_tokens: 8192
     temperature: 1.0
-    top_p: 0.95
+    top_p: 1.0
     top_k: 20
-    presence_penalty: 1.5
+    presence_penalty: 2.0
   teacher: {enable_thinking: false, do_sample: false, max_new_tokens: 64}
   evaluator: {enable_thinking: false, do_sample: false, max_new_tokens: 256}
   guidance_guard: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
@@ -32,7 +32,7 @@ collection:
   max_guidance_regenerations: 2
   shard_size: 250
   artifact_schema: paper-v2
-  prompt_protocol: qwen-native-r2
+  prompt_protocol: qwen-nonthinking-r1
 lora:
   rank: 16
   alpha: 32
