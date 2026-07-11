@@ -848,6 +848,14 @@ the active Phase 4 gate under source commit `9df4d13`.
 
 Exit criterion: baseline artifacts, audits, plots, HTML report, and one-time test marker complete.
 
+Current result: array `13061` was stopped at user request. Shard 0 completed normally
+as Slurm job `13062` in 52:01 with 58 unique predictions, zero failures, zero
+truncations, 53 `final_answer` stops, and five EOS stops. Its provisional automated
+accuracy is 50/58; this is neither merged nor manually audited and is not a full
+baseline result. Shards 1-6 were cancelled before atomic completion. Resume with the
+same source `9df4d13`, freeze, validation hash, seed, and `NUM_SHARDS=7`, restore/reuse
+`shard-0000`, and submit only array indices 1-6.
+
 ### Phase 5: Guidance Collection Preflight
 
 1. Run 16 hard training examples through the complete slight-guidance loop.

@@ -22,8 +22,10 @@ balanced final-answer stops, and peak memory 29,503 MiB. Manual audit corrected 
 evaluator false positive, making accuracy 8/16 and original evaluator agreement 15/16.
 The deterministic balanced-LaTeX scorer repair passes the full local suite. CPU job
 `13058` produced a source-bound corrected artifact and passed the 16/16 manual audit.
-The complete 402-example MATH validation baseline is in progress at frozen source
-`9df4d13`; Tasks 17-27 remain blocked until that baseline passes.
+The complete 402-example MATH validation array was stopped at user request. Shard 0
+completed with 58 reusable predictions and validated hashes; shards 1-6 were cancelled
+before atomic completion. Resume at frozen source `9df4d13` with `NUM_SHARDS=7` and
+submit only indices 1-6. Tasks 17-27 remain blocked until the merged baseline passes.
 
 Checkpoint: 2026-07-10, branch `agent/qwen35-pretest`. Baseline/R2 protocol commit
 `ea45bd7b1a47ea32c1a9dc3df330d593829da5ff` passed a one-example GPU micro; the

@@ -15,8 +15,10 @@ Current status:
   and a 16,384-token emergency ceiling. Job `13053` eliminated truncation on the same
   16-example diagnostic used by the earlier mode comparisons. Source-bound CPU rescore
   job `13058` corrected the one false-positive model-evaluator decision and passed the
-  16/16 manual audit. The complete 402-example MATH validation baseline is now the active
-  gate; collection and training remain blocked until it passes.
+  16/16 manual audit. The complete 402-example MATH validation attempt was stopped at
+  user request after shard 0 completed; its 58 predictions are preserved, and only
+  shards 1-6 remain. Collection and training remain blocked until the baseline resumes,
+  merges, and passes audit.
 
 Run the basic local pipeline:
 

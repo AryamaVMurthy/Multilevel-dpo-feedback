@@ -204,3 +204,7 @@ This anchor must be logged separately from DPO loss.
   commit `9df4d13` and CPU job `13058` then produced an immutable rescore with 8/16
   corrected accuracy, zero model-judgment fallbacks, and 16/16 manual agreement. The
   complete validation baseline is the current gate.
+- Full-validation array `13061` was stopped at user request after shard 0 completed.
+  Shard 0 contains 58 unique predictions, zero failures/truncations, 53 final-answer
+  stops, and five EOS stops under source `9df4d13`; its immutable hashes and provenance
+  are preserved. Shards 1-6 remain and must reuse `NUM_SHARDS=7`.
