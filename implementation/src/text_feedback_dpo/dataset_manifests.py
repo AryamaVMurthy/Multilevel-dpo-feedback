@@ -367,12 +367,12 @@ def validate_disjoint_splits(rows: Iterable[Mapping[str, Any]]) -> None:
             raise ValueError(f"manifest row {source_key} is missing dataset_role")
         if source_key in seen_source_keys:
             raise ValueError(f"source_key appears more than once: {source_key}")
-        if normalized_question in seen_questions:
+        if normalized_question in seen_questions and seen_questions[normalized_question] != role:
             raise ValueError(
                 f"normalized question appears across dataset roles: {normalized_question}"
             )
-        if row_hash and row_hash in seen_hashes:
-            raise ValueError(f"row_hash appears more than once: {row_hash}")
+        if row_hash and row_hash in seen_hashes and seen_hashes[row_hash] != role:
+            raise ValueError(f"row_hash appears across dataset roles: {row_hash}")
         seen_source_keys[source_key] = role
         seen_questions[normalized_question] = role
         if row_hash:
