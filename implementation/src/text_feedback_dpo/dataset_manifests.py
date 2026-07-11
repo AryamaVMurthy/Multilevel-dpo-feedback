@@ -168,7 +168,7 @@ def split_math_train(
     if primary_levels != (4, 5):
         raise ValueError("MATH primary levels must be exactly (4, 5)")
     annotated = [_annotate(row, source_split="train", source_index=index) for index, row in enumerate(raw_rows)]
-    primary = [row for row in annotated if int(row.get("difficulty_level", 0)) in primary_levels]
+    primary = [row for row in annotated if row.get("difficulty_level") in primary_levels]
     if not primary:
         raise ValueError("MATH source train has no Levels 4-5 rows")
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)

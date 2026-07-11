@@ -62,6 +62,15 @@ class DatasetManifestTest(unittest.TestCase):
                 "difficulty_level": 3,
             }
         )
+        rows.append(
+            {
+                "id": "math-geometry-unknown-0",
+                "problem": "Unknown difficulty problem",
+                "gold_answer": "0",
+                "source_subject": "geometry",
+                "difficulty_level": None,
+            }
+        )
         return rows
 
     def test_canonical_hash_is_order_independent_and_changes_with_content(self):
