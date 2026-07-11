@@ -16,6 +16,14 @@ These rules are mandatory for every agent working in this repository.
 - Before requesting approval, state the exact command or bounded command set, purpose, expected resources, and whether it changes Turing state. Approval for one action does not authorize later actions.
 - Never submit, cancel, modify, or retry a job on the agent's own initiative.
 
+## Date-scoped god switch
+
+- The user may temporarily suspend only the per-action approval requirement by saying the exact phrase `god privileges blessed` and specifying the Asia/Kolkata calendar day for which it applies.
+- The switch expires automatically at midnight Asia/Kolkata on that day and does not carry into later dates or conversations without a new explicit activation.
+- While active, the agent may run, inspect, submit, monitor, fix, and retry Turing work without asking again, but every action must still be recorded in the append-only usage log.
+- The credential rules and daily requested GPU-hour hard limit are never suspended by this switch.
+- Active exception: the user activated the switch for **2026-07-11 Asia/Kolkata only** in the current conversation.
+
 ## Daily hard limit
 
 - The daily Turing budget is a user-specified maximum of cumulative **requested GPU-hours** in Asia/Kolkata time. A job reserves `requested GPUs x requested wall time` against that budget before submission.
