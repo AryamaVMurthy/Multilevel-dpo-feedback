@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import statistics
 from collections import defaultdict
 from typing import Any, Iterable
@@ -129,6 +130,84 @@ def validate_screening_context(
     for field, value in expected.items():
         if manifest.get(field) != value:
             raise ValueError(f"screening context mismatch in {field}")
+
+
+def build_decoding_freeze(
+    *,
+    screening_manifest: dict[str, Any],
+    screening_selection: dict[str, Any],
+    confirmation_manifest: dict[str, Any],
+    confirmation_selection: dict[str, Any],
+    student_generation: dict[str, Any],
+    frozen_config_sha256: str,
+    source_commit: str,
+    screening_selection_sha256: str,
+    confirmation_selection_sha256: str,
+) -> dict[str, Any]:
+    for name, value in (
+        ("screening_selection_sha256", screening_selection_sha256),
+        ("confirmation_selection_sha256", confirmation_selection_sha256),
+        ("frozen_config_sha256", frozen_config_sha256),
+    ):
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError(f"{name} must be a lowercase SHA-256")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("source_commit must be an immutable lowercase Git SHA")
+    for stage, manifest, selection, count, ceiling in (
+        ("screening", screening_manifest, screening_selection, 12, 4096),
+        ("confirmation", confirmation_manifest, confirmation_selection, 32, 8192),
+    ):
+        if manifest.get("schema") != "math-decoding-sweep-v1" or manifest.get("stage") != stage:
+            raise ValueError(f"{stage} sweep manifest is invalid")
+        if manifest.get("count") != count or manifest.get("max_new_tokens") != ceiling:
+            raise ValueError(f"{stage} sweep size or token ceiling is invalid")
+        if (
+            selection.get("schema") != "math-decoding-sweep-selection-v1"
+            or selection.get("stage") != stage
+            or selection.get("status") != "passed"
+        ):
+            raise ValueError(f"{stage} selection is not passed")
+        ids = selection.get("example_ids")
+        if not isinstance(ids, list) or len(ids) != count or len(set(ids)) != count:
+            raise ValueError(f"{stage} selection example IDs are invalid")
+    if set(screening_selection["example_ids"]) & set(confirmation_selection["example_ids"]):
+        raise ValueError("screening and confirmation examples overlap")
+    promoted = screening_selection.get("promoted")
+    if not isinstance(promoted, list) or len(promoted) != 3 or set(promoted) != set(confirmation_manifest.get("profiles", {})):
+        raise ValueError("confirmation profiles do not match screening promotion")
+    selected = confirmation_selection.get("selected_profile")
+    if confirmation_selection.get("promoted") != [selected] or selected not in promoted:
+        raise ValueError("confirmation did not select exactly one promoted profile")
+    expected_generation = {**PROFILES[str(selected)], "max_new_tokens": 8192}
+    if student_generation != expected_generation:
+        raise ValueError("frozen student generation does not match the selected profile")
+    context_fields = (
+        "dataset_manifest_sha256",
+        "dataset_audit_sha256",
+        "model_cache_manifest_sha256",
+        "model",
+        "prompt_protocol",
+    )
+    for field in context_fields:
+        if confirmation_manifest.get(field) != screening_manifest.get(field):
+            raise ValueError(f"decoding stages differ in {field}")
+    return {
+        "schema": "math-decoding-freeze-v1",
+        "source_commit": source_commit,
+        "frozen_config_sha256": frozen_config_sha256,
+        "selection_config_sha256": confirmation_manifest["config_sha256"],
+        "screening_selection_sha256": screening_selection_sha256,
+        "confirmation_selection_sha256": confirmation_selection_sha256,
+        "selected_profile": selected,
+        "student_generation": student_generation,
+        "model": confirmation_manifest["model"],
+        "prompt_protocol": confirmation_manifest["prompt_protocol"],
+        "dataset_manifest_sha256": confirmation_manifest["dataset_manifest_sha256"],
+        "dataset_audit_sha256": confirmation_manifest["dataset_audit_sha256"],
+        "model_cache_manifest_sha256": confirmation_manifest["model_cache_manifest_sha256"],
+        "screening_example_ids": screening_selection["example_ids"],
+        "confirmation_example_ids": confirmation_selection["example_ids"],
+    }
 
 
 def summarize_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

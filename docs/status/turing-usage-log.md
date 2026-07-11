@@ -443,3 +443,15 @@ No actions have been logged under this control policy yet.
 - Confirmation code must verify the screening selection and sweep hashes plus exact config, dataset, audit, model-cache, and model identity bindings before loading the GPU model.
 - Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/decoding/confirmation-v1`.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:10:57+05:30
+
+- Standalone clone fast-forwarded cleanly to `93de73c6d7e20205c9bbba4adae40c8146a9fe48`; queue was empty and the confirmation output did not exist.
+- Slurm job ID: `13123`.
+
+## 2026-07-11T22:10:57+05:30 - monitor disjoint decoding confirmation job 13123
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact manifest/selection artifacts after terminal state.
+- Purpose: capture all 96 confirmation records, disjointness and context-binding failures, resource use, and the single selected profile.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.

@@ -3,6 +3,7 @@ import unittest
 from text_feedback_dpo.concise_sweep import (
     PROFILES,
     build_sweep_prompt,
+    build_decoding_freeze,
     promote_profiles,
     protocol_valid_correct,
     stratified_subset,
@@ -14,6 +15,71 @@ from text_feedback_dpo.prompts import build_native_student_prompt
 
 
 class ConciseSweepTest(unittest.TestCase):
+    def test_decoding_freeze_requires_selected_profile_to_match_frozen_generation(self):
+        screening_manifest = {
+            "schema": "math-decoding-sweep-v1",
+            "stage": "screening",
+            "count": 12,
+            "max_new_tokens": 4096,
+            "prompt_protocol": "qwen3-nonthinking-final-r1",
+            "model": {"id": "student", "revision": "r"},
+            "dataset_manifest_sha256": "d",
+            "dataset_audit_sha256": "a",
+            "model_cache_manifest_sha256": "m",
+            "config_sha256": "old",
+        }
+        screening_selection = {
+            "schema": "math-decoding-sweep-selection-v1",
+            "status": "passed",
+            "stage": "screening",
+            "promoted": ["presence-1", "presence-0", "presence-1.5"],
+            "example_ids": [f"s{index}" for index in range(12)],
+        }
+        confirmation_manifest = {
+            **screening_manifest,
+            "stage": "confirmation",
+            "count": 32,
+            "max_new_tokens": 8192,
+            "profiles": {name: {} for name in screening_selection["promoted"]},
+            "example_ids": [f"c{index}" for index in range(32)],
+        }
+        confirmation_selection = {
+            "schema": "math-decoding-sweep-selection-v1",
+            "status": "passed",
+            "stage": "confirmation",
+            "promoted": ["presence-1"],
+            "selected_profile": "presence-1",
+            "example_ids": confirmation_manifest["example_ids"],
+        }
+        student_generation = {**PROFILES["presence-1"], "max_new_tokens": 8192}
+
+        freeze = build_decoding_freeze(
+            screening_manifest=screening_manifest,
+            screening_selection=screening_selection,
+            confirmation_manifest=confirmation_manifest,
+            confirmation_selection=confirmation_selection,
+            student_generation=student_generation,
+            frozen_config_sha256="f" * 64,
+            source_commit="e" * 40,
+            screening_selection_sha256="1" * 64,
+            confirmation_selection_sha256="2" * 64,
+        )
+
+        self.assertEqual(freeze["schema"], "math-decoding-freeze-v1")
+        self.assertEqual(freeze["selected_profile"], "presence-1")
+        with self.assertRaisesRegex(ValueError, "frozen student generation"):
+            build_decoding_freeze(
+                screening_manifest=screening_manifest,
+                screening_selection=screening_selection,
+                confirmation_manifest=confirmation_manifest,
+                confirmation_selection=confirmation_selection,
+                student_generation={**student_generation, "presence_penalty": 0.0},
+                frozen_config_sha256="f" * 64,
+                source_commit="e" * 40,
+                screening_selection_sha256="1" * 64,
+                confirmation_selection_sha256="2" * 64,
+            )
+
     def test_sweep_prompt_is_byte_identical_to_frozen_baseline_prompt(self):
         example = {
             "id": "m1",

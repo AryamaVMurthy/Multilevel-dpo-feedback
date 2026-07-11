@@ -10,6 +10,7 @@ from typing import Any
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.benchmarks import load_benchmark_examples
 from text_feedback_dpo.collection import collect_paper_shard, merge_paper_collection, paper_generation_kwargs
+from text_feedback_dpo.concise_sweep import build_decoding_freeze
 from text_feedback_dpo.io import read_jsonl, read_jsonl_zst, write_json_atomic, write_jsonl
 from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
@@ -725,6 +726,53 @@ def run_materialize_preflight_subset(
     )
 
 
+def run_freeze_decoding(
+    *,
+    config_path: Path,
+    screening_dir: Path,
+    confirmation_dir: Path,
+    source_commit: str,
+    output_path: Path,
+) -> dict[str, Any]:
+    if output_path.exists():
+        raise FileExistsError(f"refusing to overwrite decoding freeze: {output_path}")
+    config = load_paper_experiment(config_path)
+    validate_paper_experiment(config)
+
+    def load_artifact(root: Path, name: str) -> tuple[dict[str, Any], Path]:
+        path = root / name
+        if not path.is_file():
+            raise FileNotFoundError(f"decoding artifact is missing: {path}")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError(f"decoding artifact must be an object: {path}")
+        return value, path
+
+    screening_manifest, _ = load_artifact(screening_dir, "manifest.json")
+    screening_selection, screening_selection_path = load_artifact(screening_dir, "selection.json")
+    confirmation_manifest, _ = load_artifact(confirmation_dir, "manifest.json")
+    confirmation_selection, confirmation_selection_path = load_artifact(
+        confirmation_dir, "selection.json"
+    )
+    freeze = build_decoding_freeze(
+        screening_manifest=screening_manifest,
+        screening_selection=screening_selection,
+        confirmation_manifest=confirmation_manifest,
+        confirmation_selection=confirmation_selection,
+        student_generation=paper_generation_kwargs(config, role="student"),
+        frozen_config_sha256=hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        source_commit=source_commit,
+        screening_selection_sha256=hashlib.sha256(
+            screening_selection_path.read_bytes()
+        ).hexdigest(),
+        confirmation_selection_sha256=hashlib.sha256(
+            confirmation_selection_path.read_bytes()
+        ).hexdigest(),
+    )
+    write_json_atomic(output_path, freeze)
+    return freeze
+
+
 def run_collect_shard(
     *,
     config_path: Path,
@@ -1340,6 +1388,12 @@ def main() -> None:
         required=True,
         choices=["hash", "math_subject_level"],
     )
+    freeze_decoding = subparsers.add_parser("freeze-decoding")
+    freeze_decoding.add_argument("--config", required=True, type=Path)
+    freeze_decoding.add_argument("--screening-dir", required=True, type=Path)
+    freeze_decoding.add_argument("--confirmation-dir", required=True, type=Path)
+    freeze_decoding.add_argument("--source-commit", required=True)
+    freeze_decoding.add_argument("--output", required=True, type=Path)
     collect = subparsers.add_parser("collect-shard")
     collect.add_argument("--config", required=True, type=Path)
     collect.add_argument("--dataset-dir", required=True, type=Path)
@@ -1482,6 +1536,14 @@ def main() -> None:
             count=args.count,
             seed=args.seed,
             selection_policy=args.selection_policy,
+        )
+    elif args.command == "freeze-decoding":
+        result = run_freeze_decoding(
+            config_path=args.config,
+            screening_dir=args.screening_dir,
+            confirmation_dir=args.confirmation_dir,
+            source_commit=args.source_commit,
+            output_path=args.output,
         )
     elif args.command == "collect-shard":
         result = run_collect_shard(
