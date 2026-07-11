@@ -744,3 +744,29 @@ No actions have been logged under this control policy yet.
 - Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks and exactly one node01 array-index-0 one-GPU evaluation over all 402 audited validation examples.
 - Uses immutable `baseline-freeze-v4.json` and source commit `18f40b9989bcab823caf38e633358d7aa9731724`. Failed `full-validation/evaluation` remains diagnostic; retry output is the fresh `full-validation/evaluation-v2` directory.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T23:08:27+05:30
+
+- Standalone clone fast-forwarded cleanly to `b4a34c10b1eca7b4e41fe6e5e8e6b14f479ffb6c`; queue and retry output were empty.
+- Full-validation retry job: `13141`, array index 0 only.
+
+## 2026-07-11T23:08:27+05:30 - monitor full MATH validation retry job 13141
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs and telemetry; inspect predictions, failures, metrics, and completion marker only after terminal success.
+- Purpose: freeze the complete teacher-free validation baseline before official-test access and collection.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Failure result - 2026-07-11T23:29:02+05:30
+
+- Job 13141 index 0 `FAILED` after 19 minutes 16 seconds on later example `math-geometry-train-15`; accounted GPU time `0.3211` GPU-hours and peak observed telemetry memory was 24,462 MiB.
+- No prediction, metrics, or completion marker was written. The complete student response and all three raw evaluator attempts are preserved; failed `evaluation-v2` will not be resumed.
+- This is a distinct JSON contract failure: every attempt emitted the correct tuple `(-5, 6)` as an unquoted JSON value. The evaluator prompt required an answer string, but the generic repair loop repeated the unquoted tuple.
+- Progression remains stopped. The repair feedback must explicitly require double quotation marks around answer values that look like tuples, numbers, lists, or intervals.
+
+## 2026-07-11T23:29:02+05:30 - verify quoted evaluator answer contract on exact later failure
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: after test-first prompt strengthening and full local verification, one BatchMode SSH fast-forward-only sync; submit one CPU exact-index lookup for `math-geometry-train-15`, then re-freeze and rerun only its deterministic one-row shard in a fresh diagnostic directory after inspecting the lookup.
+- Correction remains prompt-and-control-loop based. The parser stays strict; no unquoted-value coercion or hidden recovery is introduced.
+- Lookup/freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, at most 4 GiB, at most `00:15:00`, 0 GPUs. Diagnostic resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.

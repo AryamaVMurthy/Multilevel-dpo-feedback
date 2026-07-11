@@ -333,12 +333,14 @@ class NativePipelineTest(unittest.TestCase):
         self.assertIn("single line", evaluator_prompt.lower())
         self.assertIn("plain ascii", evaluator_prompt.lower())
         self.assertIn("do not use latex", evaluator_prompt.lower())
+        self.assertIn('immediately after `"answer":`', evaluator_prompt.lower())
         repair_prompt = build_evaluator_repair_prompt(
             original_prompt=evaluator_prompt,
             raw='{"answer":"\\boxed{4}"}',
             error="model output does not contain a valid JSON object",
         )
         self.assertIn("double every backslash", repair_prompt.lower())
+        self.assertIn("answer value must be surrounded", repair_prompt.lower())
         self.assertIn("exactly one token: safe or unsafe", guard_prompt.lower())
         self.assertIn("safe example", guard_prompt.lower())
         self.assertIn("unsafe example", guard_prompt.lower())

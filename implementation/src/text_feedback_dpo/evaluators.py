@@ -116,6 +116,9 @@ confidence: number from 0 to 1
 reason: short single-line explanation, at most 160 characters, with no quotation marks or braces
 Do not use LaTeX commands or backslashes in the answer string. Write fractions with /, powers with
 ^, and tuples or intervals with parentheses or brackets, for example (-1/8, 1/2).
+The answer value must always be a JSON string. Immediately after `"answer":` output a double
+quotation mark, then the plain-ASCII answer, then another double quotation mark. Never emit the
+answer as an unquoted number, tuple, list, object, boolean, or null.
 Do not use quotation marks or braces inside the reason string.
 Use a single line for the reason string.
 For SearchQA also include answer_type and evidence_supported.
@@ -148,7 +151,8 @@ Invalid response:
 Return a corrected JSON object now. Preserve your judgment, but use the exact required field names
 and JSON value types. Convert the answer to plain ASCII without LaTeX. If a backslash is truly
 unavoidable in any JSON string, double every backslash so the object remains valid JSON. Output
-only the corrected object, from '{{' through '}}'.
+only the corrected object, from '{{' through '}}'. The answer value must be surrounded by double
+quotation marks even when it looks like a number, tuple, list, or interval.
 """
 
 
