@@ -57,7 +57,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
                 student.presence_penalty,
                 student.repetition_penalty,
             ),
-            (0.7, 0.8, 20, 0.0, 0.0, 1.0),
+            (0.7, 0.8, 20, 0.0, 1.5, 1.0),
         )
         for role, max_new_tokens in {
             "teacher": 64,

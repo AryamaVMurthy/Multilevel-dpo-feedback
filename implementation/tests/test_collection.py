@@ -51,7 +51,7 @@ class CollectionTest(unittest.TestCase):
                 "top_p": 0.8,
                 "top_k": 20,
                 "min_p": 0.0,
-                "presence_penalty": 0.0,
+                "presence_penalty": 1.5,
                 "repetition_penalty": 1.0,
                 "stop_after_final_answer": True,
             },
