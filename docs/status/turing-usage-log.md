@@ -757,6 +757,14 @@ No actions have been logged under this control policy yet.
 - Purpose: freeze the complete teacher-free validation baseline before official-test access and collection.
 - Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
 
+### Failure result and authorization stop - 2026-07-12T00:01:25+05:30
+
+- Job 13149 index 0 `FAILED` after 21 minutes 41 seconds on `math-geometry-train-398`; accounted GPU time `0.3614` GPU-hours and peak observed telemetry memory was 24,496 MiB.
+- No prediction, metrics, or completion marker was written. `evaluation-v3` remains an immutable failed diagnostic with the full student response and all evaluator attempts.
+- All three evaluator attempts used a quoted answer but reintroduced an unescaped LaTeX backslash in `12/\\sqrt{3}`, despite the plain-ASCII instruction and repair feedback. This confirms that prompt-only enforcement of JSON escaping is not sufficiently reliable for the full paper protocol.
+- The July 11, 2026 Turing god-switch window expired at midnight Asia/Kolkata while job 13149 was running. No further remote mutation or allocation will be submitted without renewed authorization.
+- Required remediation after renewal: replace the evaluator's JSON answer serialization with a strict escape-free structured protocol or grammar-constrained decoding, re-run unit tests, exact diagnostics, the 16-example manual audit, and then full validation in a fresh directory. No fallback was used; `fallback_reason` is not applicable.
+
 ### Failure result - 2026-07-11T23:29:02+05:30
 
 - Job 13141 index 0 `FAILED` after 19 minutes 16 seconds on later example `math-geometry-train-15`; accounted GPU time `0.3211` GPU-hours and peak observed telemetry memory was 24,462 MiB.
@@ -863,3 +871,15 @@ No actions have been logged under this control policy yet.
 - Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks and exactly one node01 array-index-0 one-GPU evaluation of all 402 audited validation examples into fresh `full-validation/evaluation-v3`.
 - Uses immutable `baseline-freeze-v5.json` and source commit `4c07747f00013cadb4c8884d09c640c42c28e3d8`. Both earlier failed full-validation directories remain immutable diagnostics.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T23:38:28+05:30
+
+- Standalone clone fast-forwarded cleanly to `3c87bb8eaae8aef301c4cfa3112da04ecb9892cc`; queue and full-validation-v3 output were empty.
+- Fully audited full-validation job: `13149`, array index 0 only.
+
+## 2026-07-11T23:38:28+05:30 - monitor fully audited MATH validation job 13149
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs and telemetry; inspect predictions, failures, metrics, and completion marker only after terminal success.
+- Purpose: freeze the complete teacher-free validation baseline before official-test access and collection.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
