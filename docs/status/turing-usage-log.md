@@ -675,3 +675,21 @@ No actions have been logged under this control policy yet.
 - Bounded command set: after test-first observability correction and full local verification, one BatchMode SSH fast-forward-only sync; submit one CPU-only exact-index lookup for `math-algebra-train-1218`, inspect its result, re-freeze the baseline to the observability commit, and run only that deterministic one-row shard on one GPU in a fresh diagnostic directory.
 - The failure ledger now preserves all raw evaluator attempts, parse errors, the student response, and its hash. No recovery or semantic default is introduced; the diagnostic is expected to fail if the defect reproduces.
 - Requested lookup/freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, at most 4 GiB, at most `00:15:00`, 0 GPUs. Diagnostic resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Lookup submission result - 2026-07-11T23:01:12+05:30
+
+- Standalone clone fast-forwarded cleanly to `71d3bb448303b96b5469763f1cf22e32033204d4`; queue and lookup output were empty.
+- Exact dataset-row lookup job: `13136`.
+
+## 2026-07-11T23:01:12+05:30 - monitor exact diagnostic row lookup job 13136
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, and the exact lookup artifact after terminal state.
+- Purpose: obtain the canonical zero-based validation index and prove dataset identity before submitting a one-row diagnostic shard.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result and diagnostic submission gate - 2026-07-11T23:01:37+05:30
+
+- Job 13136 `COMPLETED` in 1 second, exit `0:0`, with 0 GPUs.
+- The exact row is canonical zero-based index 23 of 402, stratum `math:algebra:level4`, row hash `85bdde528a309c56dfe6c78851f8a6304771b6c95e4acc7fdf24d6225aedfdf5`, in validation file SHA-256 `b2b93cab808a73617fff62f1db023a2d526dcc7387158cba24c0b5e72fc26372`.
+- Next bounded submission under the already logged diagnostic action: create `baseline-freeze-v3.json` bound to the complete-observability commit, then run array index 23 with `NUM_SHARDS=402` into a fresh diagnostic directory. This deterministically selects only the failed example while preserving its original per-ID generation seed.
