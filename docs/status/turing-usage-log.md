@@ -838,3 +838,28 @@ No actions have been logged under this control policy yet.
 - Bounded command set: one BatchMode SSH clean/output check and exactly one CPU-only node01 immutable rescore-and-audit job using all 16 existing human labels; inspect the audit before any GPU resubmission.
 - Outputs are fresh `preflight-16/rescore-v2` and `preflight-16/audit-v2`; final-protocol predictions remain immutable.
 - Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs; 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T23:36:34+05:30
+
+- Standalone clone fast-forwarded cleanly to `db894d6fcf932f547f97149c6db50e33ed07f4c6`; queue and both audit outputs were empty.
+- Final-protocol preflight audit job: `13148`.
+
+## 2026-07-11T23:36:34+05:30 - monitor final-protocol preflight audit job 13148
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, rescore manifest, audit JSON, disagreements, and report hashes after terminal state.
+- Purpose: enforce 95% evaluator agreement, 5% truncation maximum, metadata, and teacher-free gates under the final protocol.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T23:37:24+05:30
+
+- Job 13148 `COMPLETED` in 2 seconds, exit `0:0`, with 0 GPUs.
+- Rescore changed zero decisions: original and rescored correctness are both 9/16, with three explicit model-judgment cases.
+- Audit passes all gates with 16/16 manual agreement, zero disagreements, complete generation metadata, teacher-free true, and 0% truncation. The final-protocol preflight gate passes.
+
+## 2026-07-11T23:37:24+05:30 - run full MATH validation under fully audited evaluator protocol
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks and exactly one node01 array-index-0 one-GPU evaluation of all 402 audited validation examples into fresh `full-validation/evaluation-v3`.
+- Uses immutable `baseline-freeze-v5.json` and source commit `4c07747f00013cadb4c8884d09c640c42c28e3d8`. Both earlier failed full-validation directories remain immutable diagnostics.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
