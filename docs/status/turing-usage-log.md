@@ -297,3 +297,31 @@ No actions have been logged under this control policy yet.
 - Dataset: `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-materialized-v1`.
 - Audit artifact: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-dataset-audit.json`.
 - Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 16 GiB, `00:30:00`, 0 GPUs, 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:39:09+05:30
+
+- Standalone clone fast-forwarded cleanly to `97eba67e37522232a8c22f1c26d8d050c4979f95`; the pre-submit queue was empty and home storage remained 36/50 GiB used.
+- Slurm job ID: `13117`.
+
+## 2026-07-11T21:39:09+05:30 - monitor MATH dataset audit job 13117
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, and bounded stdout/stderr, followed by reading the compact audit JSON only if the job completes successfully.
+- Purpose: capture exact audit evidence and explicit failure context before permitting any GPU preflight.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:39:42+05:30
+
+- Job 13117: `FAILED`, exit `1:0`, node01, elapsed `00:00:01`, MaxRSS `500 KiB`, 0 GPUs.
+- Explicit failure: `MATH validation fraction mismatch for math:algebra:level5: expected 43, found 44`.
+- Root cause is in the new auditor: binary floating-point evaluation of `1 - 0.9` yielded a value just below 0.1, while the materializer uses the exact protocol literal `0.10`. The dataset was not modified and no audit artifact was written.
+- Progression remains stopped. A regression-tested auditor correction and a fresh immutable audit job are required before GPU work.
+- Total accounted GPU-hours: 0.
+
+## 2026-07-11T21:40:17+05:30 - deploy auditor correction and retry MATH audit
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with one-thread Git fetch and fast-forward-only update, exact clean/source/queue checks, confirmation that the failed attempt wrote no audit artifact, then submission of exactly one node01 CPU-only dataset audit job.
+- Correction evidence: the 435-row half-rounding regression now passes; the complete local suite passes 191 tests, Ruff, compileall, shell parsing, and diff checks.
+- Dataset and output remain `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-materialized-v1` and `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-dataset-audit.json`.
+- Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 16 GiB, `00:30:00`, 0 GPUs, 0 requested GPU-hours.

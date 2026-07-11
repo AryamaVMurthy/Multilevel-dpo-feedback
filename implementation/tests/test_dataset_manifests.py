@@ -312,6 +312,69 @@ class DatasetManifestTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "content_sha256 mismatch"):
                 audit_paper_dataset(SimpleNamespace(dataset=dataset), root)
 
+    def test_math_audit_uses_exact_ten_percent_at_half_rounding_boundary(self):
+        source_rows = [
+            {
+                "id": f"math-algebra-5-{index}",
+                "problem": f"Boundary problem {index}",
+                "gold_answer": str(index),
+                "source_subject": "algebra",
+                "difficulty_level": 5,
+            }
+            for index in range(435)
+        ]
+        split = split_math_train(source_rows, seed=7)
+        test_row = dict(split["train"][0])
+        test_row.update(
+            {
+                "id": "math-algebra-test-0",
+                "problem": "Unique official test problem",
+                "normalized_question": "unique official test problem",
+                "source_split": "test",
+                "source_index": 0,
+                "source_key": "test:math-algebra-test-0",
+                "dataset_role": "test",
+                "row_hash": canonical_row_hash({"id": "math-algebra-test-0"}),
+            }
+        )
+        split["test"] = [test_row]
+        nested = split_math_validation_roles(split["validation"], seed=7)
+        self.assertEqual(len(split["validation"]), 44)
+        dataset = SimpleNamespace(
+            name="math",
+            source="EleutherAI/hendrycks_math",
+            revision="a" * 40,
+            source_counts={"train": 435, "validation": 0, "test": 1},
+            seed=7,
+            subjects=("algebra",),
+            primary_levels=(4, 5),
+            train_fraction=0.9,
+            validation_tune_fraction=2 / 3,
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_manifest_bundle(
+                root,
+                split,
+                metadata={
+                    "dataset": dataset.name,
+                    "source": dataset.source,
+                    "revision": dataset.revision,
+                    "source_artifact_sha256": "b" * 64,
+                    "seed": dataset.seed,
+                    "subjects": list(dataset.subjects),
+                    "primary_levels": list(dataset.primary_levels),
+                    "train_fraction": dataset.train_fraction,
+                    "validation_tune_fraction": dataset.validation_tune_fraction,
+                    "train_test_exclusions": [],
+                },
+                nested_roles=nested,
+            )
+
+            audit = audit_paper_dataset(SimpleNamespace(dataset=dataset), root)
+
+        self.assertEqual(audit["status"], "passed")
+
     def test_gsm_validation_roles_partition_validation_and_are_written_as_nested_artifacts(self):
         rows = split_gsm8k_train(self._gsm_rows(6), seed=7, validation_count=3)
         roles = split_gsm8k_validation_roles(rows["validation"], seed=7, tune_count=2)

@@ -563,8 +563,12 @@ def _validate_math_audit_policy(config: Any, manifest: Mapping[str, Any], roles:
     strata: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in combined_primary:
         strata[_math_stratum(row)].append(row)
+    validation_fraction = round(1.0 - dataset.train_fraction, 12)
     for stratum, rows in strata.items():
-        expected_validation = min(len(rows) - 1, max(1, round(len(rows) * (1 - dataset.train_fraction))))
+        expected_validation = min(
+            len(rows) - 1,
+            max(1, round(len(rows) * validation_fraction)),
+        )
         actual_validation = sum(row["dataset_role"] == "validation" for row in rows)
         if actual_validation != expected_validation:
             raise ValueError(
