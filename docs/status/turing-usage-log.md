@@ -427,3 +427,19 @@ No actions have been logged under this control policy yet.
 - Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact manifest/selection artifacts after terminal state.
 - Purpose: verify all 60 exact prompt/profile records and obtain the three-profile train-only promotion.
 - Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:10:03+05:30
+
+- Job 13121: `COMPLETED`, exit `0:0`, node01, elapsed `00:12:35`, MaxRSS `1,280,700 KiB`, one GPU; accounted time `0.2097` GPU-hours.
+- All 60 required records completed with zero truncations. Promotion order: `presence-1`, `presence-1.5`, `presence-0`.
+- Screening accuracies were 8/12 for presence 1, 8/12 for presence 1.5, 7/12 for presence 0, 7/12 for presence 2, and 5/12 for presence 0.5. Presence 1 outranked 1.5 by correct answers per million tokens, median length, and latency after the accuracy/truncation tie.
+- Selection SHA-256 bindings: records `f2b09a11bdd0434b95f296f27bc78d14c19c849a164b18a32114b939331bc8e1`; sweep manifest `481451273798110c9f4ed701a901b6e248485d987ad20ae19f73d09d24f4da73`.
+
+## 2026-07-11T22:10:13+05:30 - deploy and run disjoint decoding confirmation
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with one-thread Git fetch and fast-forward-only update, clean source/queue/output checks, then submission of exactly one node01 one-GPU confirmation job.
+- Purpose: evaluate exactly the three promoted profiles on 32 deterministic, screening-disjoint Level 4-5 training examples at the full 8,192-token ceiling; select exactly one profile with the frozen ranking order.
+- Confirmation code must verify the screening selection and sweep hashes plus exact config, dataset, audit, model-cache, and model identity bindings before loading the GPU model.
+- Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/decoding/confirmation-v1`.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
