@@ -719,3 +719,28 @@ No actions have been logged under this control policy yet.
 - Bounded command set: after test-first prompt correction and full local verification, one BatchMode SSH fast-forward-only sync and clean/output checks; create `baseline-freeze-v4.json`, then rerun only validation array index 23 of 402 in a fresh `evaluation-v2` diagnostic directory.
 - Correction stays agentic: the evaluator prompt and its explicit repair-feedback loop require plain-ASCII answers and explain JSON backslash escaping. No parser fallback, string substitution, fabricated judgment, or silent default is added.
 - Freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs. Diagnostic resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T23:06:53+05:30
+
+- Standalone clone fast-forwarded cleanly to `18f40b9989bcab823caf38e633358d7aa9731724`; queue, freeze-v4, and diagnostic-v2 paths were empty.
+- Baseline freeze-v4 job: `13139`. Dependent exact one-row diagnostic-v2 job: `13140`, array index 23 only with `NUM_SHARDS=402` and `afterok:13139`.
+
+## 2026-07-11T23:06:53+05:30 - monitor evaluator serialization repair jobs 13139-13140
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, then the one prediction/evaluator record or complete failure ledger after terminal state.
+- Purpose: require a valid, auditable evaluator object for the exact former failure before retrying full validation.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T23:07:38+05:30
+
+- Job 13139 `COMPLETED` in 1 second. Exact diagnostic job 13140 index 23 `COMPLETED` in 19 seconds, exit `0:0`; accounted GPU time `0.0053` GPU-hours and peak observed telemetry memory was 24,054 MiB.
+- The student response reproduced byte-for-byte. The 8B evaluator returned valid JSON on its first attempt with plain-ASCII answer `(-1/8, 1/2)`, no parse failures or regenerations, and both deterministic and model judgments marked it correct.
+- Failure ledger is empty, completion marker and hashes are present, and prediction SHA-256 is `eb762948f1144a4b1c0a21ec70fc5ec74d00d805deffe8cd505ea2a46fe95bd2`. The evaluator-serialization repair gate passes.
+
+## 2026-07-11T23:07:38+05:30 - retry complete MATH validation baseline after serialization repair
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks and exactly one node01 array-index-0 one-GPU evaluation over all 402 audited validation examples.
+- Uses immutable `baseline-freeze-v4.json` and source commit `18f40b9989bcab823caf38e633358d7aa9731724`. Failed `full-validation/evaluation` remains diagnostic; retry output is the fresh `full-validation/evaluation-v2` directory.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
