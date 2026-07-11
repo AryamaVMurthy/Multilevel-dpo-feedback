@@ -13,6 +13,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_materialize_dataset.sh",
             "turing_audit_dataset.sh",
             "turing_materialize_preflight_subset.sh",
+            "turing_locate_dataset_row.sh",
             "turing_decoding_sweep.sh",
             "turing_freeze_decoding.sh",
             "turing_freeze_baseline.sh",
@@ -71,6 +72,12 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn('--selection-policy "$SELECTION_POLICY"', preflight)
         self.assertIn('OUTPUT_MANIFEST="$(dirname "$OUTPUT_PATH")/manifest.json"', preflight)
         self.assertIn('cmp -s "$DATASET_MANIFEST" "$OUTPUT_MANIFEST"', preflight)
+        locate = Path("scripts/turing_locate_dataset_row.sh").read_text(encoding="utf-8")
+        self.assertIn("DATA_PATH:?DATA_PATH is required", locate)
+        self.assertIn("ROW_ID:?ROW_ID is required", locate)
+        self.assertIn("LOOKUP_OUTPUT:?LOOKUP_OUTPUT is required", locate)
+        self.assertIn("paper-dataset-row-lookup-v1", locate)
+        self.assertIn("uv run --frozen --no-sync", locate)
         audit = Path("scripts/turing_audit_dataset.sh").read_text(encoding="utf-8")
         self.assertIn("audit-dataset", audit)
         self.assertIn("DATASET_DIR:?DATASET_DIR is required", audit)
