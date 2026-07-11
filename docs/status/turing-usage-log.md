@@ -813,3 +813,28 @@ No actions have been logged under this control policy yet.
 - Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks and exactly one node01 array-index-0 one-GPU evaluation of the already immutable 16-example subset into fresh `preflight-16/evaluation-v2`.
 - Uses `baseline-freeze-v5.json`; prior preflight predictions, rescore, labels, and audit remain immutable. Manual labels will only be applied after confirming the deterministic student responses and hashes.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T23:32:19+05:30
+
+- Standalone clone fast-forwarded cleanly to `4046fb83806c65d050a75180d9b0cfb4842bea5b`; queue and preflight-v2 output were empty.
+- Final-protocol preflight job: `13146`, array index 0 only.
+
+## 2026-07-11T23:32:19+05:30 - monitor final-protocol MATH preflight job 13146
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, predictions, failures, metrics, completion marker, and response-hash comparison after terminal success.
+- Purpose: re-establish the manually audited 16-example gate under the final evaluator serialization protocol.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T23:35:53+05:30
+
+- Job 13146 index 0 `COMPLETED` in 3 minutes 6 seconds, exit `0:0`; accounted GPU time `0.0517` GPU-hours and peak observed telemetry memory was 24,550 MiB.
+- All 16 student response hashes and canonical ID order exactly match the manually reviewed preflight. The final evaluator protocol produced zero parse failures and zero regenerations.
+- Accuracy is 9/16, failure ledger is empty, truncation is 0%, completion marker is valid, and predictions SHA-256 is `52bfb3dfbfc944f7c0f6786d62a99040f87cb4d6d1304b1b948aa3ba677c793a`.
+
+## 2026-07-11T23:35:53+05:30 - audit final-protocol preflight and gate full-validation retry
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH clean/output check and exactly one CPU-only node01 immutable rescore-and-audit job using all 16 existing human labels; inspect the audit before any GPU resubmission.
+- Outputs are fresh `preflight-16/rescore-v2` and `preflight-16/audit-v2`; final-protocol predictions remain immutable.
+- Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs; 0 requested GPU-hours.
