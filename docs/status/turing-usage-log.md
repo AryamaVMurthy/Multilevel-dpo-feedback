@@ -788,3 +788,28 @@ No actions have been logged under this control policy yet.
 - Job 13143 `COMPLETED` in 1 second, exit `0:0`, with 0 GPUs.
 - `math-geometry-train-15` is canonical zero-based index 148 of 402, stratum `math:geometry:level5`, row hash `bb0672d14e3f15256955f5b9fc75dd9add3b2dcb32ccf1f659f831c17cb3c911`, in the same audited validation file.
 - Next bounded submission under the logged diagnostic action: create `baseline-freeze-v5.json` bound to the quoted-answer prompt commit, then run array index 148 with `NUM_SHARDS=402` into a fresh diagnostic directory.
+
+### Diagnostic submission result - 2026-07-11T23:30:56+05:30
+
+- Standalone clone fast-forwarded cleanly to `4c07747f00013cadb4c8884d09c640c42c28e3d8`; queue, freeze-v5, and diagnostic paths were empty.
+- Baseline freeze-v5 job: `13144`. Dependent exact one-row diagnostic job: `13145`, array index 148 only with `NUM_SHARDS=402` and `afterok:13144`.
+
+## 2026-07-11T23:30:56+05:30 - monitor quoted-answer diagnostic jobs 13144-13145
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, then the one prediction/evaluator record or complete failure ledger after terminal state.
+- Purpose: require a quoted JSON answer for the exact former tuple failure before any broader rerun.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T23:31:31+05:30
+
+- Job 13144 `COMPLETED` in 1 second. Exact diagnostic job 13145 index 148 `COMPLETED` in 17 seconds, exit `0:0`; accounted GPU time `0.0047` GPU-hours and peak observed telemetry memory was 24,032 MiB.
+- The student response reproduced byte-for-byte. The evaluator returned valid JSON on its first attempt with quoted answer string `(-5, 6)`, no parse failures or regenerations, and both judgments correct.
+- Failure ledger is empty and prediction SHA-256 is `3e3a8051bf7255703ded17a30e220c89308501128cdd14c8dc6c64175fa51ae7`. The quoted-answer diagnostic gate passes.
+
+## 2026-07-11T23:31:31+05:30 - repeat stratified 16-example audit under final evaluator protocol
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks and exactly one node01 array-index-0 one-GPU evaluation of the already immutable 16-example subset into fresh `preflight-16/evaluation-v2`.
+- Uses `baseline-freeze-v5.json`; prior preflight predictions, rescore, labels, and audit remain immutable. Manual labels will only be applied after confirming the deterministic student responses and hashes.
+- Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
