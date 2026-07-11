@@ -415,3 +415,15 @@ No actions have been logged under this control policy yet.
 - Correction evidence: sweep prompts are now constructed only by `build_native_student_prompt`; exact byte identity with baseline is regression-tested; every prompt hash and frozen prompt-protocol ID is written into the sweep manifest and records. Full local gate passes 196 tests, Ruff, compileall, shell parsing, and diff checks.
 - Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/decoding/screening-v2`; `screening-v1` remains excluded diagnostics.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:57:24+05:30
+
+- Standalone clone fast-forwarded cleanly to `a90cb006c7236f8d4ff49ca27a61caea322e3508`; queue was empty and `screening-v2` did not exist.
+- Slurm job ID: `13121`.
+
+## 2026-07-11T21:57:24+05:30 - monitor prompt-valid decoding screening job 13121
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact manifest/selection artifacts after terminal state.
+- Purpose: verify all 60 exact prompt/profile records and obtain the three-profile train-only promotion.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.

@@ -252,6 +252,7 @@ def freeze_selection(ledger: dict[str, Any], *, candidate_id: str, stage: int) -
         "dataset_manifest_hash": ledger["dataset_manifest_hash"],
         "seed": ledger["seed"],
         "candidate_id": candidate_id,
+        "candidate": dict(ledger["candidates"][candidate_id]),
         "stage": stage,
         "selection_observation": observation,
         "ledger_hash": _ledger_hash(ledger),

@@ -1,19 +1,65 @@
 import unittest
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
-from text_feedback_dpo.cli import _paper_candidates, _paper_evaluator, _selection_metric
+from text_feedback_dpo.cli import (
+    _paper_candidates,
+    _paper_evaluator,
+    _selection_metric,
+    run_train_paper,
+)
 from text_feedback_dpo.experiment_config import load_paper_experiment
 from text_feedback_dpo.hyperparameter_search import build_dpo_candidates, build_grpo_candidates
 from text_feedback_dpo.training import (
     build_paper_dpo_config_kwargs,
     build_paper_grpo_config_kwargs,
+    build_paper_sft_config_kwargs,
     build_optimizer_profile,
     materialize_warmup_steps,
 )
 
 
 class TrainingProfileTest(unittest.TestCase):
+    def test_response_sft_reuses_frozen_standard_dpo_optimizer_candidate(self):
+        candidate = _paper_candidates(
+            load_paper_experiment(Path("configs/paper/math.yaml")),
+            "standard_dpo",
+        )[0]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "response_sft.jsonl"
+            data.write_text(
+                json.dumps({"prompt": "Solve.", "completion": "FINAL: \\boxed{4}"}) + "\n",
+                encoding="utf-8",
+            )
+            freeze = root / "standard-freeze.json"
+            freeze.write_text(
+                json.dumps({
+                    "method": "standard_dpo",
+                    "candidate_id": candidate.candidate_id,
+                    "candidate": vars(candidate),
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "text_feedback_dpo.cli.train_paper_sft",
+                return_value={"method": "response_sft"},
+            ) as train:
+                result = run_train_paper(
+                    config_path=Path("configs/paper/math.yaml"),
+                    method="response_sft",
+                    seed=17,
+                    data_path=data,
+                    freeze_manifest_path=freeze,
+                    output_dir=root / "output",
+                )
+
+        self.assertEqual(result["method"], "response_sft")
+        self.assertEqual(train.call_args.kwargs["candidate"], candidate)
+        self.assertEqual(train.call_args.kwargs["rows"][0]["prompt"], "Solve.")
+
     def test_math_primary_and_length_desensitized_ledgers_are_objectively_labeled(self):
         config = load_paper_experiment(Path("configs/paper/math.yaml"))
         primary = _paper_candidates(config, "standard_dpo")
@@ -79,6 +125,20 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(dpo["optim"], "adamw_torch_fused")
         self.assertEqual(dpo["loss_type"], "sigmoid_norm")
         self.assertNotIn("ld_alpha", dpo)
+
+        sft = build_paper_sft_config_kwargs(
+            output_dir="out",
+            max_steps=10,
+            candidate=dpo_candidate,
+            effective_global_batch=16,
+            max_length=18432,
+        )
+        self.assertEqual(sft["max_length"], 18432)
+        self.assertEqual(sft["gradient_accumulation_steps"], 16)
+        self.assertTrue(sft["completion_only_loss"])
+        self.assertTrue(sft["gradient_checkpointing"])
+        self.assertTrue(sft["bf16"])
+        self.assertEqual(sft["optim"], "adamw_torch_fused")
 
         ld_candidate = build_dpo_candidates(
             learning_rates=(5e-6,),

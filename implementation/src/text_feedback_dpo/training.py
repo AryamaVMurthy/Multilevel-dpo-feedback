@@ -78,6 +78,24 @@ def build_distillation_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, st
     return output
 
 
+def build_chat_sft_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = []
+    for row in rows:
+        prompt = str(row.get("prompt", "")).strip()
+        completion = str(row.get("completion", "")).strip()
+        if not prompt or not completion:
+            raise ValueError("SFT row requires non-empty prompt and completion")
+        output.append(
+            {
+                "prompt": [{"role": "user", "content": prompt}],
+                "completion": [{"role": "assistant", "content": completion}],
+            }
+        )
+    if not output:
+        raise ValueError("SFT dataset must not be empty")
+    return output
+
+
 def materialize_warmup_steps(total_updates: int, warmup_fraction: float) -> int:
     if isinstance(total_updates, bool) or not isinstance(total_updates, int) or total_updates <= 0:
         raise ValueError("total_updates must be a positive integer")
@@ -160,6 +178,42 @@ def build_paper_dpo_config_kwargs(
     if ld_alpha is not None:
         result["ld_alpha"] = float(ld_alpha)
     return result
+
+
+def build_paper_sft_config_kwargs(
+    *,
+    output_dir: Any,
+    max_steps: int,
+    candidate: Any,
+    effective_global_batch: int,
+    max_length: int,
+) -> dict[str, Any]:
+    if effective_global_batch <= 0:
+        raise ValueError("effective_global_batch must be positive")
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
+    profile = build_optimizer_profile(
+        learning_rate=float(candidate.learning_rate),
+        weight_decay=float(candidate.weight_decay),
+        warmup_fraction=float(candidate.warmup_fraction),
+        total_updates=max_steps,
+        scheduler=str(candidate.scheduler),
+    )
+    return {
+        "output_dir": str(output_dir),
+        "max_length": max_length,
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": effective_global_batch,
+        "max_steps": max_steps,
+        "logging_steps": 1,
+        "report_to": [],
+        "save_strategy": "no",
+        "bf16": True,
+        "gradient_checkpointing": True,
+        "use_cache": False,
+        "completion_only_loss": True,
+        **profile,
+    }
 
 
 def build_paper_grpo_config_kwargs(

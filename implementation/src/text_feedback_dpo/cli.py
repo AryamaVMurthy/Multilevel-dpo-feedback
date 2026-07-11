@@ -29,7 +29,7 @@ from text_feedback_dpo.experiment_config import load_paper_experiment, validate_
 from text_feedback_dpo.methods import build_native_iterative_guidance_pairs
 from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
 from text_feedback_dpo.observability import JsonlLogger
-from text_feedback_dpo.paper_training import train_paper_dpo, train_paper_grpo
+from text_feedback_dpo.paper_training import train_paper_dpo, train_paper_grpo, train_paper_sft
 from text_feedback_dpo.hyperparameter_search import (
     DpoCandidate,
     GrpoCandidate,
@@ -1054,7 +1054,8 @@ def run_train_paper(
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
     freeze = json.loads(freeze_manifest_path.read_text(encoding="utf-8"))
-    if freeze.get("method") != method or not freeze.get("candidate"):
+    allowed_freeze_method = "standard_dpo" if method in {"response_sft", "on_policy_distillation"} else method
+    if freeze.get("method") != allowed_freeze_method or not freeze.get("candidate"):
         raise ValueError("freeze manifest does not contain the requested method and candidate")
     payload = freeze["candidate"]
     candidate = _candidate_from_ledger({"candidates": {freeze["candidate_id"]: payload}}, freeze["candidate_id"])
@@ -1063,6 +1064,15 @@ def run_train_paper(
             config=config,
             method=method,
             pairs=_read_rows_for_paper(data_path),
+            output_dir=output_dir,
+            candidate=candidate,
+            seed=seed,
+        )
+    if method in {"response_sft", "on_policy_distillation"}:
+        return train_paper_sft(
+            config=config,
+            method=method,
+            rows=_read_rows_for_paper(data_path),
             output_dir=output_dir,
             candidate=candidate,
             seed=seed,
@@ -1361,7 +1371,7 @@ def main() -> None:
     baseline_freeze.add_argument("--output", required=True, type=Path)
     tune = subparsers.add_parser("tune-paper")
     tune.add_argument("--config", required=True, type=Path)
-    tune.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo"])
+    tune.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo", "grpo"])
     tune.add_argument("--candidate-id", required=True)
     tune.add_argument("--stage", required=True, type=int)
     tune.add_argument("--data", required=True, type=Path)
@@ -1370,7 +1380,20 @@ def main() -> None:
     tune.add_argument("--ledger", required=True, type=Path)
     paper_train = subparsers.add_parser("train-paper")
     paper_train.add_argument("--config", required=True, type=Path)
-    paper_train.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "grpo", "dapo_sensitivity"])
+    paper_train.add_argument(
+        "--method",
+        required=True,
+        choices=[
+            "response_sft",
+            "on_policy_distillation",
+            "standard_dpo",
+            "multilevel_dpo",
+            "matched_dpo",
+            "ld_dpo",
+            "grpo",
+            "dapo_sensitivity",
+        ],
+    )
     paper_train.add_argument("--seed", required=True, type=int)
     paper_train.add_argument("--data", required=True, type=Path)
     paper_train.add_argument("--freeze-manifest", required=True, type=Path)

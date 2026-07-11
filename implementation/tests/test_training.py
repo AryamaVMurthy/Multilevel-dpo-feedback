@@ -1,6 +1,7 @@
 import unittest
 
 from text_feedback_dpo.training import (
+    build_chat_sft_rows,
     build_dpo_config_kwargs,
     build_distillation_rows,
     build_grpo_config_kwargs,
@@ -11,6 +12,15 @@ from text_feedback_dpo.training import (
 
 
 class TrainingDataTest(unittest.TestCase):
+    def test_chat_sft_rows_keep_prompt_and_completion_roles_separate(self):
+        rows = build_chat_sft_rows([{"prompt": "Solve.", "completion": "FINAL: \\boxed{4}"}])
+        self.assertEqual(rows, [{
+            "prompt": [{"role": "user", "content": "Solve."}],
+            "completion": [{"role": "assistant", "content": "FINAL: \\boxed{4}"}],
+        }])
+        with self.assertRaisesRegex(ValueError, "prompt and completion"):
+            build_chat_sft_rows([{"prompt": "", "completion": "answer"}])
+
     def test_dpo_config_uses_current_trl_sequence_length_contract(self):
         values = build_dpo_config_kwargs(output_dir="out", max_steps=1)
         self.assertEqual(values["max_length"], 1024)

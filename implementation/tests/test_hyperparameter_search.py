@@ -90,6 +90,7 @@ class HyperparameterSearchTest(unittest.TestCase):
         promote_stage(ledger, stage=1)
         frozen = freeze_selection(ledger, candidate_id=selected, stage=1)
         self.assertEqual(frozen["candidate_id"], selected)
+        self.assertEqual(frozen["candidate"], ledger["candidates"][selected])
         with self.assertRaisesRegex(RuntimeError, "frozen"):
             register_observation(
                 ledger,

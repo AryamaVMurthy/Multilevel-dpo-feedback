@@ -10,7 +10,12 @@ from text_feedback_dpo.hyperparameter_search import DpoCandidate, GrpoCandidate
 from text_feedback_dpo.io import write_json_atomic
 from text_feedback_dpo.lora_coverage import build_lora_config, discover_lora_coverage
 from text_feedback_dpo.rewards import build_grpo_reward_function
-from text_feedback_dpo.training import build_paper_dpo_config_kwargs, build_paper_grpo_config_kwargs
+from text_feedback_dpo.training import (
+    build_chat_sft_rows,
+    build_paper_dpo_config_kwargs,
+    build_paper_grpo_config_kwargs,
+    build_paper_sft_config_kwargs,
+)
 
 
 def _seed(seed: int) -> None:
@@ -172,6 +177,94 @@ def train_paper_dpo(
         "adapter_manifest": adapter_manifest,
     }
     (output_dir / "train_metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return metrics
+
+
+def train_paper_sft(
+    *,
+    config: Any,
+    method: str,
+    rows: list[dict[str, Any]],
+    output_dir: Path,
+    candidate: DpoCandidate,
+    seed: int,
+) -> dict[str, Any]:
+    if method not in {"response_sft", "on_policy_distillation"}:
+        raise ValueError("paper SFT method must be response_sft or on_policy_distillation")
+    if not rows:
+        raise ValueError("paper SFT training requires non-empty prompt-completion rows")
+    if candidate.loss_type != config.dpo_search.loss_type or candidate.ld_alpha is not None:
+        raise ValueError("paper SFT baseline requires the frozen primary DPO optimizer candidate")
+    _seed(seed)
+    try:
+        from datasets import Dataset
+        from trl import SFTConfig, SFTTrainer
+    except ImportError as exc:
+        raise ImportError("datasets and trl are required for paper SFT training") from exc
+    output_dir.mkdir(parents=True, exist_ok=True)
+    effective_batch = int(config.dpo_search.effective_global_batch)
+    max_steps = max(1, (len(rows) + effective_batch - 1) // effective_batch)
+    model, tokenizer = _load_student(config)
+    coverage = discover_lora_coverage(
+        model,
+        rank=config.lora.rank,
+        excluded_components=config.lora.excluded_components,
+    )
+    lora_config = build_lora_config(
+        model=model,
+        rank=config.lora.rank,
+        alpha=config.lora.alpha,
+        dropout=config.lora.dropout,
+        excluded_components=config.lora.excluded_components,
+    )
+    trainer_args = SFTConfig(
+        **build_paper_sft_config_kwargs(
+            output_dir=output_dir,
+            max_steps=max_steps,
+            candidate=candidate,
+            effective_global_batch=effective_batch,
+            max_length=int(config.training["max_sequence_tokens"]),
+        ),
+        seed=seed,
+    )
+    trainer = SFTTrainer(
+        model=model,
+        args=trainer_args,
+        train_dataset=Dataset.from_list(build_chat_sft_rows(rows)),
+        processing_class=tokenizer,
+        peft_config=lora_config,
+    )
+    result = trainer.train()
+    trainer.save_model(str(output_dir))
+    adapter_manifest = _write_adapter_manifest(
+        output_dir,
+        config=config,
+        method=method,
+        seed=seed,
+        candidate=candidate,
+        coverage=coverage,
+    )
+    metrics = {
+        "method": method,
+        "seed": seed,
+        "examples": len(rows),
+        "max_steps": max_steps,
+        "completion_only_loss": True,
+        "optimizer_source": "frozen_standard_dpo_candidate",
+        "train_metrics": result.metrics,
+        "history": trainer.state.log_history,
+        "lora_coverage": {
+            "hash": coverage.coverage_hash,
+            "target_modules": list(coverage.target_modules),
+            "total_parameters": coverage.total_parameters,
+            "estimated_lora_parameters": coverage.estimated_lora_parameters,
+        },
+        "adapter_manifest": adapter_manifest,
+    }
+    (output_dir / "train_metrics.json").write_text(
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return metrics
 
 
