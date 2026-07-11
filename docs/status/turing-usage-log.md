@@ -770,3 +770,21 @@ No actions have been logged under this control policy yet.
 - Bounded command set: after test-first prompt strengthening and full local verification, one BatchMode SSH fast-forward-only sync; submit one CPU exact-index lookup for `math-geometry-train-15`, then re-freeze and rerun only its deterministic one-row shard in a fresh diagnostic directory after inspecting the lookup.
 - Correction remains prompt-and-control-loop based. The parser stays strict; no unquoted-value coercion or hidden recovery is introduced.
 - Lookup/freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, at most 4 GiB, at most `00:15:00`, 0 GPUs. Diagnostic resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Lookup submission result - 2026-07-11T23:29:47+05:30
+
+- Standalone clone fast-forwarded cleanly to `a884276701974842b040c40be4598546ee8dec63`; queue and lookup output were empty.
+- Exact dataset-row lookup job: `13143`.
+
+## 2026-07-11T23:29:47+05:30 - monitor geometry failure row lookup job 13143
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, and exact lookup artifact after terminal state.
+- Purpose: bind a one-row diagnostic to canonical validation index and dataset hash.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result and diagnostic gate - 2026-07-11T23:30:12+05:30
+
+- Job 13143 `COMPLETED` in 1 second, exit `0:0`, with 0 GPUs.
+- `math-geometry-train-15` is canonical zero-based index 148 of 402, stratum `math:geometry:level5`, row hash `bb0672d14e3f15256955f5b9fc75dd9add3b2dcb32ccf1f659f831c17cb3c911`, in the same audited validation file.
+- Next bounded submission under the logged diagnostic action: create `baseline-freeze-v5.json` bound to the quoted-answer prompt commit, then run array index 148 with `NUM_SHARDS=402` into a fresh diagnostic directory.
