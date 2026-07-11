@@ -539,3 +539,31 @@ No actions have been logged under this control policy yet.
 - Input: immutable one-example validation subset and baseline freeze above. No adapter, teacher guidance, validation expansion, or test access.
 - Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/micro-one/evaluation/shard-0000` plus GPU telemetry.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:36:29+05:30
+
+- Standalone clone fast-forwarded cleanly to `3137ce9214b131c76e693ac100490c5c27c48805`; queue and evaluation output were empty.
+- Slurm array job: `13128`, index 0 only.
+
+## 2026-07-11T22:36:29+05:30 - monitor one-example baseline micro job 13128
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs, and the one prediction/metrics/completion marker only after terminal state.
+- Purpose: capture exact raw response, extraction/evaluator judgment, termination, token counts, latency, GPU memory, and any failure before manual inspection.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:37:23+05:30
+
+- Job 13128: `FAILED`, exit `1:0`, node01, elapsed `00:00:06`, MaxRSS `596 KiB`, one GPU; accounted time `0.0017` GPU-hours.
+- Explicit failure occurred before model loading: Hugging Face offline lookup searched the default `$HF_HOME/hub` path, while the verified snapshots were staged directly under `MODEL_CACHE_DIR`.
+- Offline mode prevented a network fallback as intended. No prediction, metrics, failure ledger, or evaluation-complete marker was written; only GPU telemetry exists in the failed `evaluation` directory.
+- Progression remains stopped. The cache lookup path must be explicitly bound and the micro rerun into a fresh directory.
+
+## 2026-07-11T22:40:38+05:30 - verify offline model lookup and retry one-example baseline micro
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH fast-forward-only sync plus clean/queue/output checks; submit one CPU-only offline model-ID lookup verification on node01, then one array-index-0 GPU evaluation with an `afterok` dependency on that verifier.
+- Corrective change: every model-dependent paper wrapper now binds `HF_HUB_CACHE` to the exact node-local staged cache. The verifier resolves both pinned model IDs and revisions with `local_files_only=True`, checks the cache-manifest/config binding, and writes a new immutable lookup artifact.
+- The failed `evaluation` directory from job 13128 remains diagnostic and will not be resumed or overwritten. Retry output is the fresh `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/baseline/micro-one/evaluation-v2` directory.
+- Local evidence: 200 tests pass with `PYTHONPATH=src`, Ruff passes, compileall passes, all shell scripts parse, and the diff check passes.
+- Lookup resources: account `priyesh.shukla`, u22, node01, 2 tasks, 16 GiB, `00:30:00`, 0 GPUs. Retry resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.

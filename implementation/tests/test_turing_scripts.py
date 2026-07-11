@@ -7,6 +7,7 @@ class TuringScriptTest(unittest.TestCase):
         for name in (
             "turing_setup_environment.sh",
             "turing_stage_model_cache.sh",
+            "turing_verify_model_cache_lookup.sh",
             "turing_download_dataset_source.sh",
             "turing_download_math_source.sh",
             "turing_materialize_dataset.sh",
@@ -54,6 +55,11 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("snapshot_download", stage_cache)
         self.assertIn("tfdpo-model-cache-manifest.json", stage_cache)
         self.assertIn("validate-paper-config", stage_cache)
+        verify_cache = Path("scripts/turing_verify_model_cache_lookup.sh").read_text(encoding="utf-8")
+        self.assertIn('HF_HUB_CACHE="$MODEL_CACHE_DIR"', verify_cache)
+        self.assertIn("local_files_only=True", verify_cache)
+        self.assertIn("CACHE_LOOKUP_OUTPUT:?CACHE_LOOKUP_OUTPUT is required", verify_cache)
+        self.assertIn("uv run --frozen --no-sync", verify_cache)
         preflight = Path("scripts/turing_materialize_preflight_subset.sh").read_text(encoding="utf-8")
         self.assertIn("materialize-preflight-subset", preflight)
         self.assertIn("SOURCE_PATH:?SOURCE_PATH is required", preflight)
@@ -100,6 +106,7 @@ class TuringScriptTest(unittest.TestCase):
             self.assertIn("MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required", text, name)
             self.assertIn("nvidia-smi", text, name)
             self.assertIn("HF_HUB_OFFLINE=1", text, name)
+            self.assertIn('HF_HUB_CACHE="$MODEL_CACHE_DIR"', text, name)
             self.assertIn("TRANSFORMERS_OFFLINE=1", text, name)
             self.assertIn("--frozen --no-sync", text, name)
 

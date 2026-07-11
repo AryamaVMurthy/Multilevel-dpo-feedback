@@ -46,6 +46,7 @@ if [[ ! -d "$MODEL_CACHE_DIR" ]]; then
   exit 1
 fi
 export HF_HOME="$MODEL_CACHE_DIR"
+export HF_HUB_CACHE="$MODEL_CACHE_DIR"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export TRANSFORMERS_CACHE="$MODEL_CACHE_DIR"
 export HF_HUB_OFFLINE=1
