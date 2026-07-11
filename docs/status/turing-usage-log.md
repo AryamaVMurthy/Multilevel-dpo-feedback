@@ -288,3 +288,12 @@ No actions have been logged under this control policy yet.
 - The materializer retained the official 5,000-row test role, created 402 Level 4-5 validation rows partitioned into 270 tune and 132 confirmation rows, and quarantined four reviewed official-train/official-test overlaps with row-level provenance.
 - The job emitted a full manifest to stdout; the next tested revision replaces that noisy output with a bounded summary. No dataset is accepted from this result until the separate node-local integrity and protocol audit passes.
 - Total accounted GPU-hours: 0.
+
+## 2026-07-11T21:38:15+05:30 - deploy and audit frozen MATH dataset
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with a one-thread Git fetch and fast-forward-only update, exact source/status/queue/storage checks, then submission of exactly one node01 CPU-only `turing_audit_dataset.sh` job.
+- Purpose: independently recompute manifest integrity, compressed role counts and hashes, role disjointness, Level 4-5 policy, validation partitioning, official 5,000-row test preservation, and the reviewed four-row overlap quarantine.
+- Dataset: `/scratch/aryama.murthy/tfdpo-qwen3/datasets/math-materialized-v1`.
+- Audit artifact: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-dataset-audit.json`.
+- Requested resources: account `priyesh.shukla`, u22, node01, 2 tasks, 16 GiB, `00:30:00`, 0 GPUs, 0 requested GPU-hours.
