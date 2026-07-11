@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,41 @@ class PresencePenaltyLogitsProcessor:
         return scores
 
 
+_FINAL_ANSWER_PATTERN = re.compile(r"(?m)^FINAL:\s*\\boxed\{")
+
+
+def complete_final_answer_end(text: str) -> int | None:
+    """Return the end offset of a balanced FINAL boxed answer, if present."""
+
+    match = _FINAL_ANSWER_PATTERN.search(text)
+    if match is None:
+        return None
+    depth = 1
+    for index in range(match.end(), len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+class FinalAnswerStoppingCriteria:
+    """Stop a single-example generation after a complete FINAL boxed answer."""
+
+    def __init__(self, *, tokenizer: object, prompt_tokens: int) -> None:
+        self.tokenizer = tokenizer
+        self.prompt_tokens = prompt_tokens
+
+    def __call__(self, input_ids: object, _scores: object, **_kwargs: object) -> bool:
+        if len(input_ids) != 1:
+            raise ValueError("final-answer stopping requires single-example generation")
+        generated = input_ids[0][self.prompt_tokens :]
+        text = self.tokenizer.decode(generated, skip_special_tokens=True)
+        return complete_final_answer_end(text) is not None
+
+
 def generate_model_result(
     *,
     tokenizer: object,
@@ -81,6 +117,9 @@ def generate_model_result(
     if hasattr(model, "device"):
         encoded = {key: value.to(model.device) for key, value in encoded.items()}
     max_new_tokens = int(generation_kwargs.get("max_new_tokens", 128))
+    stop_after_final_answer = generation_kwargs.get("stop_after_final_answer", False)
+    if not isinstance(stop_after_final_answer, bool):
+        raise ValueError("stop_after_final_answer must be boolean when provided")
     temperature = float(generation_kwargs.get("temperature", 0.0))
     do_sample_value = generation_kwargs.get("do_sample", temperature > 0.0)
     if not isinstance(do_sample_value, bool):
@@ -103,6 +142,12 @@ def generate_model_result(
             top_k=int(generation_kwargs.get("top_k", 50)),
             logits_processor=logits_processor,
         )
+    if stop_after_final_answer:
+        from transformers import StoppingCriteriaList
+
+        model_generation_kwargs["stopping_criteria"] = StoppingCriteriaList(
+            [FinalAnswerStoppingCriteria(tokenizer=tokenizer, prompt_tokens=int(encoded["input_ids"].shape[-1]))]
+        )
     output_ids = model.generate(**model_generation_kwargs)
     prompt_tokens = int(encoded["input_ids"].shape[-1])
     generated = output_ids[0][prompt_tokens:]
@@ -120,11 +165,19 @@ def generate_model_result(
     if generated_tokens:
         raw_last = generated[-1]
         last_token = int(raw_last.item()) if hasattr(raw_last, "item") else int(raw_last)
-    terminated = last_token in eos_ids if last_token is not None else False
+    eos_terminated = last_token in eos_ids if last_token is not None else False
+    decoded = tokenizer.decode(generated, skip_special_tokens=True)
+    final_answer_end = complete_final_answer_end(decoded) if stop_after_final_answer else None
+    final_answer_terminated = final_answer_end is not None
+    terminated = eos_terminated or final_answer_terminated
     truncated = generated_tokens >= max_new_tokens and not terminated
-    finish_reason = "eos" if terminated else ("length" if truncated else "other")
+    finish_reason = (
+        "eos"
+        if eos_terminated
+        else ("final_answer" if final_answer_terminated else ("length" if truncated else "other"))
+    )
     return ModelGeneration(
-        text=tokenizer.decode(generated, skip_special_tokens=True),
+        text=decoded,
         prompt_tokens=prompt_tokens,
         generated_tokens=generated_tokens,
         terminated=terminated,

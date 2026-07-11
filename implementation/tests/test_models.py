@@ -4,9 +4,11 @@ from unittest import mock
 
 from text_feedback_dpo.models import (
     FakeModelProvider,
+    FinalAnswerStoppingCriteria,
     ModelGeneration,
     PresencePenaltyLogitsProcessor,
     TransformersModelProvider,
+    complete_final_answer_end,
 )
 
 
@@ -28,6 +30,7 @@ class FakeTokenizer:
     def __init__(self):
         self.chat_template_calls = []
         self.eos_token_id = 3
+        self.decoded_text = "decoded"
 
     def __call__(self, _prompt, return_tensors):
         return FakeEncoded({"input_ids": FakeTensor()})
@@ -37,7 +40,7 @@ class FakeTokenizer:
         return FakeEncoded({"input_ids": FakeTensor()})
 
     def decode(self, _tokens, skip_special_tokens):
-        return "decoded"
+        return self.decoded_text
 
 
 class FakeModel:
@@ -55,7 +58,17 @@ class FakeLogitsProcessorList(list):
     pass
 
 
+class FakeStoppingCriteriaList(list):
+    pass
+
+
 class ModelProviderTest(unittest.TestCase):
+    def test_balanced_final_answer_detection_supports_nested_latex(self):
+        text = "work\nFINAL: \\boxed{\\frac{1}{2}}"
+        self.assertEqual(complete_final_answer_end(text), len(text))
+        self.assertIsNone(complete_final_answer_end("FINAL: \\boxed{\\frac{1}{2}"))
+        self.assertIsNone(complete_final_answer_end("provisional \\boxed{4}"))
+
     def test_fake_model_provider_returns_configured_text(self):
         provider = FakeModelProvider({"student": "hello"})
         self.assertEqual(provider.generate("student", "prompt"), "hello")
@@ -155,6 +168,38 @@ class ModelProviderTest(unittest.TestCase):
         self.assertFalse(result.terminated)
         self.assertTrue(result.truncated)
         self.assertEqual(result.finish_reason, "length")
+
+    def test_complete_final_box_is_a_valid_generation_stop(self):
+        provider = TransformersModelProvider(
+            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            allow_cpu_for_unit_tests=True,
+        )
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 99
+        tokenizer.decoded_text = "Short derivation.\nFINAL: \\boxed{\\frac{1}{2}}"
+        model = FakeModel()
+        provider._loaded["student"] = (tokenizer, model)
+        fake_transformers = ModuleType("transformers")
+        fake_transformers.LogitsProcessorList = FakeLogitsProcessorList
+        fake_transformers.StoppingCriteriaList = FakeStoppingCriteriaList
+
+        with mock.patch.dict("sys.modules", {"transformers": fake_transformers}):
+            result = provider.generate_result(
+                "student",
+                "Solve.",
+                max_new_tokens=16384,
+                do_sample=False,
+                enable_thinking=False,
+                stop_after_final_answer=True,
+            )
+
+        self.assertTrue(result.terminated)
+        self.assertFalse(result.truncated)
+        self.assertEqual(result.finish_reason, "final_answer")
+        criteria = model.generate_kwargs["stopping_criteria"]
+        self.assertIsInstance(criteria, FakeStoppingCriteriaList)
+        self.assertIsInstance(criteria[0], FinalAnswerStoppingCriteria)
+        self.assertTrue(criteria[0]([[1, 2, 3]], None))
 
     def test_greedy_generation_omits_sampling_only_kwargs(self):
         provider = TransformersModelProvider(

@@ -179,7 +179,7 @@ def _validate_prediction_record(
         raise ValueError(f"evaluation prediction {row_id} lacks exact token metadata")
     if not isinstance(row.get("terminated"), bool) or not isinstance(row.get("truncated"), bool):
         raise ValueError(f"evaluation prediction {row_id} lacks termination metadata")
-    if row.get("finish_reason") not in {"eos", "length", "other"}:
+    if row.get("finish_reason") not in {"eos", "final_answer", "length", "other"}:
         raise ValueError(f"evaluation prediction {row_id} has an invalid finish reason")
     if not isinstance(row.get("generation_seed"), int):
         raise ValueError(f"evaluation prediction {row_id} lacks its per-example generation seed")

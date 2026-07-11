@@ -44,6 +44,7 @@ class RoleGenerationConfig:
     top_p: float | None
     top_k: int | None
     presence_penalty: float | None
+    stop_after_final_answer: bool
 
 
 @dataclass(frozen=True)
@@ -333,6 +334,7 @@ def _parse_generation(value: object) -> GenerationConfig:
                 "top_p",
                 "top_k",
                 "presence_penalty",
+                "stop_after_final_answer",
             }
             _strict_keys(role_mapping, path, keys)
             profile = RoleGenerationConfig(
@@ -343,9 +345,12 @@ def _parse_generation(value: object) -> GenerationConfig:
                 top_p=_number(role_mapping["top_p"], f"{path}.top_p"),
                 top_k=_positive_int(role_mapping["top_k"], f"{path}.top_k"),
                 presence_penalty=_number(role_mapping["presence_penalty"], f"{path}.presence_penalty"),
+                stop_after_final_answer=_boolean(
+                    role_mapping["stop_after_final_answer"], f"{path}.stop_after_final_answer"
+                ),
             )
-            if profile.max_new_tokens != 8192:
-                raise ValueError("generation.student.max_new_tokens must be exactly 8192")
+            if profile.max_new_tokens != 16384:
+                raise ValueError("generation.student.max_new_tokens must be exactly 16384")
             actual = (
                 profile.enable_thinking,
                 profile.do_sample,
@@ -370,6 +375,7 @@ def _parse_generation(value: object) -> GenerationConfig:
                 top_p=None,
                 top_k=None,
                 presence_penalty=None,
+                stop_after_final_answer=False,
             )
             expected_tokens = {
                 "teacher": 64,
@@ -570,8 +576,10 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         _positive_int(collection[field], f"collection.{field}")
     if collection["artifact_schema"] != "paper-v2":
         raise ValueError("collection.artifact_schema must be paper-v2")
-    if collection["prompt_protocol"] != "qwen-nonthinking-r1":
-        raise ValueError("collection.prompt_protocol must be qwen-nonthinking-r1")
+    if collection["prompt_protocol"] not in {"qwen-nonthinking-r1", "qwen-nonthinking-final-r2"}:
+        raise ValueError(
+            "collection.prompt_protocol must be qwen-nonthinking-r1 or qwen-nonthinking-final-r2"
+        )
     training = _mapping(value["training"], "training")
     _strict_keys(
         training,
@@ -583,8 +591,8 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         raise ValueError("training.final_seeds must contain exactly three seeds")
     _number(training["max_epochs"], "training.max_epochs")
     _number_tuple(training["checkpoint_fractions"], "training.checkpoint_fractions")
-    if _positive_int(training["max_sequence_tokens"], "training.max_sequence_tokens") != 10240:
-        raise ValueError("training.max_sequence_tokens must be exactly 10240")
+    if _positive_int(training["max_sequence_tokens"], "training.max_sequence_tokens") != 18432:
+        raise ValueError("training.max_sequence_tokens must be exactly 18432")
     evaluation = _mapping(value["evaluation"], "evaluation")
     _strict_keys(
         evaluation,
@@ -616,12 +624,25 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
     freeze_required = value["require_freeze_manifest_for_test"]
     if freeze_required is not True:
         raise ValueError("require_freeze_manifest_for_test must be true")
+    dataset_config = _parse_dataset(value["dataset"])
+    generation_config = _parse_generation(value["generation"])
+    student_generation = generation_config.roles["student"]
+    if dataset_config.name in {"math", "gsm8k"}:
+        if collection["prompt_protocol"] != "qwen-nonthinking-final-r2":
+            raise ValueError("math paper configs must use qwen-nonthinking-final-r2")
+        if not student_generation.stop_after_final_answer:
+            raise ValueError("math paper configs must enable student final-answer stopping")
+    else:
+        if collection["prompt_protocol"] != "qwen-nonthinking-r1":
+            raise ValueError("non-math paper configs must use qwen-nonthinking-r1")
+        if student_generation.stop_after_final_answer:
+            raise ValueError("non-math paper configs must disable boxed final-answer stopping")
     return PaperExperimentConfig(
         schema_version=_positive_int(value["schema_version"], "schema_version"),
         experiment_id=str(value["experiment_id"]),
-        dataset=_parse_dataset(value["dataset"]),
+        dataset=dataset_config,
         models=_parse_models(value["models"]),
-        generation=_parse_generation(value["generation"]),
+        generation=generation_config,
         collection=dict(collection),
         lora=_parse_lora(value["lora"]),
         optimizer=_parse_optimizer(value["optimizer"]),

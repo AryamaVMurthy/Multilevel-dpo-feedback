@@ -80,6 +80,34 @@ class HeldoutTest(unittest.TestCase):
             self.assertEqual(metrics["common"]["truncation_rate"], 1.0)
             self.assertEqual(json.loads((Path(tmp) / "failures.jsonl").read_text() or "[]"), [])
 
+    def test_final_answer_stop_is_valid_termination_metadata(self):
+        examples = [{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}]
+        generation = ModelGeneration(
+            text="FINAL: \\boxed{4}",
+            prompt_tokens=11,
+            generated_tokens=7,
+            terminated=True,
+            truncated=False,
+            finish_reason="final_answer",
+        )
+        with TemporaryDirectory() as tmp:
+            metrics = evaluate_checkpoint(
+                examples=examples,
+                generate=lambda _prompt: generation,
+                evaluator=self._evaluator,
+                output_dir=Path(tmp),
+                checkpoint_kind="base",
+                base_model_revision="base-rev",
+                seed=17,
+                test=False,
+                require_generation_metadata=True,
+            )
+            prediction = json.loads((Path(tmp) / "predictions.jsonl").read_text().splitlines()[0])
+            self.assertEqual(prediction["finish_reason"], "final_answer")
+            self.assertTrue(prediction["terminated"])
+            self.assertFalse(prediction["truncated"])
+            self.assertEqual(metrics["common"]["finish_reason_counts"], {"final_answer": 1})
+
     def test_evaluation_failure_is_persisted_before_the_shard_stops(self):
         examples = [{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}]
         with TemporaryDirectory() as tmp:
@@ -127,8 +155,8 @@ class HeldoutTest(unittest.TestCase):
             dataset_manifest_sha256="c" * 64,
             student_model={"id": "student", "revision": "d" * 40},
             evaluator_model={"id": "evaluator", "revision": "e" * 40},
-            prompt_protocol="qwen-nonthinking-r1",
-            student_generation={"temperature": 1.0, "max_new_tokens": 8192},
+            prompt_protocol="qwen-nonthinking-final-r2",
+            student_generation={"temperature": 1.0, "max_new_tokens": 16384},
             evaluator_generation={"do_sample": False, "max_new_tokens": 256},
             generation_seed=20260710,
         )

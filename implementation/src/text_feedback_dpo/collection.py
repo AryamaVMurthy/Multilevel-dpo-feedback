@@ -98,6 +98,8 @@ def paper_generation_kwargs(config: Any, *, role: str) -> dict[str, Any]:
             top_k=profile.top_k,
             presence_penalty=profile.presence_penalty,
         )
+    if profile.stop_after_final_answer:
+        kwargs["stop_after_final_answer"] = True
     return kwargs
 
 

@@ -202,7 +202,7 @@ def build_paper_grpo_config_kwargs(
         "use_vllm": True,
         "vllm_mode": "colocate",
         "vllm_gpu_memory_utilization": 0.25,
-        "vllm_max_model_length": 10240,
+        "vllm_max_model_length": max_completion_length + 2048,
         "generation_kwargs": {"presence_penalty": 2.0},
         **profile,
     }

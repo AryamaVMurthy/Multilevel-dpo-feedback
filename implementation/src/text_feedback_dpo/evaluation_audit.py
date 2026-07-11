@@ -79,7 +79,7 @@ def audit_checkpoint_evaluation(
         and isinstance(row.get("generated_tokens"), int)
         and isinstance(row.get("terminated"), bool)
         and isinstance(row.get("truncated"), bool)
-        and row.get("finish_reason") in {"eos", "length", "other"}
+        and row.get("finish_reason") in {"eos", "final_answer", "length", "other"}
         for row in predictions
     )
     teacher_free = all(row.get("teacher_free") is True for row in predictions)

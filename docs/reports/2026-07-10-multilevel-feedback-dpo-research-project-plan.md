@@ -19,7 +19,7 @@ This project studies whether a small reasoning model can learn more effectively 
 
 For every successful trajectory, the first correct response is the chosen completion. Standard preference construction pairs it only with the initial wrong response. Multilevel preference construction pairs it with every preceding wrong response. A pair-budget-matched multilevel control separates the benefit of attempt diversity from the benefit of simply having more optimizer examples. Gold answers, hints, evaluator outputs, and retry metadata never enter the DPO prompt. The trained student must solve teacher-free at inference time.
 
-The original design proposed rigid XML trajectories, teacher-written corrected rollouts, GSM8K as the first math benchmark, and ordinary sequence-summed DPO. Empirical work invalidated several of those choices. Qwen3.5 performs more naturally without XML constraints. GSM8K is too easy for the 2B post-trained checkpoint and produces very few useful preference trajectories. A 16-example teacher-free GSM8K preflight reached 81.25 percent exact accuracy while two responses hit the full 8,192-token ceiling. A subsequent 16-example MATH Levels 4-5 thinking-mode diagnostic reached only 31.25 percent protocol-valid accuracy because 11 of 16 generations hit the ceiling, although nine of those 11 already contained a deterministically gold-equivalent extracted answer. This establishes failure to terminate, rather than answer discovery, as a dominant nuisance variable. The primary student protocol therefore uses the same post-trained Qwen3.5-2B checkpoint in explicit non-thinking mode with a boxed-answer-and-stop prompt. Thinking mode remains a labeled secondary ablation. The project uses the official MATH competition dataset, with Levels 4-5 as the primary study, while preserving GSM8K and thinking-mode artifacts as diagnostics only.
+The original design proposed rigid XML trajectories, teacher-written corrected rollouts, GSM8K as the first math benchmark, and ordinary sequence-summed DPO. Empirical work invalidated several of those choices. Qwen3.5 performs more naturally without XML constraints. GSM8K is too easy for the 2B post-trained checkpoint and produces very few useful preference trajectories. A 16-example teacher-free GSM8K preflight reached 81.25 percent exact accuracy while two responses hit the full 8,192-token ceiling. A subsequent 16-example MATH Levels 4-5 thinking-mode diagnostic reached only 31.25 percent protocol-valid accuracy because 11 of 16 generations hit the ceiling, although nine of those 11 already contained a deterministically gold-equivalent extracted answer. This establishes failure to terminate, rather than answer discovery, as a dominant nuisance variable. The primary student protocol therefore uses the same post-trained Qwen3.5-2B checkpoint in explicit non-thinking mode with a bounded final-answer contract and tokenizer-level stopping after a balanced boxed answer. Thinking mode remains a labeled secondary ablation. The project uses the official MATH competition dataset, with Levels 4-5 as the primary study, while preserving GSM8K and thinking-mode artifacts as diagnostics only.
 
 The primary preference objective will be length-normalized DPO, implemented with the locked TRL `sigmoid_norm` loss for both standard and multilevel pair construction. Length-desensitized DPO, using `ld_alpha` to downweight verbose response tails, is a separately labeled ablation. The two mechanisms are not silently combined in the primary result. This keeps the paper claim interpretable: the main comparison isolates preference construction under the same length-normalized objective.
 
@@ -96,7 +96,7 @@ Native reasoning responses vary substantially in length. Sequence-summed log pro
 
 | Role | Model | Privileged information | Thinking | Decoding | Maximum new tokens |
 | --- | --- | --- | --- | --- | ---: |
-| Student | Qwen3.5-2B post-trained | Problem, accumulated safe hints | Disabled | Sampled | 8192 |
+| Student | Qwen3.5-2B post-trained | Problem, accumulated safe hints | Disabled | Sampled | 16384 |
 | Teacher | Qwen3.5-9B post-trained | Problem, gold solution, failed response, evaluator result | Disabled | Greedy | 64 |
 | Evaluator | Qwen3.5-9B post-trained | Problem, gold answer/solution, student response | Disabled | Greedy | 256 |
 | Guidance guard | Qwen3.5-9B post-trained | Problem, gold answer, accumulated hints | Disabled | Greedy | 8 |
@@ -114,9 +114,10 @@ The approved student profile is:
 - `top_p=1.0`;
 - `top_k=20`;
 - `presence_penalty=2.0`;
-- `max_new_tokens=8192`.
+- `stop_after_final_answer=true`;
+- `max_new_tokens=16384`.
 
-This is Qwen's recommended sampled non-thinking text profile, with a project-specific 8,192-token ceiling to preserve the fixed training sequence budget. The ceiling is not a target. Exact prompt tokens, generated tokens, EOS termination, length termination, latency, and finish reason must be recorded. A length-truncated response is incorrect even when an intermediate number matches the gold answer.
+This is Qwen's recommended sampled non-thinking text profile with a project-specific 16,384-token emergency ceiling. MATH generation terminates validly as soon as the tokenizer-decoded output contains one balanced `FINAL: \boxed{...}` marker. The ceiling is not a target. Exact prompt tokens, generated tokens, EOS termination, final-answer termination, length termination, latency, and finish reason must be recorded. A length-truncated response is incorrect even when an intermediate number matches the gold answer.
 
 ### 3.3 Attempt Zero
 
@@ -392,6 +393,28 @@ fails the 5% paper gate. DPO collection and training remain blocked. The next pr
 step is a fixed, disjoint train-only termination study within non-thinking mode; no
 validation or official-test result may select its prompt or sampling profile.
 
+### 6.8 Final-Answer Stopping and Doubled Emergency Ceiling
+
+The `qwen-nonthinking-r1` diagnostic exposed two distinct cases: two responses emitted
+a box and then continued, while six never emitted a final box before the ceiling. The
+replacement `qwen-nonthinking-final-r2` protocol therefore makes termination part of
+the frozen generation contract rather than relying on prompt compliance alone:
+
+- the student may use at most six numbered derivation steps;
+- it must end with exactly one `FINAL: \boxed{answer}` line;
+- a tokenizer-aware stopping criterion detects balanced nested braces and stops at the
+  closing brace;
+- that stop is recorded as `terminated=true`, `truncated=false`, and
+  `finish_reason=final_answer`;
+- provisional boxes without the exact `FINAL:` marker do not stop generation;
+- the emergency completion ceiling doubles from 8,192 to 16,384 tokens, with 2,048
+  prompt tokens reserved by an 18,432-token combined training ceiling.
+
+The higher ceiling does not convert length-limited outputs into valid answers. It only
+prevents a still-useful derivation from being clipped while deterministic final-answer
+stopping handles compliant responses early. This protocol requires a new train-only
+preflight and invalidates every earlier baseline freeze.
+
 ## 7. Experimental Matrix
 
 ### 7.1 Required Main Methods
@@ -495,7 +518,7 @@ The unsafe no-guard condition must never feed unreviewed hints into a full run. 
 | Warmup | 5% integer optimizer steps |
 | Effective DPO batch | 16 pairs |
 | Maximum epochs | 1.0 |
-| Combined DPO sequence ceiling | 10,240 tokens |
+| Combined DPO sequence ceiling | 18,432 tokens |
 
 ### 9.3 LN-DPO Search
 
@@ -522,8 +545,8 @@ Use the selected or shared LN-DPO optimizer foundation and search `ld_alpha` in 
 - generations per prompt: four;
 - reward scaling: within group;
 - truncated completion masking: enabled;
-- maximum completion: 8,192 tokens;
-- vLLM presence penalty: 1.5.
+- maximum completion: 16,384 tokens;
+- vLLM presence penalty: 2.0.
 
 ### 9.6 Final Seeds
 
@@ -640,7 +663,7 @@ Every phase generates an HTML report containing status, key metrics, plots, fail
 
 ### 12.2 Resource Profile
 
-Initial collection and evaluation use one RTX 6000 Ada 48 GB GPU per shard. Measured GSM8K peak memory was 24,767 MiB, leaving headroom for MATH preflight. The 8,192-token ceiling and longer MATH prompts may increase KV memory, so a 16-example MATH preflight must precede full arrays. Two GPUs may be used only when a measured single-GPU preflight fails memory or when vLLM server mode requires an isolated rollout device. The reason must be logged.
+Initial collection and evaluation use one RTX 6000 Ada 48 GB GPU per shard. Measured MATH diagnostics remained below 26 GB at the former ceiling, but the new 16,384-token emergency ceiling can increase KV memory. A one-example and then 16-example MATH preflight must precede full arrays. Two GPUs may be used only when a measured single-GPU preflight fails memory or when vLLM server mode requires an isolated rollout device. The reason must be logged.
 
 ### 12.3 Storage Layout
 
@@ -763,7 +786,7 @@ Exit criterion: local unit tests verify objective selection, metrics, manifests,
 ### Phase 3: Prompt and Baseline Preflight
 
 1. Create a deterministic train-only prompt-development subset across subjects and Levels 4-5.
-2. Implement the primary `qwen-nonthinking-r1` protocol using Qwen's non-thinking text sampling profile and a boxed-answer-and-stop prompt.
+2. Implement the primary `qwen-nonthinking-final-r2` protocol using Qwen's non-thinking text sampling profile, bounded six-step prompt, balanced final-box stopping, and a 16,384-token emergency ceiling.
 3. Preserve job `13038` as a diagnostic; do not treat its globally hash-selected validation subset as prompt-selection data.
 4. On the disjoint train-only subset, compare a small prespecified non-thinking sampling grid around the official profile while keeping the boxed-answer-and-stop contract fixed. Thinking mode is not a candidate for promotion.
 5. Verify locally that the chat template receives `enable_thinking=false` and that thinking-mode configs fail validation.
@@ -891,6 +914,8 @@ Repeat baseline, collection, LN-DPO, GRPO, evaluation, and statistics only after
 | 2026-07-10 | Teacher returns slight hint, not corrected rollout | Keeps chosen response student-generated | Approved |
 | 2026-07-10 | Use native Qwen output, not XML | Method should fit model style rather than force formatting | Approved |
 | 2026-07-10 | Student ceiling 8,192 tokens | Avoids low artificial ceiling while retaining a hard bound | Approved |
+| 2026-07-11 | Replace `qwen-nonthinking-r1` with `qwen-nonthinking-final-r2` | Stop valid balanced final boxes deterministically and retain a larger emergency bound | Approved; requires new preflight |
+| 2026-07-11 | Student ceiling 16,384 and combined ceiling 18,432 | User-directed doubled completion ceiling with 2,048 prompt-token headroom | Approved; supersedes 8,192 setting |
 | 2026-07-10 | Baseline before research | Establishes teacher-free reference and evaluator validity | Approved |
 | 2026-07-10 | GSM8K is diagnostic only | Base accuracy and low pair yield make it weak for the main claim | Approved |
 | 2026-07-10 | MATH Levels 4-5 is primary | Hard, public train/test, full solutions, competition reasoning | Approved |
@@ -973,14 +998,14 @@ The next execution sequence is:
 ```text
 Solve the following mathematics problem.
 
-Reason step by step using only as much detail as the problem needs. Put the final
-answer in `\boxed{}` and stop immediately after the boxed answer.
+Give a concise derivation using at most 6 numbered steps. End with exactly one line:
+`FINAL: \boxed{answer}`. Do not output anything after the closing brace.
 
 Problem:
 {problem}
 ```
 
-This wording and the `qwen-nonthinking-r1` protocol identifier are frozen before validation. The prompt must not mention the gold solution, teacher, evaluator, retries, or preference training.
+This wording and the `qwen-nonthinking-final-r2` protocol identifier are frozen before validation. The prompt must not mention the gold solution, teacher, evaluator, retries, or preference training.
 
 ### Privileged Teacher Prompt Intent
 

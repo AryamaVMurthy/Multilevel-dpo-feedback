@@ -43,7 +43,7 @@ protocol?
 - Optional full-parameter ablation: one GSM8K seed for standard DPO and multilevel DPO.
 - No XML response format and no formatting loss.
 - Student sampling: non-thinking mode, temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0.
-- Student completion budget: 8192 tokens.
+- Student emergency completion budget: 16384 tokens; valid MATH generation stops at a balanced final box.
 - Original GRPO is the primary online-RL baseline; a DAPO-loss run is labeled only as
   a sensitivity analysis.
 
@@ -54,7 +54,7 @@ being evaluated. They are not silently reused for machine-readable control roles
 
 | Role | Thinking | Decoding | Maximum new tokens | Purpose |
 | --- | --- | --- | ---: | --- |
-| student | disabled | sampled: temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0 | 8192 | concise boxed-answer problem solving and retries |
+| student | disabled | sampled: temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0 | 16384 | bounded derivation, balanced final-box stop, and retries |
 | teacher | disabled | greedy | 64 | one very slight answer-free hint |
 | evaluator | disabled | greedy | 256 | structured answer extraction and judgment |
 | guidance guard | disabled | greedy | 8 | exact `SAFE` or `UNSAFE` verdict |
@@ -205,7 +205,7 @@ extraction. SearchQA reward is frozen before preflight as:
 `0.55 * exact_match + 0.25 * token_f1 + 0.10 * evidence_support + 0.10 * answer_type_correct`
 
 Original GRPO uses four generations per prompt, one policy iteration per generation
-batch, clipping epsilon `0.2`, within-group reward scaling, an 8192-token completion
+batch, clipping epsilon `0.2`, within-group reward scaling, a 16384-token emergency completion
 limit, the same sampling settings as collection, and the shared domain evaluator
 semantics. Truncated completions are masked. A full GRPO run cannot start if the pilot
 has more than 50% zero-variance groups or more than 5% truncated completions. A

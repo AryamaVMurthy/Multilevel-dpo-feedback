@@ -11,7 +11,8 @@ Current status:
 - Tested implementation and Turing workflows: `implementation/`.
 - Current state: MATH Levels 4-5 is the primary benchmark. The thinking-mode baseline
   diagnostic failed its termination gate, and the primary student protocol is now
-  explicit non-thinking `qwen-nonthinking-r1`. Full collection and training remain
+  explicit non-thinking `qwen-nonthinking-final-r2` with balanced final-box stopping
+  and a 16,384-token emergency ceiling. Full collection and training remain
   gated on the replacement baseline preflight.
 
 Run the basic local pipeline:

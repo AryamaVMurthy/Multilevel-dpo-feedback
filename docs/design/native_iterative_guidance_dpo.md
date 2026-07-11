@@ -33,7 +33,8 @@ and evaluator judgments are greedy so short guidance and machine-readable judgme
 do not spend their output budget on internal reasoning.
 
 The student uses sampled non-thinking decoding with temperature `1.0`, top-p `1.0`,
-top-k `20`, presence penalty `2.0`, and at most 8,192 new tokens. The teacher,
+top-k `20`, presence penalty `2.0`, balanced final-box stopping, and at most 16,384
+new tokens. The teacher,
 evaluator, leakage guard, and guidance critic use explicit non-thinking greedy profiles
 with maximum output budgets of 64, 256, eight, and eight tokens respectively. These
 profiles are independently hashed and logged; structured roles never inherit student
@@ -193,3 +194,6 @@ This anchor must be logged separately from DPO loss.
   reduced truncation from 11/16 to 8/16 on the same examples, but still failed the 5%
   truncation gate. Non-thinking remains the primary mode; its sampling profile requires
   a disjoint train-only termination study before DPO collection or training.
+- Replaced the prompt-only stop request with `qwen-nonthinking-final-r2`: at most six
+  numbered steps, one exact `FINAL: \boxed{answer}` line, tokenizer-level balanced-box
+  stopping, and a 16,384-token emergency ceiling with 18,432-token training context.

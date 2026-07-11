@@ -51,6 +51,8 @@ Primary paper student generation settings:
 
 ```yaml
 enable_thinking: false
+stop_after_final_answer: true
+max_new_tokens: 16384
 temperature: 1.0
 top_p: 1.0
 top_k: 20
@@ -58,6 +60,11 @@ presence_penalty: 2.0
 ```
 
 `temperature`, `top_p`, and `top_k` are passed directly to Hugging Face Transformers `generate()`. `presence_penalty` is not a native Transformers `GenerationConfig` field, so this repo applies it through a custom logits processor that subtracts the penalty from tokens already present in the sequence. This is explicit and tested; it is not mapped silently to `repetition_penalty`.
+
+MATH generation uses the frozen `qwen-nonthinking-final-r2` contract. A tokenizer-aware
+stopping criterion recognizes one balanced `FINAL: \boxed{...}` answer, stops at its
+closing brace, and records `finish_reason=final_answer`. The 16,384-token value is an
+emergency ceiling for outputs that emit neither EOS nor a valid final marker.
 
 The paper plan applies these sampled settings only to student rollouts; every role uses
 explicit non-thinking mode. Teacher, evaluator, and guidance-guard roles use separately

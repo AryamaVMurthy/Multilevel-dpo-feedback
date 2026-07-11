@@ -87,7 +87,7 @@ seeds, architecture-audited LoRA settings, optimizer fields, deterministic candi
 matrix, promotion budgets, nested validation partitions, generation settings, shard
 size, retry budget, and final-test freeze flag. Test that unknown keys, missing
 revisions, overlap-prone split settings, deprecated warmup fields, implicit optimizer
-defaults, and a non-8192 completion budget fail explicitly.
+defaults, and a non-16384 completion budget fail explicitly.
 
 **Step 2: Verify the tests fail**
 
@@ -520,7 +520,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_rewards.py'
 **Step 3: Implement shared reward functions**
 
 Use the same evaluation result schema as held-out scoring. Configure four generations,
-generation batch divisibility, max completion length 8192, non-thinking chat templating,
+generation batch divisibility, max completion length 16384, non-thinking chat templating,
 temperature 1.0, top-p 1.0, top-k 20, presence penalty 2.0 through supported generation kwargs, completion logging,
 and truncated-completion masking. Configure the primary baseline explicitly as original
 `loss_type="grpo"`, one policy iteration, clipping epsilon `0.2`, and within-group reward
@@ -713,7 +713,7 @@ student prompt protocol, role-specific generation profiles, and generation seed.
 Teacher generation is disabled. A mismatched source, model, config, dataset, prompt,
 or decoding profile is a hard error.
 The paper config is schema v3; schema v2 files are rejected because they do not bind
-the mandatory baseline protocol or the 8,192/10,240-token contracts.
+the mandatory baseline protocol or the 16,384/18,432-token contracts.
 
 **Step 2: Run a small validation preflight and manually audit every response**
 
@@ -730,7 +730,7 @@ baseline or collection job.
 
 **Step 3: Run and merge the full 747-example validation baseline**
 
-Choose the validation shard count from measured 8,192-token preflight throughput, with
+Choose the validation shard count from measured 16,384-token preflight throughput, with
 at least 25% wall-time headroom; six shards of approximately 125 examples are only the
 initial estimate. Merge only complete
 shards whose prediction hashes, freeze hash, checkpoint identity, seed, split, and
@@ -803,7 +803,7 @@ permit full collection or training.
 - Modify: `implementation/tests/test_guidance_policy.py`
 
 Write failing tests proving that the student uses explicit non-thinking mode plus
-sampled `1.0/1.0/20/2.0` decoding and 8,192 tokens. Require teacher greedy non-thinking
+sampled `1.0/1.0/20/2.0` decoding, balanced final-box stopping, and 16,384 tokens. Require teacher greedy non-thinking
 decoding with 64 tokens, evaluator greedy non-thinking decoding with 256 tokens, and
 guard greedy non-thinking decoding with eight tokens. Greedy profiles must omit
 temperature, top-p, top-k, and presence penalty instead of passing ignored values.
@@ -916,7 +916,7 @@ Generate four completions per prompt with original `loss_type="grpo"`, one polic
 iteration, clipping epsilon `0.2`, within-group scaling, and truncation masking. Audit
 every completion, reward, optimizer field, and gradient update.
 Use the isolated frozen vLLM environment so presence penalty `2.0` is actually applied;
-non-thinking mode, temperature `1.0`, top-p `1.0`, top-k `20`, and the 8,192-token ceiling are explicit.
+non-thinking mode, temperature `1.0`, top-p `1.0`, top-k `20`, balanced final-answer stopping, and the 16,384-token ceiling are explicit.
 Start with colocated vLLM at 25% device memory. If and only if the measured preflight
 fails the memory gate, run the documented two-GPU server-mode profile and then use that
 same profile for all GRPO candidates and seeds. Never omit presence penalty as a hidden

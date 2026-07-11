@@ -23,11 +23,12 @@ generation:
   student:
     enable_thinking: false
     do_sample: true
-    max_new_tokens: 8192
+    max_new_tokens: 16384
     temperature: 1.0
     top_p: 1.0
     top_k: 20
     presence_penalty: 2.0
+    stop_after_final_answer: true
   teacher: {enable_thinking: false, do_sample: false, max_new_tokens: 64}
   evaluator: {enable_thinking: false, do_sample: false, max_new_tokens: 256}
   guidance_guard: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
@@ -37,7 +38,7 @@ collection:
   max_guidance_regenerations: 2
   shard_size: 256
   artifact_schema: paper-v2
-  prompt_protocol: qwen-nonthinking-r1
+  prompt_protocol: qwen-nonthinking-final-r2
 lora:
   rank: 16
   alpha: 32
@@ -83,7 +84,7 @@ training:
   final_seeds: [17, 31, 47]
   max_epochs: 1.0
   checkpoint_fractions: [0.25, 0.5, 0.75, 1.0]
-  max_sequence_tokens: 10240
+  max_sequence_tokens: 18432
 evaluation:
   baseline_before_training: true
   generation_seed: 20260711

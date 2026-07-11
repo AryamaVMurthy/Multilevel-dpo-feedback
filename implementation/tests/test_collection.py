@@ -46,11 +46,12 @@ class CollectionTest(unittest.TestCase):
             {
                 "enable_thinking": False,
                 "do_sample": True,
-                "max_new_tokens": 8192,
+                "max_new_tokens": 16384,
                 "temperature": 1.0,
                 "top_p": 1.0,
                 "top_k": 20,
                 "presence_penalty": 2.0,
+                "stop_after_final_answer": True,
             },
         )
         self.assertEqual(

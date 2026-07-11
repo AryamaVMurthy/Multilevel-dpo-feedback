@@ -68,11 +68,11 @@ class TrainingProfileTest(unittest.TestCase):
             max_steps=10,
             candidate=dpo_candidate,
             effective_global_batch=16,
-            max_length=10240,
+            max_length=18432,
             loss_type="sigmoid_norm",
             ld_alpha=None,
         )
-        self.assertEqual(dpo["max_length"], 10240)
+        self.assertEqual(dpo["max_length"], 18432)
         self.assertEqual(dpo["gradient_accumulation_steps"], 16)
         self.assertTrue(dpo["bf16"])
         self.assertEqual(dpo["beta"], 0.1)
@@ -94,7 +94,7 @@ class TrainingProfileTest(unittest.TestCase):
             max_steps=10,
             candidate=ld_candidate,
             effective_global_batch=16,
-            max_length=10240,
+            max_length=18432,
             loss_type="sigmoid",
             ld_alpha=0.5,
         )
@@ -106,9 +106,10 @@ class TrainingProfileTest(unittest.TestCase):
             output_dir="out",
             max_steps=10,
             candidate=grpo_candidate,
-            max_completion_length=8192,
+            max_completion_length=16384,
         )
-        self.assertEqual(grpo["max_completion_length"], 8192)
+        self.assertEqual(grpo["max_completion_length"], 16384)
+        self.assertEqual(grpo["vllm_max_model_length"], 18432)
         self.assertEqual(grpo["num_generations"], 4)
         self.assertEqual(grpo["generation_batch_size"], 4)
         self.assertEqual(grpo["epsilon"], 0.2)

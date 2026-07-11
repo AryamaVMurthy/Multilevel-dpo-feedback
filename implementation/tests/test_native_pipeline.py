@@ -172,10 +172,10 @@ class NativePipelineTest(unittest.TestCase):
             problem="What is 2 + 2?",
             domain="math",
         )
-        self.assertIn("reason step by step", prompt.lower())
-        self.assertIn("final answer", prompt.lower())
-        self.assertIn("\\boxed{}", prompt)
-        self.assertIn("stop immediately", prompt.lower())
+        self.assertIn("at most 6 numbered steps", prompt.lower())
+        self.assertIn("final:", prompt.lower())
+        self.assertIn("FINAL: \\boxed{answer}", prompt)
+        self.assertIn("do not output anything after", prompt.lower())
         self.assertNotIn("<think", prompt)
         self.assertNotIn("<reflect", prompt)
         self.assertNotIn("must use", prompt.lower())

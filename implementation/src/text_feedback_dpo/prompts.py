@@ -68,8 +68,8 @@ def build_native_student_prompt(
         )
     if domain == "math":
         task_instruction = (
-            "Reason step by step using only as much detail as the problem needs. "
-            "Put the final answer in \\boxed{} and stop immediately after the boxed answer."
+            "Give a concise derivation using at most 6 numbered steps. End with exactly one line "
+            "of the form FINAL: \\boxed{answer}. Do not output anything after the closing brace."
         )
     else:
         task_instruction = (

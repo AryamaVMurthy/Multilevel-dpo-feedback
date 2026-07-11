@@ -32,7 +32,8 @@ class PaperExperimentConfigTest(unittest.TestCase):
         student = config.generation.roles["student"]
         self.assertFalse(student.enable_thinking)
         self.assertTrue(student.do_sample)
-        self.assertEqual(student.max_new_tokens, 8192)
+        self.assertEqual(student.max_new_tokens, 16384)
+        self.assertTrue(student.stop_after_final_answer)
         self.assertEqual(
             (student.temperature, student.top_p, student.top_k, student.presence_penalty),
             (1.0, 1.0, 20, 2.0),
@@ -57,7 +58,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.grpo_search.kl_betas, (0.0, 0.001, 0.01, 0.04))
         self.assertEqual(config.lora.rank, 16)
         self.assertEqual(config.lora.target_policy, "qwen35_text_linear")
-        self.assertEqual(config.training["max_sequence_tokens"], 10240)
+        self.assertEqual(config.training["max_sequence_tokens"], 18432)
         self.assertTrue(config.evaluation["baseline_before_training"])
         self.assertEqual(config.evaluation["generation_seed"], 20260710)
         self.assertEqual(config.evaluation["max_truncation_rate"], 0.05)
@@ -70,6 +71,8 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.source_counts, {"train": 99820, "validation": 13393, "test": 27248})
         self.assertEqual(config.dataset.splits, {"train": 5000, "validation": 1000, "test": 2000})
         self.assertEqual(config.dataset.auxiliary_hparam, {"train": 2000, "validation": 500})
+        self.assertFalse(config.generation.roles["student"].stop_after_final_answer)
+        self.assertEqual(config.collection["prompt_protocol"], "qwen-nonthinking-r1")
 
     def test_math_config_pins_all_subjects_and_derives_primary_split_counts(self):
         config = load_paper_experiment(Path("configs/paper/math.yaml"))
@@ -82,6 +85,8 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.train_fraction, 0.9)
         self.assertEqual(config.dataset.validation_tune_fraction, 2 / 3)
         self.assertEqual(len(config.dataset.subjects), 7)
+        self.assertTrue(config.generation.roles["student"].stop_after_final_answer)
+        self.assertEqual(config.collection["prompt_protocol"], "qwen-nonthinking-final-r2")
 
     def test_math_config_rejects_noncanonical_subject_order_or_primary_levels(self):
         value = self._load_mapping("configs/paper/math.yaml")
@@ -122,11 +127,17 @@ class PaperExperimentConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"optimizer\.warmup_ratio.*deprecated"):
             self._write_and_load(value)
 
-    def test_non_8192_student_completion_budget_fails(self):
+    def test_non_16384_student_completion_budget_fails(self):
         value = self._load_mapping("configs/paper/gsm8k.yaml")
         value["generation"]["student"]["max_new_tokens"] = 2048
 
-        with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*8192"):
+        with self.assertRaisesRegex(ValueError, r"generation\.student\.max_new_tokens.*16384"):
+            self._write_and_load(value)
+
+    def test_math_requires_final_answer_stopping(self):
+        value = self._load_mapping("configs/paper/math.yaml")
+        value["generation"]["student"]["stop_after_final_answer"] = False
+        with self.assertRaisesRegex(ValueError, "final-answer stopping"):
             self._write_and_load(value)
 
     def test_paper_student_rejects_thinking_mode_or_old_sampling_profile(self):

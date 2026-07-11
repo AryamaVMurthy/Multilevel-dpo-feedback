@@ -29,16 +29,21 @@ defaults may select another loss variant, and explicitly enables
 `mask_truncated_completions`. DPO sets `max_length` for the combined
 prompt/completion sequence; removed legacy DPO length arguments are prohibited. The
 locked package APIs are inspected in a model-load preflight before any candidate run.
-The paper config fixes DPO `max_length=10240` to provide 2,048 tokens of prompt
-headroom around the 8,192-token student completion ceiling, and fixes GRPO
-`max_completion_length=8192`.
+The paper config fixes DPO `max_length=18432` to provide 2,048 tokens of prompt
+headroom around the 16,384-token student emergency completion ceiling, and fixes GRPO
+`max_completion_length=16384`.
 These values are explicit config inputs rather than trainer defaults.
-The official Qwen3.5-2B model card reports a native 262,144-token context, so 8,192 is
+The official Qwen3.5-2B model card reports a native 262,144-token context, so 16,384 is
 model-supported. The primary paper protocol uses its recommended non-thinking text
 profile: temperature `1.0`, top-p `1.0`, top-k `20`, and presence penalty `2.0`. The
 same card warns that the 2B checkpoint can enter thinking loops; the failed MATH
 thinking-mode diagnostic is therefore preserved as an ablation, while exact EOS/length
 metadata and the 5% truncation gate remain mandatory for every mode.
+
+For MATH, the ceiling is an emergency bound rather than the normal stopping mechanism.
+The student emits a bounded derivation followed by `FINAL: \boxed{...}`; a balanced-box
+stopping criterion records `finish_reason=final_answer` at the closing brace. The full
+16,384-token allocation is used only when neither EOS nor a valid final marker appears.
 
 TRL 1.8 exposes temperature, top-p, and top-k directly, but Transformers generation
 does not implement OpenAI-style presence penalty as a `GenerationConfig` field. Paper
