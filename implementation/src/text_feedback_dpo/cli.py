@@ -714,12 +714,14 @@ def run_materialize_preflight_subset(
     output_path: Path,
     count: int,
     seed: int,
+    selection_policy: str = "hash",
 ) -> dict[str, Any]:
     return materialize_preflight_subset(
         source_path=source_path,
         output_path=output_path,
         count=count,
         seed=seed,
+        selection_policy=selection_policy,
     )
 
 
@@ -1314,6 +1316,11 @@ def main() -> None:
     preflight_subset.add_argument("--output-path", required=True, type=Path)
     preflight_subset.add_argument("--count", required=True, type=int)
     preflight_subset.add_argument("--seed", required=True, type=int)
+    preflight_subset.add_argument(
+        "--selection-policy",
+        required=True,
+        choices=["hash", "math_subject_level"],
+    )
     collect = subparsers.add_parser("collect-shard")
     collect.add_argument("--config", required=True, type=Path)
     collect.add_argument("--dataset-dir", required=True, type=Path)
@@ -1442,6 +1449,7 @@ def main() -> None:
             output_path=args.output_path,
             count=args.count,
             seed=args.seed,
+            selection_policy=args.selection_policy,
         )
     elif args.command == "collect-shard":
         result = run_collect_shard(

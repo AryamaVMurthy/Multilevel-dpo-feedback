@@ -19,6 +19,7 @@ def materialize_preflight_subset(
     output_path: Any,
     count: int,
     seed: int,
+    selection_policy: str = "hash",
 ) -> dict[str, Any]:
     from pathlib import Path
 
@@ -41,12 +42,19 @@ def materialize_preflight_subset(
         raise ValueError("preflight subset source contains a missing id")
     if len(set(ids)) != len(ids):
         raise ValueError("preflight subset source contains duplicate ids")
-    ranked = sorted(
-        range(len(rows)),
-        key=lambda index: hashlib.sha256(f"{seed}:{ids[index]}".encode("utf-8")).hexdigest(),
-    )
-    selected_indices = set(ranked[:count])
-    selected = [row for index, row in enumerate(rows) if index in selected_indices]
+    if selection_policy == "hash":
+        ranked = sorted(
+            range(len(rows)),
+            key=lambda index: hashlib.sha256(f"{seed}:{ids[index]}".encode("utf-8")).hexdigest(),
+        )
+        selected_indices = set(ranked[:count])
+        selected = [row for index, row in enumerate(rows) if index in selected_indices]
+    elif selection_policy == "math_subject_level":
+        from text_feedback_dpo.concise_sweep import stratified_subset
+
+        selected = stratified_subset(rows, count=count, seed=seed)
+    else:
+        raise ValueError("preflight selection_policy must be hash or math_subject_level")
     for row in selected:
         append_jsonl_zst(output, row)
     selected_ids = [str(row["id"]) for row in selected]
@@ -59,6 +67,7 @@ def materialize_preflight_subset(
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "seed": seed,
+        "selection_policy": selection_policy,
         "count": count,
         "selected_ids": selected_ids,
         "selection_sha256": selection_sha256,

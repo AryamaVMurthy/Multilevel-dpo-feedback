@@ -536,6 +536,40 @@ class DatasetManifestTest(unittest.TestCase):
             self.assertEqual(first["count"], 5)
             self.assertTrue((root / "preflight-a.jsonl.zst.manifest.json").exists())
 
+    def test_math_preflight_subset_is_stratified_by_subject_and_level(self):
+        rows = [
+            {
+                "id": f"{subject}-{level}-{index}",
+                "problem": f"Problem {subject} {level} {index}",
+                "source_subject": subject,
+                "difficulty_level": level,
+            }
+            for subject in ("algebra", "geometry")
+            for level in (4, 5)
+            for index in range(3)
+        ]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "validation.jsonl.zst"
+            output = root / "preflight.jsonl.zst"
+            for row in rows:
+                append_jsonl_zst(source, row)
+
+            manifest = materialize_preflight_subset(
+                source_path=source,
+                output_path=output,
+                count=8,
+                seed=20260711,
+                selection_policy="math_subject_level",
+            )
+            selected = read_jsonl_zst(output)
+
+            self.assertEqual(manifest["selection_policy"], "math_subject_level")
+            self.assertEqual(
+                {(row["source_subject"], row["difficulty_level"]) for row in selected},
+                {("algebra", 4), ("algebra", 5), ("geometry", 4), ("geometry", 5)},
+            )
+
     def test_preflight_subset_cli_runner_returns_manifest(self):
         rows = [{"id": f"row-{index}", "problem": f"Problem {index}"} for index in range(6)]
         with TemporaryDirectory() as tmp:

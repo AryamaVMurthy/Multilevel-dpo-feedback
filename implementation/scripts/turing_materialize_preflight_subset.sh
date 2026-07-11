@@ -14,6 +14,7 @@ DATASET_MANIFEST="${DATASET_MANIFEST:?DATASET_MANIFEST is required}"
 OUTPUT_PATH="${OUTPUT_PATH:?OUTPUT_PATH is required}"
 SUBSET_COUNT="${SUBSET_COUNT:?SUBSET_COUNT is required}"
 SUBSET_SEED="${SUBSET_SEED:?SUBSET_SEED is required}"
+SELECTION_POLICY="${SELECTION_POLICY:?SELECTION_POLICY is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
@@ -49,11 +50,12 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
 echo "job_id=${SLURM_JOB_ID} account=${TURING_ACCOUNT} host=$(hostname)"
-uv run --frozen python -m text_feedback_dpo.cli materialize-preflight-subset \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli materialize-preflight-subset \
   --source-path "$SOURCE_PATH" \
   --output-path "$OUTPUT_PATH" \
   --count "$SUBSET_COUNT" \
-  --seed "$SUBSET_SEED"
+  --seed "$SUBSET_SEED" \
+  --selection-policy "$SELECTION_POLICY"
 
 OUTPUT_MANIFEST="$(dirname "$OUTPUT_PATH")/manifest.json"
 if [[ -e "$OUTPUT_MANIFEST" ]] && ! cmp -s "$DATASET_MANIFEST" "$OUTPUT_MANIFEST"; then

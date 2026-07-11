@@ -60,6 +60,8 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("OUTPUT_PATH:?OUTPUT_PATH is required", preflight)
         self.assertIn("SUBSET_COUNT:?SUBSET_COUNT is required", preflight)
         self.assertIn("SUBSET_SEED:?SUBSET_SEED is required", preflight)
+        self.assertIn("SELECTION_POLICY:?SELECTION_POLICY is required", preflight)
+        self.assertIn('--selection-policy "$SELECTION_POLICY"', preflight)
         self.assertIn('OUTPUT_MANIFEST="$(dirname "$OUTPUT_PATH")/manifest.json"', preflight)
         self.assertIn('cmp -s "$DATASET_MANIFEST" "$OUTPUT_MANIFEST"', preflight)
         audit = Path("scripts/turing_audit_dataset.sh").read_text(encoding="utf-8")
