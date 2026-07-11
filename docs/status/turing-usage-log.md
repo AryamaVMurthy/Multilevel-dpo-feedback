@@ -455,3 +455,18 @@ No actions have been logged under this control policy yet.
 - Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact manifest/selection artifacts after terminal state.
 - Purpose: capture all 96 confirmation records, disjointness and context-binding failures, resource use, and the single selected profile.
 - Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T22:28:51+05:30
+
+- Job 13123: `COMPLETED`, exit `0:0`, node01, elapsed `00:17:54`, MaxRSS `1,283,424 KiB`, one GPU; accounted time `0.2983` GPU-hours.
+- Selected `presence-1.5`: 17/32 protocol-valid correct, zero truncations, 1,348.89 correct answers per million generated tokens, median 337 tokens, mean latency 8.91 seconds.
+- `presence-1`: 16/32 correct, zero truncations. `presence-0`: 12/32 correct with one 8,192-token truncation.
+- Confirmation records SHA-256 `33f9cea16882a7ac09df9b50a45da6c92f40567f1c54214ebacef80784a63c96`; sweep manifest SHA-256 `769809d1c14f48b42293cf4b96d9ef17cb3e474ed394523eb75c0a8efbd3e940`.
+
+## 2026-07-11T22:30:31+05:30 - freeze selected decoding and refresh model-cache binding
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command with one-thread Git fetch and fast-forward-only update; exact source/status checks; preserve the selection-time model-cache manifest as a compact immutable artifact; run the tested CPU-only `freeze-decoding` command; then submit exactly one node01 CPU-only model-cache staging job for the newly frozen config hash.
+- Frozen source commit: `5f31c5010a47db0b35603a99356c1c9c6ffa227e`; MATH config SHA-256 `d2fa3e60c02aae8d87018f4550e99bc593d2bb4610b5461d7e13db78523b01ae`; selected presence penalty `1.5`.
+- Freeze output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/math-decoding-freeze.json`; preserved selection cache manifest: `/home/aryama.murthy/tfdpo-qwen3-artifacts/manifests/model-cache-selection.json`.
+- Requested staging resources: account `priyesh.shukla`, u22, node01, 2 tasks, 32 GiB, `02:00:00`, 0 GPUs, 0 requested GPU-hours.
