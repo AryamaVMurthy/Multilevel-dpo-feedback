@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from text_feedback_dpo.cli import run_evaluate_paper, run_freeze_baseline
+from text_feedback_dpo.evaluators import ModelOutputParseError
 from text_feedback_dpo.heldout import (
     build_baseline_evaluation_freeze,
     evaluate_checkpoint,
@@ -146,6 +147,39 @@ class HeldoutTest(unittest.TestCase):
                 )
             failure = json.loads((output / "failures.jsonl").read_text().splitlines()[0])
             self.assertEqual(failure["stage"], "generation_validation")
+
+    def test_evaluator_parse_failure_preserves_all_raw_attempts(self):
+        examples = [{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}]
+        parse_error = ModelOutputParseError(
+            role="evaluator",
+            raw="invalid two",
+            message="model output does not contain a valid JSON object",
+            raw_outputs=["invalid one", "invalid two"],
+            parse_failures=["missing object", "missing object"],
+        )
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            with self.assertRaises(ModelOutputParseError):
+                evaluate_checkpoint(
+                    examples=examples,
+                    generate=lambda _prompt: "student response",
+                    evaluator=lambda _example, _response: (_ for _ in ()).throw(parse_error),
+                    output_dir=output,
+                    checkpoint_kind="base",
+                    base_model_revision="base-rev",
+                    seed=17,
+                    test=False,
+                )
+
+            failure = json.loads((output / "failures.jsonl").read_text().splitlines()[0])
+            self.assertEqual(failure["role"], "evaluator")
+            self.assertEqual(failure["raw_outputs"], ["invalid one", "invalid two"])
+            self.assertEqual(failure["parse_failures"], ["missing object", "missing object"])
+            self.assertEqual(failure["response"], "student response")
+            self.assertEqual(
+                failure["response_sha256"],
+                hashlib.sha256(b"student response").hexdigest(),
+            )
 
     def test_baseline_freeze_binds_model_evaluator_dataset_protocol_and_source(self):
         freeze = build_baseline_evaluation_freeze(

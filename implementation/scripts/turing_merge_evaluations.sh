@@ -43,7 +43,7 @@ export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
-uv run --frozen python -m text_feedback_dpo.cli merge-evaluations \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli merge-evaluations \
   --config "$CONFIG" \
   --data "$DATA_PATH" \
   --split "$SPLIT" \

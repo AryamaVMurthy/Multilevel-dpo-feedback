@@ -237,15 +237,32 @@ def evaluate_checkpoint(
     failures: list[dict[str, Any]] = []
     failures_path = output_dir / "failures.jsonl"
 
-    def persist_failure(example_id: str, stage: str, exc: Exception) -> None:
-        failures.append(
-            {
-                "id": example_id,
-                "stage": stage,
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-            }
-        )
+    def persist_failure(
+        example_id: str,
+        stage: str,
+        exc: Exception,
+        *,
+        response: str | None = None,
+    ) -> None:
+        failure: dict[str, Any] = {
+            "id": example_id,
+            "stage": stage,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+        role = getattr(exc, "role", None)
+        raw_outputs = getattr(exc, "raw_outputs", None)
+        parse_failures = getattr(exc, "parse_failures", None)
+        if isinstance(role, str) and role:
+            failure["role"] = role
+        if isinstance(raw_outputs, list) and all(isinstance(value, str) for value in raw_outputs):
+            failure["raw_outputs"] = raw_outputs
+        if isinstance(parse_failures, list) and all(isinstance(value, str) for value in parse_failures):
+            failure["parse_failures"] = parse_failures
+        if response is not None:
+            failure["response"] = response
+            failure["response_sha256"] = hashlib.sha256(response.encode("utf-8")).hexdigest()
+        failures.append(failure)
         write_jsonl(failures_path, failures)
 
     result_by_id: dict[str, dict[str, Any]] = {}
@@ -289,7 +306,7 @@ def evaluate_checkpoint(
         try:
             result = evaluator(example, response)
         except Exception as exc:
-            persist_failure(example_id, "evaluation", exc)
+            persist_failure(example_id, "evaluation", exc, response=response)
             raise
         evaluation_latency_ms = (time.monotonic() - evaluation_started) * 1000
         if not isinstance(result, dict):

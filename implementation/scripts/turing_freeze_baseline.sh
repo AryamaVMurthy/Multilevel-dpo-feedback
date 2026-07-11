@@ -48,7 +48,7 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
 echo "job_id=${SLURM_JOB_ID} account=${TURING_ACCOUNT} host=$(hostname) source_commit=${SOURCE_COMMIT}"
-uv run --frozen python -m text_feedback_dpo.cli freeze-baseline \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli freeze-baseline \
   --config "$CONFIG" \
   --dataset-manifest "$DATASET_MANIFEST" \
   --source-commit "$SOURCE_COMMIT" \

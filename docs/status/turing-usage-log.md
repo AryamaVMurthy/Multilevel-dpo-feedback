@@ -649,3 +649,29 @@ No actions have been logged under this control policy yet.
 - The original baseline freeze remains preserved. Corrected freeze output is `math/baseline/baseline-freeze-v2.json`; evaluation output is the fresh `math/baseline/full-validation/evaluation` directory.
 - Input is only the audited Level 4-5 validation split. The official test split remains untouched and no model selection uses test data.
 - Freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, 4 GiB, `00:15:00`, 0 GPUs. Evaluation resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T22:53:06+05:30
+
+- Standalone clone fast-forwarded cleanly to `f21d8a82baa3b93c2a1dcfbf9a3ccaf811f0bf2d`; queue and both corrected output paths were empty.
+- Corrected baseline freeze job: `13134`. Dependent full-validation one-GPU job: `13135`, array index 0 only, with `afterok:13134`.
+
+## 2026-07-11T22:53:06+05:30 - monitor corrected freeze and full MATH validation jobs 13134-13135
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded logs and progress artifacts; inspect the freeze, predictions, failures, metrics, completion marker, and telemetry only after successful terminal states.
+- Purpose: complete and freeze the teacher-free validation baseline before any official-test access or guidance collection.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Failure result - 2026-07-11T22:58:58+05:30
+
+- Job 13134 `COMPLETED` in 1 second and wrote the corrected freeze bound to commit `f21d8a82baa3b93c2a1dcfbf9a3ccaf811f0bf2d`.
+- Job 13135 index 0 `FAILED` explicitly after 2 minutes 42 seconds on `math-algebra-train-1218`: the pinned 8B evaluator exhausted its configured serialization-repair attempts without producing a valid JSON object. The failure ledger records stage `evaluation` and `ModelOutputParseError`.
+- No prediction file, metrics, or completion marker was written. The failed shard is preserved and will never be resumed into a paper run. Peak observed telemetry memory was 24,150 MiB, so this was not an OOM; accounted GPU time was `0.045` GPU-hours.
+- Existing failure observability retained only the final error message, despite the evaluator exception carrying every raw attempt. Progression remains stopped until the raw evaluator attempts and corresponding student response are durably captured and inspected.
+
+## 2026-07-11T22:58:58+05:30 - reproduce full-validation evaluator serialization failure with complete evidence
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: after test-first observability correction and full local verification, one BatchMode SSH fast-forward-only sync; submit one CPU-only exact-index lookup for `math-algebra-train-1218`, inspect its result, re-freeze the baseline to the observability commit, and run only that deterministic one-row shard on one GPU in a fresh diagnostic directory.
+- The failure ledger now preserves all raw evaluator attempts, parse errors, the student response, and its hash. No recovery or semantic default is introduced; the diagnostic is expected to fail if the defect reproduces.
+- Requested lookup/freeze resources: account `priyesh.shukla`, u22, node01, 2 tasks, at most 4 GiB, at most `00:15:00`, 0 GPUs. Diagnostic resources: 1 GPU, 16 tasks, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.

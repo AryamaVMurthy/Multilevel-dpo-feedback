@@ -32,7 +32,7 @@ export UV_LINK_MODE=copy
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 cp "$CONFIG" "$SCRATCH_DIR/config.yaml"
-uv run --frozen python -m text_feedback_dpo.cli merge-collection \
+uv run --frozen --no-sync python -m text_feedback_dpo.cli merge-collection \
   --config "$SCRATCH_DIR/config.yaml" \
   --dataset-dir "$DATASET_DIR" \
   --collection-dir "$COLLECTION_DIR" \
