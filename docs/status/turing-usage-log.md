@@ -169,3 +169,36 @@ No actions have been logged under this control policy yet.
 - Purpose: bring the standalone clone to the new source commit that includes this append-only cluster audit before Slurm setup.
 - Target path: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3`.
 - Requested resources: control-plane SSH only; 0 GPUs; 0 requested GPU-hours; fast-forward source update only.
+
+### Result - 2026-07-11T21:12:22+05:30
+
+- Exit status: 0.
+- Standalone clone fast-forwarded cleanly to `062f6d93c4d3af26e1a611e9ca6094a954a0261b`.
+
+## 2026-07-11T21:12:53+05:30 - submit locked Qwen3 environment setup
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: one BatchMode SSH command rechecking clean source, exact commit, queue, and home capacity; creating only the Slurm log directory; then one `sbatch --parsable` submission constrained to node01 using `turing_setup_environment.sh`.
+- Purpose: install the exact `uv.lock` environment and cache on node-local scratch before model or dataset work.
+- Source: `/home/aryama.murthy/multilevel-feedback-dpo-qwen3/implementation` at `062f6d93c4d3af26e1a611e9ca6094a954a0261b`.
+- Scratch targets: `/scratch/aryama.murthy/tfdpo-qwen3/runtime/uv_cache` and `/scratch/aryama.murthy/tfdpo-qwen3/runtime/project_venv` on node01.
+- Requested resources: account `priyesh.shukla`; partition `u22`; node01; 2 tasks; 16 GiB RAM; 01:00:00 walltime; 0 GPUs; 0 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:13:16+05:30
+
+- Exit status: 0; Slurm job ID `13111`.
+- Pre-submit queue was empty and home storage remained 36/50 GiB used.
+
+## 2026-07-11T21:13:29+05:30 - monitor environment setup job 13111
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue` and `sacct` for job 13111 plus bounded stdout/stderr and environment-verification inspection after terminal state.
+- Purpose: verify exit status, node, elapsed resources, locked Python environment, and explicit failure context before any model or dataset job.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.
+
+### Result - 2026-07-11T21:15:42+05:30
+
+- Slurm state: `COMPLETED`, exit code `0:0`, node01, elapsed 00:02:04, MaxRSS 6,830.50 MiB.
+- Installed locked runtime: Python 3.12.13, Torch 2.13.0+cu126, Transformers 5.13.0, TRL 1.8.0, PEFT 0.19.1, Datasets 5.0.0, and all other `uv.lock` packages.
+- GPU allocation and accounted GPU-hours: 0.
+- The verification file is node-local and not directly visible on the login host; successful job exit proves the script completed the verification command. The next node01 job must still check the runtime before use.

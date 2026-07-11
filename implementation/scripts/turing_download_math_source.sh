@@ -13,6 +13,7 @@ CONFIG="${CONFIG:?CONFIG is required}"
 OUTPUT_DIR="${OUTPUT_DIR:?OUTPUT_DIR is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
+RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
 export CONFIG OUTPUT_DIR
 
 module load u22/cuda/12.4
@@ -21,14 +22,18 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
   echo "ERROR: /scratch is not writable; refusing home cache fallback" >&2
   exit 1
 fi
+if [[ "$RUNTIME_ROOT" != /scratch/* || "$OUTPUT_DIR" != /scratch/* ]]; then
+  echo "ERROR: RUNTIME_ROOT and OUTPUT_DIR must use node-local /scratch" >&2
+  exit 1
+fi
 if [[ -e "$OUTPUT_DIR" ]] && [[ -n "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   echo "ERROR: refusing non-empty MATH source output directory: $OUTPUT_DIR" >&2
   exit 1
 fi
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR" "$OUTPUT_DIR"
-export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
-export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
+export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export HF_DATASETS_CACHE="$SCRATCH_DIR/hf_datasets"
 export TRANSFORMERS_CACHE="$SCRATCH_DIR/hf_cache"
@@ -37,8 +42,10 @@ export UV_CONCURRENT_BUILDS=1
 export UV_CONCURRENT_INSTALLS=1
 export UV_LINK_MODE=copy
 cd "$PROJECT_DIR"
+export PYTHONPATH="$PROJECT_DIR/src"
 
-uv run --no-project --with 'datasets==5.0.0' --with 'pyyaml==6.0.3' python - <<'PY'
+uv run --frozen --no-sync python -m text_feedback_dpo.cli validate-paper-config --config "$CONFIG"
+uv run --frozen --no-sync python - <<'PY'
 import json
 import os
 from pathlib import Path
