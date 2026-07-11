@@ -16,6 +16,7 @@ MATH_SUBJECTS = (
     "prealgebra",
     "precalculus",
 )
+_MATH_SOURCE_ERRATA = {("number_theory", "train", 661): "0", ("number_theory", "train", 663): "0"}
 
 
 def extract_math_boxed_answer(solution: str) -> tuple[str, str]:
@@ -23,33 +24,28 @@ def extract_math_boxed_answer(solution: str) -> tuple[str, str]:
 
     text = str(solution)
     marker = "\\boxed"
-    start = text.rfind(marker)
-    if start < 0:
+    starts = [match.start() for match in re.finditer(re.escape(marker), text)]
+    if not starts:
         raise ValueError("MATH solution has no boxed final answer")
+    start = starts[-1]
     index = start + len(marker)
     if index >= len(text) or text[index] != "{":
         tail = text[index:].lstrip()
-        end = len(tail)
-        for delimiter in ("$", "\n"):
-            candidate = tail.find(delimiter)
-            if candidate >= 0:
-                end = min(end, candidate)
-        answer = tail[:end].strip().rstrip(".,;:")
-        if not answer:
-            raise ValueError("MATH solution has an empty unbraced boxed final answer")
-        return answer, "last_unbraced_boxed"
+        if not tail or "$" not in tail:
+            raise ValueError("MATH solution has malformed unbraced boxed final answer")
+        answer = tail[:tail.index("$")].strip().rstrip(".,;:")
+        if not answer or answer.startswith("{"):
+            raise ValueError("MATH solution has an empty boxed final answer")
+        return answer, "last_unbraced_boxed_math_delimited"
     index += 1
     depth = 1
     for end in range(index, len(text)):
-        character = text[end]
-        if character == "{":
-            depth += 1
-        elif character == "}":
+        if text[end] == "{": depth += 1
+        elif text[end] == "}":
             depth -= 1
             if depth == 0:
                 answer = text[index:end].strip()
-                if not answer:
-                    raise ValueError("MATH solution has an empty boxed final answer")
+                if not answer: raise ValueError("MATH solution has an empty boxed final answer")
                 return answer, "last_balanced_boxed"
     raise ValueError("MATH solution has an unbalanced boxed final answer")
 
@@ -102,7 +98,13 @@ def convert_math_row(
         raise ValueError(
             f"MATH {subject}:{source_split}:{index} declares mismatched subject {declared_subject!r}"
         )
-    gold_answer, extraction_method = extract_math_boxed_answer(solution)
+    try:
+        gold_answer, extraction_method = extract_math_boxed_answer(solution)
+    except ValueError as exc:
+        gold_answer = _MATH_SOURCE_ERRATA.get((subject, source_split, index))
+        if gold_answer is None or "empty boxed" not in str(exc):
+            raise
+        extraction_method = "manual_source_erratum"
     return {
         "id": f"math-{subject}-{source_split}-{index}",
         "domain": "math",

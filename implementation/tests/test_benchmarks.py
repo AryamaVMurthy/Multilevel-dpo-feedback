@@ -41,7 +41,22 @@ class BenchmarkConversionTest(unittest.TestCase):
             subject="algebra", source_split="train", index=888,
         )
         self.assertEqual(row["gold_answer"], "2")
-        self.assertEqual(row["gold_answer_extraction"]["method"], "last_unbraced_boxed")
+        self.assertEqual(row["gold_answer_extraction"]["method"], "last_unbraced_boxed_math_delimited")
+
+    def test_math_conversion_rejects_generic_empty_trailing_box(self):
+        with self.assertRaisesRegex(ValueError, "empty boxed"):
+            convert_math_row(
+            {"problem": "Find x.", "solution": "Thus \\boxed{7}, then \\boxed{}.", "level": "Level 4", "type": "Number Theory"},
+            subject="number_theory", source_split="train", index=700,
+            )
+
+    def test_math_conversion_uses_only_the_reviewed_source_erratum(self):
+        row = convert_math_row(
+            {"problem": "Official erratum.", "solution": "Answer: \\boxed{}", "level": "Level 4", "type": "Number Theory"},
+            subject="number_theory", source_split="train", index=661,
+        )
+        self.assertEqual(row["gold_answer"], "0")
+        self.assertEqual(row["gold_answer_extraction"]["method"], "manual_source_erratum")
 
     def test_math_conversion_accepts_the_official_level_and_subject_serialization(self):
         row = convert_math_row(
