@@ -839,24 +839,33 @@ def run_build_preferences(
 
 def _paper_candidates(config: Any, method: str) -> list[Any]:
     if method in {"standard_dpo", "multilevel_dpo", "matched_dpo"}:
-        return build_dpo_candidates(
-            learning_rates=config.dpo_search.learning_rates,
-            betas=config.dpo_search.betas,
-            weight_decay=config.optimizer.weight_decay,
-            warmup_fraction=config.optimizer.warmup_fraction,
-            scheduler=config.optimizer.scheduler,
-            loss_type=config.dpo_search.loss_type,
-        )
+        return [
+            candidate
+            for weight_decay in config.dpo_search.weight_decays
+            for warmup_fraction in config.dpo_search.warmup_fractions
+            for scheduler in config.dpo_search.schedulers
+            for candidate in build_dpo_candidates(
+                learning_rates=config.dpo_search.learning_rates,
+                betas=config.dpo_search.betas,
+                weight_decay=weight_decay,
+                warmup_fraction=warmup_fraction,
+                scheduler=scheduler,
+                loss_type=config.dpo_search.loss_type,
+            )
+        ]
     if method == "ld_dpo":
         return [
             candidate
             for alpha in config.dpo_search.ld_alpha_values
+            for weight_decay in config.dpo_search.weight_decays
+            for warmup_fraction in config.dpo_search.warmup_fractions
+            for scheduler in config.dpo_search.schedulers
             for candidate in build_dpo_candidates(
                 learning_rates=config.dpo_search.learning_rates,
                 betas=config.dpo_search.betas,
-                weight_decay=config.optimizer.weight_decay,
-                warmup_fraction=config.optimizer.warmup_fraction,
-                scheduler=config.optimizer.scheduler,
+                weight_decay=weight_decay,
+                warmup_fraction=warmup_fraction,
+                scheduler=scheduler,
                 loss_type="sigmoid",
                 ld_alpha=alpha,
             )
