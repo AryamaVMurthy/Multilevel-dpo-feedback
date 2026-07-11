@@ -68,7 +68,16 @@ def materialize_preflight_subset(
 
 
 def _normalized_question(value: object) -> str:
-    text = re.sub(r"[^a-z0-9]+", " ", str(value).lower())
+    text = str(value).lower()
+    for symbol, token in (
+        ("\\le", " less_equal "), ("<=", " less_equal "),
+        ("\\ge", " greater_equal "), (">=", " greater_equal "),
+        ("!=", " not_equal "), ("<", " less_than "), (">", " greater_than "),
+        ("+", " plus "), ("-", " minus "), ("*", " times "),
+        ("/", " divided_by "), ("^", " power "),
+    ):
+        text = text.replace(symbol, token)
+    text = re.sub(r"[^a-z0-9_]+", " ", text)
     return " ".join(text.split())
 
 

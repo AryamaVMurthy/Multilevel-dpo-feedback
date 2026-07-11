@@ -122,6 +122,13 @@ class DatasetManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "normalized question"):
             validate_disjoint_splits(rows)
 
+    def test_math_normalization_preserves_relational_operator_distinctions(self):
+        rows = [
+            {"source_key": "train:1", "problem": "Find x when k > 0.", "dataset_role": "train"},
+            {"source_key": "train:2", "problem": "Find x when k < 0.", "dataset_role": "train"},
+        ]
+        validate_disjoint_splits(rows)
+
     def test_unexpected_source_key_duplicate_fails(self):
         rows = [
             {"source_key": "train:1", "question": "A", "dataset_role": "train"},
