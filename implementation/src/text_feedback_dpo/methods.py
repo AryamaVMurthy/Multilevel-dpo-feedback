@@ -258,6 +258,9 @@ def build_native_iterative_guidance_pairs(
             if bool(result.get("correct")):
                 first_correct_attempt[example_id] = attempt
                 success_by_attempt[str(attempt)] = success_by_attempt.get(str(attempt), 0) + 1
+                response_sft.append(
+                    _format_sft(example=example, prompt=base_prompt, completion=response)
+                )
                 if failed:
                     for failed_attempt, failed_response, failed_result in failed:
                         pairs.append(
@@ -275,9 +278,6 @@ def build_native_iterative_guidance_pairs(
                                 },
                             )
                         )
-                    response_sft.append(
-                        _format_sft(example=example, prompt=base_prompt, completion=response)
-                    )
                 break
 
             failed.append((attempt, response, result))

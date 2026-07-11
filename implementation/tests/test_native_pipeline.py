@@ -25,6 +25,23 @@ RIGHT = "The result is 4."
 
 
 class NativePipelineTest(unittest.TestCase):
+    def test_first_attempt_correct_response_is_retained_for_response_sft(self):
+        result = build_native_iterative_guidance_pairs(
+            examples=[{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}],
+            base_prompt_builder=lambda example: example["problem"],
+            retry_prompt_builder=lambda base, guidance: f"{base}\n{guidance}",
+            student_generate=lambda _prompt: RIGHT,
+            evaluate=lambda _example, _response: {"correct": True, "answer": "4"},
+            teacher_guidance=lambda *_args: "unused",
+            guidance_guard=lambda *_args: {"safe": True},
+            max_guidance_steps=1,
+            max_guidance_regenerations=0,
+        )
+
+        self.assertEqual(len(result["response_sft"]), 1)
+        self.assertEqual(result["response_sft"][0]["completion"], RIGHT)
+        self.assertEqual(result["pairs"], [])
+
     def test_guidance_critic_uses_an_exact_token_contract(self):
         self.assertTrue(parse_guidance_critic_output("VALID")["valid"])
         self.assertFalse(parse_guidance_critic_output("INVALID")["valid"])

@@ -778,6 +778,8 @@ def run_build_preferences(
     output_dir: Path,
     seed: int,
 ) -> dict[str, Any]:
+    if output_dir.exists():
+        raise FileExistsError(f"refusing existing preference output directory: {output_dir}")
     records = read_jsonl_zst(collection_path)
     attempts: list[dict[str, Any]] = []
     seen_groups: set[str] = set()
@@ -806,27 +808,29 @@ def run_build_preferences(
             evidence=example.get("evidence"),
         ),
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for method in ("standard", "multilevel", "matched"):
+    output_dir.mkdir(parents=True)
+    artifact_names = ("standard", "multilevel", "matched", "response_sft", "unresolved")
+    artifacts: dict[str, dict[str, Any]] = {}
+    for method in artifact_names:
         path = output_dir / f"{method}.jsonl"
-        if path.exists():
-            raise FileExistsError(f"refusing to overwrite preference artifact: {path}")
         write_jsonl(path, datasets[method])
-    (output_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "schema": "paper-preference-v1",
-                "seed": seed,
-                "source_collection": str(collection_path),
-                "source_dataset": str(dataset_path),
-                "metrics": datasets["metrics"],
-                "methods": {method: len(datasets[method]) for method in ("standard", "multilevel", "matched")},
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+        artifacts[method] = {
+            "path": path.name,
+            "rows": len(datasets[method]),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    write_json_atomic(
+        output_dir / "manifest.json",
+        {
+            "schema": "paper-preference-v2",
+            "seed": seed,
+            "source_collection": str(collection_path),
+            "source_collection_sha256": hashlib.sha256(collection_path.read_bytes()).hexdigest(),
+            "source_dataset": str(dataset_path),
+            "source_dataset_sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
+            "metrics": datasets["metrics"],
+            "artifacts": artifacts,
+        },
     )
     return datasets["metrics"]
 

@@ -381,3 +381,15 @@ No actions have been logged under this control policy yet.
 - Inputs are bound to the passed dataset audit and offline model-cache manifest. Validation and test roles are not read.
 - Output: `/home/aryama.murthy/tfdpo-qwen3-artifacts/math/decoding/screening-v1` plus sibling GPU telemetry; any existing output is a hard error.
 - Requested resources: account `priyesh.shukla`, u22, node01, 1 GPU, 16 CPUs, 64 GiB, `03:00:00`; 3.0 requested GPU-hours.
+
+### Submission result - 2026-07-11T21:49:02+05:30
+
+- Standalone clone fast-forwarded cleanly to `71985c480a77ca073f4ebe3f3139ab9593228d42`; queue was empty, home usage remained 36/50 GiB, and the screening output did not exist.
+- Slurm job ID: `13120`.
+
+## 2026-07-11T21:49:02+05:30 - monitor MATH decoding screening job 13120
+
+- Approval reference: same end-to-end request and active 2026-07-11 god switch.
+- Bounded command set: read-only BatchMode SSH polling of `squeue`, `sacct`, bounded stdout/stderr, and compact manifest/selection files only after terminal state.
+- Purpose: capture per-profile progress, failures, resource use, and the exact three-profile promotion without reading validation or test artifacts.
+- Requested resources: monitoring only; no new allocation; 0 additional requested GPU-hours.

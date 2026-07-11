@@ -122,6 +122,8 @@ def build_preference_datasets(
     groups = _attempt_groups(attempts)
     standard: list[dict[str, Any]] = []
     multilevel: list[dict[str, Any]] = []
+    response_sft: list[dict[str, Any]] = []
+    unresolved_rows: list[dict[str, Any]] = []
     unresolved = 0
     successful_groups = 0
     for example_id, example in example_index.items():
@@ -131,17 +133,40 @@ def build_preference_datasets(
         correct = [row for row in group if bool(row["result"]["correct"])]
         if not correct:
             unresolved += 1
+            unresolved_rows.append(
+                {
+                    "group_id": example_id,
+                    "attempts": group,
+                    "reason": "no_correct_rollout_within_guidance_budget",
+                }
+            )
             continue
         chosen = min(correct, key=lambda row: int(row["attempt"]))
-        prior_wrong = [row for row in group if int(row["attempt"]) < int(chosen["attempt"]) and not row["result"]["correct"]]
-        if not prior_wrong:
-            continue
-        successful_groups += 1
         prompt = base_prompt_builder(example)
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError(f"base prompt builder returned empty prompt for {example_id}")
         if "teacher guidance" in prompt.casefold():
             raise ValueError(f"base prompt for {example_id} contains teacher guidance")
+        chosen_response = str(chosen["response"])
+        response_sft.append(
+            {
+                "id": f"{example_id}::first-correct",
+                "group_id": example_id,
+                "prompt": prompt,
+                "completion": chosen_response,
+                "metadata": {
+                    "first_correct_attempt": int(chosen["attempt"]),
+                    "chosen_result": dict(chosen["result"]),
+                    "prompt_hash": _stable_hash(prompt),
+                    "completion_hash": _stable_hash(chosen_response),
+                    "privileged_prompt": False,
+                },
+            }
+        )
+        prior_wrong = [row for row in group if int(row["attempt"]) < int(chosen["attempt"]) and not row["result"]["correct"]]
+        if not prior_wrong:
+            continue
+        successful_groups += 1
         all_pairs = [_pair(example=example, prompt=prompt, failed=row, chosen=chosen, matched=False) for row in prior_wrong]
         multilevel.extend(all_pairs)
         first_attempt = next((row for row in prior_wrong if int(row["attempt"]) == 0), None)
@@ -155,6 +180,8 @@ def build_preference_datasets(
         "standard": standard,
         "multilevel": multilevel,
         "matched": matched,
+        "response_sft": response_sft,
+        "unresolved": unresolved_rows,
         "metrics": {
             "groups_total": len(example_index),
             "successful_groups": successful_groups,
@@ -162,6 +189,7 @@ def build_preference_datasets(
             "standard_pairs": len(standard),
             "multilevel_pairs": len(multilevel),
             "matched_pairs": len(matched),
+            "response_sft_rows": len(response_sft),
             "matched_attempt_distribution": {
                 str(attempt): sum(1 for row in matched if row["metadata"]["failed_attempt"] == attempt)
                 for attempt in sorted({int(row["metadata"]["failed_attempt"]) for row in matched})
