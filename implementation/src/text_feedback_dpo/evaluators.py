@@ -282,11 +282,16 @@ def make_model_evaluator(
         parsed["deterministic"] = deterministic
         parsed["deterministic_correct"] = bool(deterministic["correct"])
         parsed["requires_model_judgment"] = requires_model_judgment
+        parsed["evaluator_disagreement"] = (
+            not requires_model_judgment and model_correct != bool(deterministic["correct"])
+        )
         parsed["confidence"] = float(deterministic["confidence"])
         parsed["confidence_source"] = "deterministic_checker"
         # Deterministic checks act as a consistency gate for clear cases. Ambiguous cases remain
         # under the evaluator model's judgment and are visible in the result for auditability.
-        parsed["correct"] = model_correct if requires_model_judgment else model_correct and bool(deterministic["correct"])
+        parsed["correct"] = (
+            model_correct if requires_model_judgment else bool(deterministic["correct"])
+        )
         parsed["raw_evaluator_output"] = raw_outputs[-1]
         parsed["raw_evaluator_outputs"] = raw_outputs
         parsed["evaluator_parse_failures"] = parse_failures

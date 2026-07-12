@@ -327,6 +327,23 @@ class NativePipelineTest(unittest.TestCase):
         self.assertTrue(result["deterministic"]["numeric_exact_match"])
         self.assertEqual(result["deterministic"]["evaluator_source"], "deterministic_numeric")
 
+    def test_clear_deterministic_correctness_overrides_conflicting_model_verdict(self):
+        evaluator = make_model_evaluator(
+            generate=lambda *_args, **_kwargs: (
+                "<verdict>WRONG</verdict>\n<evaluated_answer>4</evaluated_answer>"
+            ),
+            generation_kwargs={},
+        )
+        result = evaluator(
+            {"domain": "math", "problem": "What is 2 + 2?", "gold_answer": "4"},
+            "FINAL: \\boxed{4}",
+        )
+
+        self.assertTrue(result["correct"])
+        self.assertFalse(result["model_correct"])
+        self.assertTrue(result["deterministic_correct"])
+        self.assertTrue(result["evaluator_disagreement"])
+
     def test_model_evaluator_repairs_malformed_serialization_and_preserves_every_attempt(self):
         outputs = iter(
             [
