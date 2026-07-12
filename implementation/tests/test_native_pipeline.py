@@ -1,5 +1,6 @@
 import unittest
 
+from text_feedback_dpo import evaluators
 from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
     build_evaluator_prompt,
@@ -26,6 +27,30 @@ RIGHT = "The result is 4."
 
 
 class NativePipelineTest(unittest.TestCase):
+    def test_student_feedback_output_accepts_one_multiline_tagged_block(self):
+        parsed = evaluators.parse_student_feedback_output(
+            "<student_feedback>\nCheck whether the selected relation applies before substituting values.\n"
+            "Keep the verification independent of the target value.\n</student_feedback>"
+        )
+        self.assertEqual(
+            parsed,
+            "Check whether the selected relation applies before substituting values.\n"
+            "Keep the verification independent of the target value.",
+        )
+
+    def test_student_feedback_output_rejects_malformed_blocks(self):
+        invalid_outputs = (
+            "plain feedback",
+            "<student_feedback></student_feedback>",
+            "prefix<student_feedback>Check the relation.</student_feedback>",
+            "<student_feedback>Check.</student_feedback>suffix",
+            "<student_feedback>One.</student_feedback><student_feedback>Two.</student_feedback>",
+            "<student_feedback><student_feedback>Nested.</student_feedback></student_feedback>",
+        )
+        for raw in invalid_outputs:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                evaluators.parse_student_feedback_output(raw)
+
     def test_first_attempt_correct_response_is_retained_for_response_sft(self):
         result = build_native_iterative_guidance_pairs(
             examples=[{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}],
@@ -206,11 +231,12 @@ class NativePipelineTest(unittest.TestCase):
             rollout=WRONG,
             result={"correct": False, "reason": "arithmetic error"},
             domain="math",
+            feedback_policy="hint_only",
         )
         self.assertIn("Gold answer (teacher-only):\n4", prompt)
-        self.assertIn("never reveal", prompt.lower())
-        self.assertIn("short, subtle hint", prompt.lower())
-        self.assertIn("earliest reasoning error", prompt.lower())
+        self.assertIn("must not reveal", prompt.lower())
+        self.assertIn("slight directional hint", prompt.lower())
+        self.assertIn("understand the mathematical issue", prompt.lower())
         self.assertNotIn("do not use digits", prompt.lower())
         self.assertNotIn("proper nouns", prompt.lower())
         self.assertIn(WRONG, prompt)
@@ -222,6 +248,7 @@ class NativePipelineTest(unittest.TestCase):
             rollout=WRONG,
             result={"correct": False},
             domain="math",
+            feedback_policy="hint_only",
             prior_reviews=[
                 {
                     "guidance": "The answer is 4.",
@@ -234,7 +261,7 @@ class NativePipelineTest(unittest.TestCase):
 
         self.assertIn("Previous rejected hint", prompt)
         self.assertIn("answer_disclosure", prompt)
-        self.assertIn("write a different hint", prompt.lower())
+        self.assertIn("write different standalone feedback", prompt.lower())
 
     def test_evaluator_output_uses_tagged_verdict_and_evaluated_answer(self):
         parsed = parse_evaluator_output(

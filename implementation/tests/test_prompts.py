@@ -1,6 +1,8 @@
 import unittest
 
 from text_feedback_dpo.prompts import (
+    build_native_student_prompt,
+    build_privileged_guidance_prompt,
     build_student_prompt,
     build_teacher_prompt,
     trajectory_format_instructions,
@@ -8,6 +10,55 @@ from text_feedback_dpo.prompts import (
 
 
 class PromptTest(unittest.TestCase):
+    def test_feedback_policies_are_distinct_answer_free_and_thread_agnostic(self):
+        prompts = {
+            policy: build_privileged_guidance_prompt(
+                problem="What is 2 + 2?",
+                gold_answer="4",
+                rollout="The answer is 5.",
+                result={"correct": False},
+                domain="math",
+                feedback_policy=policy,
+            )
+            for policy in ("error_only", "hint_only", "error_and_hint")
+        }
+
+        self.assertIn("identify the general error", prompts["error_only"].lower())
+        self.assertIn("do not give a next-step hint", prompts["error_only"].lower())
+        self.assertIn("one slight directional hint", prompts["hint_only"].lower())
+        self.assertIn("do not diagnose", prompts["hint_only"].lower())
+        self.assertIn("identify the general error", prompts["error_and_hint"].lower())
+        self.assertIn("one slight directional hint", prompts["error_and_hint"].lower())
+        for prompt in prompts.values():
+            self.assertIn("must not reveal", prompt.lower())
+            self.assertIn("equivalent expression", prompt.lower())
+            self.assertIn("decisive intermediate", prompt.lower())
+            self.assertIn("standalone", prompt.lower())
+            self.assertIn("not refer to a previous turn", prompt.lower())
+            self.assertIn("<student_feedback>", prompt)
+
+    def test_feedback_policy_must_be_explicit_and_known(self):
+        with self.assertRaisesRegex(ValueError, "feedback_policy"):
+            build_privileged_guidance_prompt(
+                problem="p",
+                gold_answer="g",
+                rollout="r",
+                result={"correct": False},
+                domain="math",
+                feedback_policy="unknown",
+            )
+
+    def test_retry_prompt_presents_feedback_as_general_advice(self):
+        prompt = build_native_student_prompt(
+            problem="What is 2 + 2?",
+            domain="math",
+            guidance="Check the operation used to combine the quantities.",
+        )
+        self.assertIn("General problem-solving advice", prompt)
+        self.assertNotIn("earlier attempt", prompt.lower())
+        self.assertNotIn("teacher", prompt.lower())
+        self.assertNotIn("retry", prompt.lower())
+
     def test_math_student_prompt_requires_structure_and_math_verification(self):
         prompt = build_student_prompt("What is 2 + 2?", "math")
         self.assertIn("<plan>", prompt)

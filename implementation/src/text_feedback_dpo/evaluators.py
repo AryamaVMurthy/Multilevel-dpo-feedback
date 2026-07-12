@@ -65,6 +65,18 @@ def parse_evaluator_output(raw: str) -> dict[str, Any]:
     return {"correct": verdict == "CORRECT", "answer": answer, "serialization": "tagged_text_v1"}
 
 
+def parse_student_feedback_output(raw: str) -> str:
+    match = re.fullmatch(r"\s*<student_feedback>(.*?)</student_feedback>\s*", raw, flags=re.DOTALL)
+    if match is None:
+        raise ValueError("teacher output must contain exactly one student_feedback block")
+    feedback = match.group(1).strip()
+    if not feedback:
+        raise ValueError("student_feedback must be non-empty")
+    if "<student_feedback>" in feedback or "</student_feedback>" in feedback:
+        raise ValueError("student_feedback must not contain nested or duplicate protocol tags")
+    return feedback
+
+
 def parse_guidance_guard_output(raw: str) -> dict[str, Any]:
     token = raw.strip().upper()
     if token in {"SAFE", "UNSAFE"}:

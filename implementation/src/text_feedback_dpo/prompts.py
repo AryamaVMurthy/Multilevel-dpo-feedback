@@ -62,8 +62,7 @@ def build_native_student_prompt(
     guidance_text = ""
     if guidance:
         guidance_text = (
-            "\nA teacher provided this guidance after an earlier attempt. "
-            "Use it to reconsider the problem, but solve it yourself:\n"
+            "\nGeneral problem-solving advice:\n"
             f"{guidance}\n"
         )
     if domain == "math":
@@ -92,8 +91,27 @@ def build_privileged_guidance_prompt(
     rollout: str,
     result: dict,
     domain: str,
+    feedback_policy: str,
     prior_reviews: list[dict] | None = None,
 ) -> str:
+    policy_instructions = {
+        "error_only": (
+            "Identify the general error in the approach or inference. Explain why that approach is invalid, "
+            "but do not give a next-step hint or supply the correction."
+        ),
+        "hint_only": (
+            "Give one slight directional hint about a check or relation that would help. Do not diagnose the "
+            "specific attempted approach and do not supply solution steps."
+        ),
+        "error_and_hint": (
+            "Briefly identify the general error in the approach or inference, then give one slight directional "
+            "hint about the next check."
+        ),
+    }
+    if feedback_policy not in policy_instructions:
+        raise ValueError(
+            "feedback_policy must be error_only, hint_only, or error_and_hint"
+        )
     review_text = ""
     if prior_reviews:
         latest = prior_reviews[-1]
@@ -109,14 +127,22 @@ Review of that hint:
 - Directionally correct and relevant: {critic.get("valid")}
 - Answer-leakage safe: {guard.get("safe")}
 
-Write a different hint that addresses this review.
+Write different standalone feedback that addresses this review.
 """
     return f"""You are a privileged teacher helping a smaller model improve its next attempt.
 
-You may inspect the gold answer to locate the earliest reasoning error. Return one short, subtle hint
-that points toward the relevant relation, assumption, or verification. The hint must be directionally
-correct, but it must never reveal or imply the answer and must not solve the problem for the student.
-Use one natural sentence of at most twenty-five words.
+You may inspect the gold answer only to understand the mathematical issue. The student-facing text
+must not reveal the answer, an equivalent expression, a decisive intermediate value, or a complete
+solution. It must be standalone general advice: do not refer to a previous turn, chat thread, earlier
+response, retry, teacher, or conversation. Use impersonal wording that remains meaningful when paired
+only with the original problem.
+
+Feedback policy: {feedback_policy}
+{policy_instructions[feedback_policy]}
+
+Return concise feedback of at most forty words. Do not copy phrases or numerical results from the gold
+solution. The answer-leakage prohibition applies even when revealing the answer would make the feedback
+clearer or more helpful.
 
 Domain: {domain}
 Problem:
@@ -132,7 +158,10 @@ Earlier evaluator result:
 {json.dumps(result, sort_keys=True)}
 {review_text}
 
-Return only the short guidance message.
+Return exactly one block and no surrounding text:
+<student_feedback>
+standalone answer-free feedback
+</student_feedback>
 """
 
 
