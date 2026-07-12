@@ -297,12 +297,26 @@ def evaluate_math_answer(prediction: str, gold_answer: str) -> dict[str, Any]:
         correct = bool(sympy.simplify(left - right) == 0)
     except (TypeError, ValueError):
         return {**base, "requires_model_judgment": True, "confidence": 0.5, "error_code": "symbolic_comparison_failure"}
+    try:
+        normalized_prediction = str(left)
+        normalized_gold = str(right)
+    except (TypeError, ValueError) as exc:
+        # A malformed rollout can create an enormous symbolic integer. Python may refuse to
+        # stringify it under its safety limit; preserve the example as an explicit evaluator
+        # uncertainty instead of aborting the entire collection shard.
+        return {
+            **base,
+            "requires_model_judgment": True,
+            "confidence": 0.5,
+            "error_code": "symbolic_normalization_failure",
+            "normalization_error": str(exc),
+        }
     return {
         **base,
         "correct": correct,
         "confidence": 1.0 if correct else 0.0,
-        "normalized_prediction": str(left),
-        "normalized_gold": str(right),
+        "normalized_prediction": normalized_prediction,
+        "normalized_gold": normalized_gold,
         "unit": prediction_unit,
     }
 

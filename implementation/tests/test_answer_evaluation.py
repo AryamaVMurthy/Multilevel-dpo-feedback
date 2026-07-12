@@ -83,6 +83,14 @@ class AnswerEvaluationTest(unittest.TestCase):
         self.assertFalse(result["requires_model_judgment"], result)
         self.assertIsNone(result["error_code"])
 
+    def test_math_routes_huge_symbolic_normalization_to_explicit_model_judgment(self):
+        result = evaluate_math_answer("2^{20000}", "0")
+
+        self.assertFalse(result["correct"], result)
+        self.assertTrue(result["requires_model_judgment"], result)
+        self.assertEqual(result["error_code"], "symbolic_normalization_failure")
+        self.assertIn("digits", result["normalization_error"])
+
     def test_math_accepts_set_interval_and_unit_equivalence(self):
         cases = (
             ("\\{2, \\frac{1}{2}\\}", "{0.5, 2}"),
