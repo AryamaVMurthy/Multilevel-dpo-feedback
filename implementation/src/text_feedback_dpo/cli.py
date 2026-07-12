@@ -16,6 +16,7 @@ from text_feedback_dpo.evaluators import (
     ModelOutputParseError,
     make_model_evaluator,
     make_model_guidance_guard,
+    parse_student_feedback_output,
 )
 from text_feedback_dpo.evaluation_audit import (
     audit_checkpoint_evaluation,
@@ -479,10 +480,7 @@ def run_native_pipeline(
         )
 
     def retry_prompt_builder(base_prompt: str, guidance: str) -> str:
-        return (
-            f"{base_prompt}\n\nTeacher guidance for reconsideration:\n{guidance}\n"
-            "Solve the original problem again and provide your best answer."
-        )
+        return f"{base_prompt}\n\nGeneral problem-solving advice:\n{guidance}\n"
 
     def student_generate(prompt: str) -> str:
         start = time.monotonic_ns()
@@ -510,10 +508,19 @@ def run_native_pipeline(
             rollout=rollout,
             result=result,
             domain=str(example["domain"]),
+            feedback_policy=str(config["feedback_policy"]),
             prior_reviews=prior_reviews,
         )
         start = time.monotonic_ns()
-        guidance = provider.generate("teacher", prompt, **dict(config["teacher_generation"]))
+        raw_teacher_output = provider.generate("teacher", prompt, **dict(config["teacher_generation"]))
+        try:
+            guidance = parse_student_feedback_output(raw_teacher_output)
+        except ValueError as exc:
+            raise ModelOutputParseError(
+                role="teacher",
+                raw=raw_teacher_output,
+                message=str(exc),
+            ) from exc
         generation_events.append(
             {
                 "role": "teacher",
@@ -531,6 +538,8 @@ def run_native_pipeline(
                 "regeneration": regeneration,
                 "prompt": prompt,
                 "guidance": guidance,
+                "raw_teacher_output": raw_teacher_output,
+                "feedback_policy": config["feedback_policy"],
                 "teacher_model": config["teacher_model"],
             }
         )
@@ -918,14 +927,24 @@ def _paper_candidates(config: Any, method: str) -> list[Any]:
                 ld_alpha=alpha,
             )
         ]
-    if method in {"grpo", "dapo_sensitivity"}:
+    if method in {"grpo", "dapo"}:
+        is_dapo = method == "dapo"
         return build_grpo_candidates(
             learning_rates=config.grpo_search.learning_rates,
             kl_betas=config.grpo_search.kl_betas,
-            epsilon=config.grpo_search.epsilon,
+            epsilon_low=config.grpo_search.epsilon_low,
+            epsilon_high=(
+                config.grpo_search.dapo_epsilon_high
+                if is_dapo
+                else config.grpo_search.epsilon_high
+            ),
             num_iterations=config.grpo_search.num_iterations,
             num_generations=config.grpo_search.num_generations,
-            loss_type=config.grpo_search.loss_type,
+            loss_type=(
+                config.grpo_search.dapo_loss_type
+                if is_dapo
+                else config.grpo_search.loss_type
+            ),
         )
     raise ValueError(f"unsupported paper method: {method}")
 
@@ -984,7 +1003,8 @@ def _candidate_from_ledger(ledger: dict[str, Any], candidate_id: str) -> Any:
     return GrpoCandidate(
         learning_rate=float(payload["learning_rate"]),
         kl_beta=float(payload["kl_beta"]),
-        epsilon=float(payload["epsilon"]),
+        epsilon_low=float(payload["epsilon_low"]),
+        epsilon_high=float(payload["epsilon_high"]),
         num_iterations=int(payload["num_iterations"]),
         num_generations=int(payload["num_generations"]),
         loss_type=str(payload["loss_type"]),
@@ -1416,7 +1436,11 @@ def main() -> None:
     preferences.add_argument("--seed", required=True, type=int)
     init_ledger = subparsers.add_parser("init-search-ledger")
     init_ledger.add_argument("--config", required=True, type=Path)
-    init_ledger.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo", "grpo"])
+    init_ledger.add_argument(
+        "--method",
+        required=True,
+        choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo", "grpo", "dapo"],
+    )
     init_ledger.add_argument("--dataset-manifest-hash", required=True)
     init_ledger.add_argument("--output", required=True, type=Path)
     promote = subparsers.add_parser("promote-search-stage")
@@ -1434,7 +1458,11 @@ def main() -> None:
     baseline_freeze.add_argument("--output", required=True, type=Path)
     tune = subparsers.add_parser("tune-paper")
     tune.add_argument("--config", required=True, type=Path)
-    tune.add_argument("--method", required=True, choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo", "grpo"])
+    tune.add_argument(
+        "--method",
+        required=True,
+        choices=["standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo", "grpo", "dapo"],
+    )
     tune.add_argument("--candidate-id", required=True)
     tune.add_argument("--stage", required=True, type=int)
     tune.add_argument("--data", required=True, type=Path)
@@ -1454,7 +1482,7 @@ def main() -> None:
             "matched_dpo",
             "ld_dpo",
             "grpo",
-            "dapo_sensitivity",
+            "dapo",
         ],
     )
     paper_train.add_argument("--seed", required=True, type=int)

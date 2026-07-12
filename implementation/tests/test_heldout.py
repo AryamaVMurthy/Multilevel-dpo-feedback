@@ -214,7 +214,7 @@ class HeldoutTest(unittest.TestCase):
             )
             freeze_path = root / "baseline-freeze.json"
             freeze = run_freeze_baseline(
-                config_path=Path("configs/paper/gsm8k.yaml"),
+                config_path=Path("configs/paper/math.yaml"),
                 dataset_manifest_path=manifest,
                 source_commit="a" * 40,
                 output_path=freeze_path,
@@ -232,7 +232,7 @@ class HeldoutTest(unittest.TestCase):
                 return_value={"common": {"final_answer_accuracy": 1.0}},
             ) as evaluate:
                 result = run_evaluate_paper(
-                    config_path=Path("configs/paper/gsm8k.yaml"),
+                    config_path=Path("configs/paper/math.yaml"),
                     checkpoint=None,
                     checkpoint_kind="base",
                     data_path=data,

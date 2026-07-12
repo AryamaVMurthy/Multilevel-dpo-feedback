@@ -1,9 +1,10 @@
-run_id: qwen35-basic-smoke
-student_model: Qwen/Qwen3.5-2B
-teacher_model: Qwen/Qwen3.5-9B
+run_id: qwen3-basic-test-fixture
+student_model: Qwen/Qwen3-4B
+teacher_model: Qwen/Qwen3-8B
 teacher_mode: stronger_model
+feedback_policy: hint_only
 max_examples: 5
-output_dir: runs/qwen35-basic-smoke
+output_dir: runs/qwen3-basic-test-fixture
 allow_missing_slurm_account_for_local: true
 
 generation:

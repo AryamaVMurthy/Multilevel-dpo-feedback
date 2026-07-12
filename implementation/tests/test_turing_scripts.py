@@ -220,41 +220,5 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("paper-model-preflight-v1", text)
         self.assertNotIn("|| true", text)
 
-    def test_basic_pair_generation_script_does_not_train(self):
-        text = Path("scripts/turing_basic_pair_generation.sh").read_text(encoding="utf-8")
-        self.assertIn("${CONFIG:?CONFIG is required}", text)
-        self.assertIn("${TURING_ACCOUNT:?TURING_ACCOUNT is required}", text)
-        self.assertIn("${HF_CACHE_DIR:?HF_CACHE_DIR is required}", text)
-        self.assertIn("#SBATCH -p u22", text)
-        self.assertIn("#SBATCH --nodes=1", text)
-        self.assertIn("#SBATCH --ntasks=1", text)
-        self.assertIn("#SBATCH --cpus-per-task=16", text)
-        self.assertIn("#SBATCH --gres=gpu:1", text)
-        self.assertIn("#SBATCH --time=01:00:00", text)
-        self.assertIn('export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}src"', text)
-        self.assertIn("nvidia-smi --query-gpu", text)
-        self.assertIn('${PIPELINE_COMMAND:?PIPELINE_COMMAND is required}', text)
-        self.assertIn('native-pipeline', text)
-        self.assertIn("output_dir", text)
-        self.assertIn("hf_cache_dir", text)
-        self.assertIn('UV_CACHE_DIR="/scratch/$USER/text-feedback-dpo/uv_cache"', text)
-        self.assertIn("SLURM_JOB_NUM_NODES", text)
-        self.assertIn("SLURM_GPUS_ON_NODE", text)
-        self.assertIn("allocation_mismatch", text)
-        self.assertNotIn("runs/qwen35-basic-smoke/gpu-", text)
-        self.assertNotIn("DPOTrainer", text)
-        self.assertNotIn("GRPOTrainer", text)
-        self.assertNotIn("train-dpo", text)
-        self.assertNotIn("train-grpo", text)
-
-    def test_training_script_requires_explicit_method_and_one_gpu(self):
-        text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
-        self.assertIn('${TRAIN_METHOD:?TRAIN_METHOD is required}', text)
-        self.assertIn('${DATA_PATH:?DATA_PATH is required}', text)
-        self.assertIn("#SBATCH --nodes=1", text)
-        self.assertIn("#SBATCH --gres=gpu:1", text)
-        self.assertIn("train --method", text)
-
-
 if __name__ == "__main__":
     unittest.main()

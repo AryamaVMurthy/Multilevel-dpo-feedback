@@ -1,91 +1,40 @@
-# Multilevel Feedback DPO Implementation
+# Implementation
 
-This folder contains the observable native-Qwen collection, preference construction,
-DPO/GRPO training, held-out evaluation, reporting, and Turing Slurm workflows. Paper
-runs are fail-fast and remain blocked until the preceding preflight and freeze gates
-pass.
+This directory contains the Qwen3 MATH-first collection, LN-DPO, GRPO/DAPO,
+evaluation, reporting, and Turing workflows.
 
-Run the basic pipeline smoke check:
+## Local verification
 
 ```bash
-cd /home/aryamavmurthy/work/SLM-Research/multilevel-feedback-dpo/implementation
-PYTHONPATH=src python3 -m text_feedback_dpo.cli basic-pipeline \
-  --examples examples/basic_pipeline/examples.jsonl \
-  --rollouts examples/basic_pipeline/rollouts.jsonl \
-  --corrections examples/basic_pipeline/corrections.jsonl \
-  --output-dir runs/basic-fixture \
-  --run-id basic-fixture
+cd implementation
+PYTHONPATH=src uv run --frozen pytest -q
+uv run --frozen ruff check .
+PYTHONPATH=src uv run --frozen python -m compileall -q src tests scripts
+find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+git diff --check
 ```
 
-Inspect:
+## Active paper configs
 
-```bash
-ls -la runs/basic-fixture
-cat runs/basic-fixture/events.jsonl
-cat runs/basic-fixture/metrics.json
-cat runs/basic-fixture/pairs.jsonl
-cat runs/basic-fixture/rejections.jsonl
-```
+- `configs/paper/math.yaml`: primary MATH Levels 4-5 study.
+- `configs/paper/searchqa8k.yaml`: secondary study, used only after MATH freezes.
+- `configs/pilots/math-feedback-*.yaml`: paired feedback-policy pilot.
 
-Open `runs/basic-fixture/report.html` in a browser for the human-readable summary.
+Paper configs pin exact Qwen3 models/revisions, disable thinking for every role,
+use BF16 LoRA without quantization, and reject generation above 8,192 tokens.
 
-Turing model-load smoke:
+## Turing
 
-```bash
-sbatch -A <account> --job-name=tfdpo-model-load \
-  --export=ALL,TURING_ACCOUNT=<account> \
-  scripts/turing_model_load_smoke.sh
-```
+Use the standalone checkout at
+`/home/aryama.murthy/multilevel-feedback-dpo-qwen3`. Keep model weights,
+environments, temporary generations, and training state on node-local scratch;
+keep only compressed final artifacts and small adapters in home.
 
-Turing tiny pair generation:
+Before submission, verify the checkout commit, config hash, dataset hash, Slurm
+account, queue, storage, and model cache. Start with one 48 GB GPU. Every real
+job must write its source commit, protocol hash, model revisions, node, GPU,
+peak memory, exit status, and artifact hashes.
 
-```bash
-sbatch -A <account> --job-name=tfdpo-basic-pairs \
-  --export=ALL,TURING_ACCOUNT=<account>,CONFIG=configs/basic_smoke.yaml \
-  scripts/turing_basic_pair_generation.sh
-```
-
-These two commands are legacy runtime smokes. They do not authorize paper training.
-
-Primary paper student generation settings:
-
-```yaml
-enable_thinking: false
-stop_after_final_answer: true
-max_new_tokens: 8192
-temperature: 0.7
-top_p: 0.8
-top_k: 20
-min_p: 0.0
-presence_penalty: 0.0  # selected later by the frozen train-only sweep
-repetition_penalty: 1.0
-```
-
-`temperature`, `top_p`, `top_k`, `min_p`, and `repetition_penalty` are passed explicitly
-to generation. `presence_penalty` is applied through the repository's tested logits
-processor for Transformers collection and through the explicit vLLM generation kwargs
-for GRPO; it is never silently mapped to a different field.
-
-MATH generation uses the frozen `qwen3-nonthinking-final-r1` contract. A tokenizer-aware
-stopping criterion recognizes one balanced `FINAL: \boxed{...}` answer, stops at its
-closing brace, and records `finish_reason=final_answer`. The 8,192-token value is an
-emergency ceiling for outputs that emit neither EOS nor a valid final marker.
-
-The paper plan applies these sampled settings only to student rollouts; every role uses
-explicit non-thinking mode. Teacher, evaluator, and guidance-guard roles use separately
-configured greedy decoding profiles. See
-`../docs/plans/2026-07-10-paper-scale-experiment-implementation.md` for
-the exact execution order, storage gates, and artifact requirements.
-
-Before any paper GPU job, stage the pinned model revisions on a specific compute node's
-local scratch and constrain subsequent GPU jobs to that same node. The CPU-only staging
-script writes `tfdpo-model-cache-manifest.json` alongside the Hugging Face cache; GPU
-wrappers reject a missing cache instead of downloading an untracked replacement.
-
-`rescore-evaluation` derives a new, hash-bound predictions artifact from immutable
-predictions and examples after a deterministic scorer repair. It preserves the original
-evaluator-result hash per row, performs no model calls, and never overwrites source
-artifacts. The audited final-r2 labels for Turing job `13053` are tracked at
-`audits/math-final-r2-job13053-labels.jsonl`.
-Run the paired CPU-only rescore and audit on Turing through
-`scripts/turing_rescore_evaluation.sh`.
+The canonical order is baseline, feedback-policy pilot, full collection, pair
+audit, trainer smoke, tuning, three-seed final training, and frozen evaluation.
+See `../docs/plans/2026-07-12-canonical-math-searchqa-execution.md`.

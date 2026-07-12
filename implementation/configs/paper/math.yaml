@@ -74,11 +74,13 @@ dpo_search:
 grpo_search:
   learning_rates: [2.0e-6, 5.0e-6, 1.0e-5]
   kl_betas: [0.0, 0.001, 0.01, 0.04]
-  epsilon: 0.2
-  num_iterations: 1
+  epsilon_low: 0.2
+  epsilon_high: 0.2
+  dapo_epsilon_high: 0.28
+  num_iterations: 2
   num_generations: 4
   loss_type: grpo
-  sensitivity_loss_type: dapo
+  dapo_loss_type: dapo
   scale_rewards: group
   mask_truncated_completions: true
   promote_counts: [4, 2, 1]

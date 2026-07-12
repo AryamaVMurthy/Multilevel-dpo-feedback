@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 from pathlib import Path
 import random
@@ -278,8 +277,8 @@ def train_paper_grpo(
     seed: int,
     evaluator: Callable[[dict[str, Any], str], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    if method not in {"grpo", "dapo_sensitivity"}:
-        raise ValueError("paper GRPO method must be grpo or dapo_sensitivity")
+    if method not in {"grpo", "dapo"}:
+        raise ValueError("paper online-RL method must be grpo or dapo")
     if not examples:
         raise ValueError("paper GRPO training requires non-empty examples")
     _seed(seed)
@@ -302,15 +301,20 @@ def train_paper_grpo(
         dropout=config.lora.dropout,
         excluded_components=config.lora.excluded_components,
     )
-    effective_candidate = candidate
-    if method == "dapo_sensitivity":
-        effective_candidate = replace(candidate, loss_type=config.grpo_search.sensitivity_loss_type)
+    expected_loss = config.grpo_search.dapo_loss_type if method == "dapo" else config.grpo_search.loss_type
+    expected_high = (
+        config.grpo_search.dapo_epsilon_high
+        if method == "dapo"
+        else config.grpo_search.epsilon_high
+    )
+    if candidate.loss_type != expected_loss or candidate.epsilon_high != expected_high:
+        raise ValueError(f"{method} candidate does not match the frozen loss and clipping protocol")
     max_steps = max(1, len(examples) // int(config.grpo_search.num_generations))
     trainer_args = GRPOConfig(
         **build_paper_grpo_config_kwargs(
             output_dir=output_dir,
             max_steps=max_steps,
-            candidate=effective_candidate,
+            candidate=candidate,
             max_completion_length=config.generation.roles["student"].max_new_tokens,
             temperature=float(config.generation.roles["student"].temperature),
             top_p=float(config.generation.roles["student"].top_p),
@@ -351,7 +355,7 @@ def train_paper_grpo(
         config=config,
         method=method,
         seed=seed,
-        candidate=effective_candidate,
+        candidate=candidate,
         coverage=coverage,
     )
     metrics = {

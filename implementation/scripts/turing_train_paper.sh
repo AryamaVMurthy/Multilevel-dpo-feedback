@@ -54,7 +54,7 @@ export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 
-if [[ "$METHOD" == "grpo" || "$METHOD" == "dapo_sensitivity" ]]; then
+if [[ "$METHOD" == "grpo" || "$METHOD" == "dapo" ]]; then
   GRPO_ENVIRONMENT="${GRPO_ENVIRONMENT:?GRPO_ENVIRONMENT is required for GRPO methods}"
   if [[ ! -x "$GRPO_ENVIRONMENT/bin/python" ]]; then
     echo "ERROR: frozen GRPO environment is missing: $GRPO_ENVIRONMENT" >&2

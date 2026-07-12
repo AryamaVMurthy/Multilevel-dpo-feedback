@@ -30,8 +30,9 @@ class DpoCandidate:
 class GrpoCandidate:
     learning_rate: float
     kl_beta: float
-    epsilon: float = 0.2
-    num_iterations: int = 1
+    epsilon_low: float = 0.2
+    epsilon_high: float = 0.2
+    num_iterations: int = 2
     num_generations: int = 4
     loss_type: str = "grpo"
 
@@ -80,13 +81,22 @@ def build_grpo_candidates(
     *,
     learning_rates: Iterable[float],
     kl_betas: Iterable[float],
-    epsilon: float = 0.2,
-    num_iterations: int = 1,
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    num_iterations: int = 2,
     num_generations: int = 4,
     loss_type: str = "grpo",
 ) -> list[GrpoCandidate]:
     candidates = [
-        GrpoCandidate(float(lr), float(beta), float(epsilon), int(num_iterations), int(num_generations), str(loss_type))
+        GrpoCandidate(
+            float(lr),
+            float(beta),
+            float(epsilon_low),
+            float(epsilon_high),
+            int(num_iterations),
+            int(num_generations),
+            str(loss_type),
+        )
         for lr in learning_rates
         for beta in kl_betas
     ]

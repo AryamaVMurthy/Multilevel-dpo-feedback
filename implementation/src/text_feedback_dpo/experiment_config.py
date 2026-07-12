@@ -110,11 +110,13 @@ class DpoSearchConfig:
 class GrpoSearchConfig:
     learning_rates: tuple[float, ...]
     kl_betas: tuple[float, ...]
-    epsilon: float
+    epsilon_low: float
+    epsilon_high: float
+    dapo_epsilon_high: float
     num_iterations: int
     num_generations: int
     loss_type: str
-    sensitivity_loss_type: str
+    dapo_loss_type: str
     scale_rewards: str
     mask_truncated_completions: bool
     promote_counts: tuple[int, ...]
@@ -535,11 +537,13 @@ def _parse_grpo_search(value: object) -> GrpoSearchConfig:
     required = {
         "learning_rates",
         "kl_betas",
-        "epsilon",
+        "epsilon_low",
+        "epsilon_high",
+        "dapo_epsilon_high",
         "num_iterations",
         "num_generations",
         "loss_type",
-        "sensitivity_loss_type",
+        "dapo_loss_type",
         "scale_rewards",
         "mask_truncated_completions",
         "promote_counts",
@@ -549,11 +553,13 @@ def _parse_grpo_search(value: object) -> GrpoSearchConfig:
     config = GrpoSearchConfig(
         learning_rates=_number_tuple(mapping["learning_rates"], "grpo_search.learning_rates"),
         kl_betas=_number_tuple(mapping["kl_betas"], "grpo_search.kl_betas"),
-        epsilon=_number(mapping["epsilon"], "grpo_search.epsilon"),
+        epsilon_low=_number(mapping["epsilon_low"], "grpo_search.epsilon_low"),
+        epsilon_high=_number(mapping["epsilon_high"], "grpo_search.epsilon_high"),
+        dapo_epsilon_high=_number(mapping["dapo_epsilon_high"], "grpo_search.dapo_epsilon_high"),
         num_iterations=_positive_int(mapping["num_iterations"], "grpo_search.num_iterations"),
         num_generations=_positive_int(mapping["num_generations"], "grpo_search.num_generations"),
         loss_type=str(mapping["loss_type"]),
-        sensitivity_loss_type=str(mapping["sensitivity_loss_type"]),
+        dapo_loss_type=str(mapping["dapo_loss_type"]),
         scale_rewards=str(mapping["scale_rewards"]),
         mask_truncated_completions=mapping["mask_truncated_completions"],
         promote_counts=_int_tuple(mapping["promote_counts"], "grpo_search.promote_counts"),
@@ -563,18 +569,20 @@ def _parse_grpo_search(value: object) -> GrpoSearchConfig:
         raise ValueError("grpo_search.mask_truncated_completions must be boolean")
     if config.learning_rates != (2e-6, 5e-6, 1e-5) or config.kl_betas != (0.0, 0.001, 0.01, 0.04):
         raise ValueError("grpo_search must contain the approved learning-rate and KL-beta matrix")
-    expected = (0.2, 1, 4, "grpo", "dapo", "group", True)
+    expected = (0.2, 0.2, 0.28, 2, 4, "grpo", "dapo", "group", True)
     actual = (
-        config.epsilon,
+        config.epsilon_low,
+        config.epsilon_high,
+        config.dapo_epsilon_high,
         config.num_iterations,
         config.num_generations,
         config.loss_type,
-        config.sensitivity_loss_type,
+        config.dapo_loss_type,
         config.scale_rewards,
         config.mask_truncated_completions,
     )
     if actual != expected:
-        raise ValueError("grpo_search does not match the approved original-GRPO protocol")
+        raise ValueError("grpo_search does not match the approved clipped GRPO/DAPO protocol")
     return config
 
 

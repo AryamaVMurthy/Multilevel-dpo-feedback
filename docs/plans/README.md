@@ -1,21 +1,14 @@
-# Active Experiment Plans
+# Active Plan
 
-The paper-scale experiment has one active design and one active execution plan:
+There is one authoritative plan:
 
-1. `2026-07-10-paper-scale-experiment-design.md` freezes the research question,
-   datasets, methods, evaluation protocol, and completion gates.
-2. `2026-07-10-paper-scale-experiment-implementation.md` defines the complete
-   26-task implementation and Turing execution sequence.
+- `2026-07-12-canonical-math-searchqa-execution.md`
 
-Supporting canonical specifications:
+It defines the frozen Qwen3 protocol, baseline gate, three feedback-policy
+experiment, full trajectory collection, Standard/Multilevel/Matched LN-DPO,
+GRPO, DAPO, adaptive failure handling, evaluation, reporting, and the later
+SearchQA phase.
 
-- `../design/native_iterative_guidance_dpo.md`: living method specification and
-  decision log.
-- `../design/training_hyperparameter_protocol.md`: optimizer, Qwen3.5 LoRA coverage,
-  deterministic hyperparameter search, model selection, and freeze rules.
-- `../status/2026-07-10-paper-execution-log.md`: living run-by-run findings, failures,
-  fixes, metrics, and artifact references.
-The removed 2026-07-09 planning and status documents described superseded XML
-formatting, fixture-only pipelines, pretest settings, and an obsolete SSH blocker.
-Their relevant findings remain in the living method specification and Git history.
-Historical smoke constants must not be used for paper training.
+Earlier plans were removed because they described superseded Qwen3.5, GSM8K,
+JSON evaluator, or intermediate preflight protocols. Their history remains in
+Git, while immutable run evidence remains in `../status/turing-usage-log.md`.

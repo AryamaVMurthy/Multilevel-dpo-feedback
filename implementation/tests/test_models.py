@@ -95,7 +95,7 @@ class ModelProviderTest(unittest.TestCase):
     def test_transformers_provider_requires_cuda_unless_explicitly_allowed(self):
         with mock.patch.dict("sys.modules", {"torch": None}):
             provider = TransformersModelProvider(
-                model_ids={"student": "Qwen/Qwen3.5-2B"},
+                model_ids={"student": "Qwen/Qwen3-4B"},
                 allow_cpu_for_unit_tests=False,
             )
             with self.assertRaisesRegex(ImportError, "torch"):
@@ -103,7 +103,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_transformers_provider_forwards_sampling_settings_and_presence_penalty(self):
         provider = TransformersModelProvider(
-            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            model_ids={"student": "Qwen/Qwen3-4B"},
             allow_cpu_for_unit_tests=True,
         )
         fake_model = FakeModel()
@@ -142,7 +142,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_transformers_provider_returns_exact_generation_metadata(self):
         provider = TransformersModelProvider(
-            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            model_ids={"student": "Qwen/Qwen3-4B"},
             allow_cpu_for_unit_tests=True,
         )
         provider._loaded["student"] = (FakeTokenizer(), FakeModel())
@@ -168,7 +168,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_length_limited_generation_is_explicitly_truncated(self):
         provider = TransformersModelProvider(
-            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            model_ids={"student": "Qwen/Qwen3-4B"},
             allow_cpu_for_unit_tests=True,
         )
         tokenizer = FakeTokenizer()
@@ -192,7 +192,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_complete_final_box_is_a_valid_generation_stop(self):
         provider = TransformersModelProvider(
-            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            model_ids={"student": "Qwen/Qwen3-4B"},
             allow_cpu_for_unit_tests=True,
         )
         tokenizer = FakeTokenizer()
@@ -224,7 +224,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_greedy_generation_omits_sampling_only_kwargs(self):
         provider = TransformersModelProvider(
-            model_ids={"evaluator": "Qwen/Qwen3.5-9B"},
+            model_ids={"evaluator": "Qwen/Qwen3-8B"},
             allow_cpu_for_unit_tests=True,
         )
         model = FakeModel()
@@ -249,7 +249,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_transformers_provider_uses_a_chat_generation_turn(self):
         provider = TransformersModelProvider(
-            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            model_ids={"student": "Qwen/Qwen3-4B"},
             allow_cpu_for_unit_tests=True,
         )
         tokenizer = FakeTokenizer()
@@ -267,7 +267,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_transformers_provider_forwards_local_qwen_thinking_flag(self):
         provider = TransformersModelProvider(
-            model_ids={"evaluator": "Qwen/Qwen3.5-9B"},
+            model_ids={"evaluator": "Qwen/Qwen3-8B"},
             allow_cpu_for_unit_tests=True,
         )
         tokenizer = FakeTokenizer()
@@ -290,7 +290,7 @@ class ModelProviderTest(unittest.TestCase):
 
     def test_cached_model_load_does_not_import_torch(self):
         provider = TransformersModelProvider(
-            model_ids={"student": "Qwen/Qwen3.5-2B"},
+            model_ids={"student": "Qwen/Qwen3-4B"},
             allow_cpu_for_unit_tests=True,
         )
         provider._loaded["student"] = (FakeTokenizer(), FakeModel())

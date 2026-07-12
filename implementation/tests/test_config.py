@@ -20,9 +20,10 @@ class ConfigTest(unittest.TestCase):
                 "\n".join(
                     [
                         "run_id: bad",
-                        "student_model: Qwen/Qwen3.5-2B",
-                        "teacher_model: Qwen/Qwen3.5-9B",
+                        "student_model: Qwen/Qwen3-4B",
+                        "teacher_model: Qwen/Qwen3-8B",
                         "teacher_mode: stronger_model",
+                        "feedback_policy: hint_only",
                         "max_examples: 5",
                         "output_dir: runs/test",
                         "generation: {}",
@@ -38,8 +39,9 @@ class ConfigTest(unittest.TestCase):
 
     def test_smoke_config_loads(self):
         config = load_config(Path("configs/basic_smoke.yaml"))
-        self.assertEqual(config["student_model"], "Qwen/Qwen3.5-2B")
-        self.assertEqual(config["teacher_model"], "Qwen/Qwen3.5-9B")
+        self.assertEqual(config["student_model"], "Qwen/Qwen3-4B")
+        self.assertEqual(config["teacher_model"], "Qwen/Qwen3-8B")
+        self.assertEqual(config["feedback_policy"], "hint_only")
         self.assertEqual(config["max_examples"], 5)
         for section in ("generation", "teacher_generation"):
             self.assertEqual(config[section]["temperature"], 1.0)
@@ -49,9 +51,9 @@ class ConfigTest(unittest.TestCase):
 
     def test_one_example_pair_validation_config_is_explicitly_bounded(self):
         config = load_config(Path("configs/pair_validation_1x.yaml"))
-        self.assertEqual(config["run_id"], "qwen35-pair-validation-1x-r6")
-        self.assertEqual(config["student_model"], "Qwen/Qwen3.5-2B")
-        self.assertEqual(config["teacher_model"], "Qwen/Qwen3.5-9B")
+        self.assertEqual(config["run_id"], "qwen3-pair-validation-test-fixture")
+        self.assertEqual(config["student_model"], "Qwen/Qwen3-4B")
+        self.assertEqual(config["teacher_model"], "Qwen/Qwen3-8B")
         self.assertEqual(config["teacher_mode"], "stronger_model")
         self.assertEqual(config["max_examples"], 1)
         self.assertEqual(config["generation"]["max_new_tokens"], 2048)

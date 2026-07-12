@@ -11,8 +11,8 @@ class ScriptedProvider:
         self.student_outputs = iter(["wrong answer", "wrong answer", "correct answer"])
         self.teacher_outputs = iter(
             [
-                "Recheck how the quantities relate before answering fully.",
-                "Reconsider the relation between the given quantities before deciding.",
+                "<student_feedback>Recheck how the quantities relate before answering fully.</student_feedback>",
+                "<student_feedback>Reconsider the relation between the given quantities before deciding.</student_feedback>",
             ]
         )
         self.calls = []
@@ -52,6 +52,7 @@ class NativeCliTest(unittest.TestCase):
                         "teacher_model: teacher",
                         "evaluator_model: evaluator",
                         "teacher_mode: stronger_model",
+                        "feedback_policy: hint_only",
                         f"examples_path: {examples_path}",
                         "max_examples: 1",
                         "output_dir: runs/native-test",

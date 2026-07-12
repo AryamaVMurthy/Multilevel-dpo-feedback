@@ -69,7 +69,7 @@ class CollectionTest(unittest.TestCase):
 
     def test_collection_writes_complete_compressed_records_and_merges(self):
         repo = Path(__file__).resolve().parents[1]
-        config_path = repo / "configs" / "paper" / "gsm8k.yaml"
+        config_path = repo / "configs" / "paper" / "math.yaml"
         config = load_paper_experiment(config_path)
         examples = [
             {"id": "m1", "domain": "math", "problem": "Compute one.", "gold_answer": "4"},
@@ -149,7 +149,7 @@ class CollectionTest(unittest.TestCase):
 
     def test_model_output_failure_is_persisted_before_collection_stops(self):
         repo = Path(__file__).resolve().parents[1]
-        config_path = repo / "configs" / "paper" / "gsm8k.yaml"
+        config_path = repo / "configs" / "paper" / "math.yaml"
         config = load_paper_experiment(config_path)
         examples = [{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}]
         with TemporaryDirectory() as tmp:

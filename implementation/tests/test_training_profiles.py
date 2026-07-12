@@ -75,8 +75,24 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertTrue(all(candidate.loss_type == "sigmoid" for candidate in length_desensitized))
         self.assertEqual(_selection_metric(config, {"math": {"exact_accuracy": 0.6}}), 0.6)
 
+    def test_grpo_and_dapo_have_independent_clipped_candidate_ledgers(self):
+        config = load_paper_experiment(Path("configs/paper/math.yaml"))
+        grpo = _paper_candidates(config, "grpo")
+        dapo = _paper_candidates(config, "dapo")
+
+        self.assertEqual(len(grpo), 12)
+        self.assertEqual(len(dapo), 12)
+        self.assertTrue(all(candidate.loss_type == "grpo" for candidate in grpo))
+        self.assertTrue(all(candidate.epsilon_low == 0.2 for candidate in grpo))
+        self.assertTrue(all(candidate.epsilon_high == 0.2 for candidate in grpo))
+        self.assertTrue(all(candidate.num_iterations == 2 for candidate in grpo))
+        self.assertTrue(all(candidate.loss_type == "dapo" for candidate in dapo))
+        self.assertTrue(all(candidate.epsilon_low == 0.2 for candidate in dapo))
+        self.assertTrue(all(candidate.epsilon_high == 0.28 for candidate in dapo))
+        self.assertNotEqual(grpo[0].candidate_id, dapo[0].candidate_id)
+
     def test_paper_evaluator_uses_the_explicit_greedy_role_profile(self):
-        config = load_paper_experiment(Path("configs/paper/gsm8k.yaml"))
+        config = load_paper_experiment(Path("configs/paper/math.yaml"))
         with mock.patch("text_feedback_dpo.cli.TransformersModelProvider") as provider_class:
             with mock.patch("text_feedback_dpo.cli.make_model_evaluator", return_value="evaluator") as make:
                 result = _paper_evaluator(config)
@@ -182,6 +198,8 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(grpo["num_generations"], 4)
         self.assertEqual(grpo["generation_batch_size"], 4)
         self.assertEqual(grpo["epsilon"], 0.2)
+        self.assertEqual(grpo["epsilon_high"], 0.2)
+        self.assertEqual(grpo["num_iterations"], 2)
         self.assertEqual(grpo["loss_type"], "grpo")
         self.assertEqual(grpo["beta"], 0.01)
         self.assertTrue(grpo["mask_truncated_completions"])

@@ -1,15 +1,20 @@
 schema_version: 4
-experiment_id: qwen3-paper-searchqa8k
+experiment_id: qwen3-math-feedback-pilot-error-only
 dataset:
-  name: searchqa8k
-  config: original
-  source: nyu-dl/SearchQA
-  revision: fe1ea9fdb888001723ee89daf72b35601d72a4ea
-  source_counts: {train: 99820, validation: 13393, test: 27248}
-  splits: {train: 5000, validation: 1000, test: 2000}
+  name: math
+  config: all_subjects
+  source: EleutherAI/hendrycks_math
+  revision: 21a5633873b6a120296cce3e2df9d5550074f4a3
+  source_counts: {train: 7500, validation: 0, test: 5000}
+  # Level 4-5 role counts are derived only from the pinned source snapshot.
+  splits: {train: 0, validation: 0, test: 5000}
   validation_roles: {}
-  auxiliary_hparam: {train: 2000, validation: 500}
-  seed: 20260710
+  auxiliary_hparam: {}
+  seed: 20260711
+  subjects: [algebra, counting_and_probability, geometry, intermediate_algebra, number_theory, prealgebra, precalculus]
+  primary_levels: [4, 5]
+  train_fraction: 0.9
+  validation_tune_fraction: 0.6666666666666666
 models:
   student: {id: Qwen/Qwen3-4B, revision: 1cfa9a7208912126459214e8b04321603b3df60c}
   teacher: {id: Qwen/Qwen3-8B, revision: b968826d9c46dd6066d109eabc6255188de91218}
@@ -23,20 +28,20 @@ generation:
     top_p: 0.8
     top_k: 20
     min_p: 0.0
-    presence_penalty: 0.0
+    presence_penalty: 1.5
     repetition_penalty: 1.0
-    stop_after_final_answer: false
+    stop_after_final_answer: true
   teacher: {enable_thinking: false, do_sample: false, max_new_tokens: 64}
   evaluator: {enable_thinking: false, do_sample: false, max_new_tokens: 256}
   guidance_guard: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
   guidance_critic: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
 collection:
-  feedback_policy: hint_only
+  feedback_policy: error_only
   max_guidance_steps: 3
   max_guidance_regenerations: 2
-  shard_size: 250
+  shard_size: 256
   artifact_schema: paper-v3
-  prompt_protocol: qwen3-nonthinking-r1
+  prompt_protocol: qwen3-nonthinking-final-r1
 lora:
   rank: 16
   alpha: 32
@@ -87,7 +92,7 @@ training:
   max_sequence_tokens: 18432
 evaluation:
   baseline_before_training: true
-  generation_seed: 20260710
+  generation_seed: 20260711
   max_truncation_rate: 0.05
   minimum_evaluator_audit_agreement: 0.95
 slurm:

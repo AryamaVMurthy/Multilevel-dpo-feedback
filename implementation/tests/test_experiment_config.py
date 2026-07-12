@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
@@ -77,6 +78,10 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dpo_search.learning_rates, (2e-6, 5e-6, 1e-5))
         self.assertEqual(config.dpo_search.betas, (0.05, 0.1, 0.3, 0.5))
         self.assertEqual(config.grpo_search.kl_betas, (0.0, 0.001, 0.01, 0.04))
+        self.assertEqual(config.grpo_search.epsilon_low, 0.2)
+        self.assertEqual(config.grpo_search.epsilon_high, 0.2)
+        self.assertEqual(config.grpo_search.dapo_epsilon_high, 0.28)
+        self.assertEqual(config.grpo_search.num_iterations, 2)
         self.assertEqual(config.lora.rank, 16)
         self.assertEqual(config.lora.target_policy, "qwen3_text_linear")
         self.assertEqual(config.training["max_sequence_tokens"], 18432)
@@ -97,6 +102,23 @@ class PaperExperimentConfigTest(unittest.TestCase):
         invalid["collection"]["feedback_policy"] = "automatic"
         with self.assertRaisesRegex(ValueError, r"collection\.feedback_policy"):
             self._write_and_load(invalid)
+
+    def test_three_math_feedback_pilots_are_paired_except_for_policy_and_id(self):
+        expected = {
+            "error_only": "configs/pilots/math-feedback-error-only.yaml",
+            "hint_only": "configs/pilots/math-feedback-hint-only.yaml",
+            "error_and_hint": "configs/pilots/math-feedback-error-and-hint.yaml",
+        }
+        comparable = []
+        for policy, path in expected.items():
+            config = load_paper_experiment(Path(path))
+            self.assertEqual(config.collection["feedback_policy"], policy)
+            self.assertEqual(config.experiment_id, f"qwen3-math-feedback-pilot-{policy.replace('_', '-')}")
+            value = asdict(config)
+            value.pop("experiment_id")
+            value["collection"].pop("feedback_policy")
+            comparable.append(value)
+        self.assertEqual(comparable[1:], comparable[:-1])
 
     def test_model_ids_and_revisions_are_exact_and_post_trained(self):
         for role, field, invalid in (
@@ -145,14 +167,14 @@ class PaperExperimentConfigTest(unittest.TestCase):
             self._write_and_load(value)
 
     def test_unknown_nested_optimizer_key_fails_with_field_path(self):
-        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        value = self._load_mapping("configs/paper/math.yaml")
         value["optimizer"]["silent_magic"] = True
 
         with self.assertRaisesRegex(ValueError, r"optimizer\.silent_magic"):
             self._write_and_load(value)
 
     def test_missing_dataset_revision_fails_with_remediation(self):
-        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        value = self._load_mapping("configs/paper/math.yaml")
         del value["dataset"]["revision"]
 
         with self.assertRaisesRegex(ValueError, r"dataset\.revision.*required"):
@@ -166,7 +188,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
             self._write_and_load(value)
 
     def test_deprecated_warmup_ratio_fails_explicitly(self):
-        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        value = self._load_mapping("configs/paper/math.yaml")
         value["optimizer"]["warmup_ratio"] = value["optimizer"].pop("warmup_fraction")
 
         with self.assertRaisesRegex(ValueError, r"optimizer\.warmup_ratio.*deprecated"):
@@ -219,14 +241,14 @@ class PaperExperimentConfigTest(unittest.TestCase):
             self._write_and_load(value)
 
     def test_missing_role_generation_profile_fails_explicitly(self):
-        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        value = self._load_mapping("configs/paper/math.yaml")
         del value["generation"]["guidance_critic"]
 
         with self.assertRaisesRegex(ValueError, r"generation\.guidance_critic.*required"):
             self._write_and_load(value)
 
     def test_greedy_role_rejects_silent_sampling_parameters(self):
-        value = self._load_mapping("configs/paper/gsm8k.yaml")
+        value = self._load_mapping("configs/paper/math.yaml")
         value["generation"]["teacher"]["temperature"] = 1.0
 
         with self.assertRaisesRegex(ValueError, r"generation\.teacher\.temperature.*unknown"):
@@ -248,10 +270,10 @@ class PaperExperimentConfigTest(unittest.TestCase):
 
     def test_materialize_cli_validates_config_before_delegating(self):
         materialized = {
-            "output_dir": "/tmp/gsm8k-output",
+            "output_dir": "/tmp/math-output",
             "manifest": {
                 "schema": "paper-dataset-manifest-v1",
-                "metadata": {"dataset": "gsm8k"},
+                "metadata": {"dataset": "math"},
                 "roles": {"train": 10, "validation": 2, "test": 3},
                 "nested_roles": {"tune": 1, "confirm": 1},
                 "content_sha256": "a" * 64,
@@ -259,16 +281,16 @@ class PaperExperimentConfigTest(unittest.TestCase):
         }
         with mock.patch("text_feedback_dpo.cli.materialize_paper_dataset", return_value=materialized) as materialize:
             result = run_materialize_dataset(
-                Path("configs/paper/gsm8k.yaml"),
-                Path("/tmp/gsm8k-source"),
-                Path("/tmp/gsm8k-output"),
+                Path("configs/paper/math.yaml"),
+                Path("/tmp/math-source"),
+                Path("/tmp/math-output"),
             )
 
         self.assertEqual(result["schema"], "paper-dataset-materialization-summary-v1")
-        self.assertEqual(result["dataset"], "gsm8k")
+        self.assertEqual(result["dataset"], "math")
         self.assertEqual(result["roles"], {"train": 10, "validation": 2, "test": 3})
         self.assertEqual(result["content_sha256"], "a" * 64)
-        self.assertEqual(materialize.call_args.args[1:], (Path("/tmp/gsm8k-source"), Path("/tmp/gsm8k-output")))
+        self.assertEqual(materialize.call_args.args[1:], (Path("/tmp/math-source"), Path("/tmp/math-output")))
 
 
 if __name__ == "__main__":

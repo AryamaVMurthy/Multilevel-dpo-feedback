@@ -31,6 +31,9 @@ class HyperparameterSearchTest(unittest.TestCase):
         self.assertEqual(dpo[0].loss_type, "sigmoid_norm")
         self.assertIsNone(dpo[0].ld_alpha)
         self.assertEqual(grpo[-1].kl_beta, 0.04)
+        self.assertEqual(grpo[-1].epsilon_low, 0.2)
+        self.assertEqual(grpo[-1].epsilon_high, 0.2)
+        self.assertEqual(grpo[-1].num_iterations, 2)
 
     def test_length_desensitized_candidates_are_labeled_and_reject_invalid_alpha(self):
         candidates = build_dpo_candidates(

@@ -23,8 +23,8 @@ class RunValidationTest(unittest.TestCase):
                 {
                     "run_id": "native-1",
                     "method": "native_iterative_guidance_dpo",
-                    "student_model": "Qwen/Qwen3.5-2B",
-                    "teacher_model": "Qwen/Qwen3.5-9B",
+                    "student_model": "Qwen/Qwen3-4B",
+                    "teacher_model": "Qwen/Qwen3-8B",
                     "accepted_pairs": 1,
                 }
             ),
@@ -59,8 +59,8 @@ class RunValidationTest(unittest.TestCase):
             json.dumps(
                 {
                     "run_id": "validation-1",
-                    "student_model": "Qwen/Qwen3.5-2B",
-                    "teacher_model": "Qwen/Qwen3.5-9B",
+                    "student_model": "Qwen/Qwen3-4B",
+                    "teacher_model": "Qwen/Qwen3-8B",
                     "accepted_pairs": 1,
                 }
             ),
@@ -116,8 +116,8 @@ class RunValidationTest(unittest.TestCase):
                 json.dumps(
                     {
                         "run_id": "validation-1",
-                        "student_model": "Qwen/Qwen3.5-2B",
-                        "teacher_model": "Qwen/Qwen3.5-9B",
+                        "student_model": "Qwen/Qwen3-4B",
+                        "teacher_model": "Qwen/Qwen3-8B",
                         "accepted_pairs": 0,
                     }
                 ),

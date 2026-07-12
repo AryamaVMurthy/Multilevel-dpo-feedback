@@ -9,6 +9,7 @@ REQUIRED_KEYS = {
     "student_model",
     "teacher_model",
     "teacher_mode",
+    "feedback_policy",
     "max_examples",
     "output_dir",
     "generation",
@@ -56,6 +57,8 @@ def load_config(path: Path) -> dict[str, Any]:
 
     if config["teacher_mode"] not in {"stronger_model", "same_model_privileged"}:
         raise ValueError("teacher_mode must be stronger_model or same_model_privileged")
+    if config["feedback_policy"] not in {"error_only", "hint_only", "error_and_hint"}:
+        raise ValueError("feedback_policy must be error_only, hint_only, or error_and_hint")
 
     if not isinstance(config["max_examples"], int) or config["max_examples"] <= 0:
         raise ValueError("max_examples must be a positive integer")

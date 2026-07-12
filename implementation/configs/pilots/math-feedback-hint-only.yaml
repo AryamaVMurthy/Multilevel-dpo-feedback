@@ -1,15 +1,20 @@
 schema_version: 4
-experiment_id: qwen3-diagnostic-gsm8k
+experiment_id: qwen3-math-feedback-pilot-hint-only
 dataset:
-  name: gsm8k
-  config: main
-  source: openai/gsm8k
-  revision: 740312add88f781978c0658806c59bc2815b9866
-  source_counts: {train: 7473, validation: 0, test: 1319}
-  splits: {train: 6726, validation: 747, test: 1319}
-  validation_roles: {tune: 500, confirm: 247}
+  name: math
+  config: all_subjects
+  source: EleutherAI/hendrycks_math
+  revision: 21a5633873b6a120296cce3e2df9d5550074f4a3
+  source_counts: {train: 7500, validation: 0, test: 5000}
+  # Level 4-5 role counts are derived only from the pinned source snapshot.
+  splits: {train: 0, validation: 0, test: 5000}
+  validation_roles: {}
   auxiliary_hparam: {}
-  seed: 20260710
+  seed: 20260711
+  subjects: [algebra, counting_and_probability, geometry, intermediate_algebra, number_theory, prealgebra, precalculus]
+  primary_levels: [4, 5]
+  train_fraction: 0.9
+  validation_tune_fraction: 0.6666666666666666
 models:
   student: {id: Qwen/Qwen3-4B, revision: 1cfa9a7208912126459214e8b04321603b3df60c}
   teacher: {id: Qwen/Qwen3-8B, revision: b968826d9c46dd6066d109eabc6255188de91218}
@@ -23,7 +28,7 @@ generation:
     top_p: 0.8
     top_k: 20
     min_p: 0.0
-    presence_penalty: 0.0
+    presence_penalty: 1.5
     repetition_penalty: 1.0
     stop_after_final_answer: true
   teacher: {enable_thinking: false, do_sample: false, max_new_tokens: 64}
@@ -69,11 +74,13 @@ dpo_search:
 grpo_search:
   learning_rates: [2.0e-6, 5.0e-6, 1.0e-5]
   kl_betas: [0.0, 0.001, 0.01, 0.04]
-  epsilon: 0.2
-  num_iterations: 1
+  epsilon_low: 0.2
+  epsilon_high: 0.2
+  dapo_epsilon_high: 0.28
+  num_iterations: 2
   num_generations: 4
   loss_type: grpo
-  sensitivity_loss_type: dapo
+  dapo_loss_type: dapo
   scale_rewards: group
   mask_truncated_completions: true
   promote_counts: [4, 2, 1]
@@ -85,7 +92,7 @@ training:
   max_sequence_tokens: 18432
 evaluation:
   baseline_before_training: true
-  generation_seed: 20260710
+  generation_seed: 20260711
   max_truncation_rate: 0.05
   minimum_evaluator_audit_agreement: 0.95
 slurm:
