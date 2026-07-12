@@ -66,6 +66,7 @@ def _write_adapter_manifest(
         "base_model_revision": config.models["student"]["revision"],
         "method": method,
         "seed": seed,
+        "lora_coverage_hash": coverage.coverage_hash,
         "candidate": {
             key: value
             for key, value in vars(candidate).items()
