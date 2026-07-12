@@ -17,6 +17,7 @@ OUTPUT_PATH="${OUTPUT_PATH:?OUTPUT_PATH is required}"
 PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 SOURCE_COMMIT="${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
+RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -24,11 +25,19 @@ if [[ ! -d /scratch || ! -w /scratch ]]; then
   echo "ERROR: /scratch is not writable; refusing home cache fallback" >&2
   exit 1
 fi
+if [[ "$RUNTIME_ROOT" != /scratch/* ]]; then
+  echo "ERROR: RUNTIME_ROOT must be node-local /scratch storage: $RUNTIME_ROOT" >&2
+  exit 1
+fi
 SCRATCH_DIR="/scratch/$USER/text-feedback-dpo/${SLURM_JOB_ID}"
 mkdir -p "$SCRATCH_DIR"
-export UV_CACHE_DIR="$SCRATCH_DIR/uv_cache"
-export UV_PROJECT_ENVIRONMENT="$SCRATCH_DIR/project_venv"
-export UV_LINK_MODE=copy
+export UV_CACHE_DIR="$RUNTIME_ROOT/uv_cache"
+export UV_PROJECT_ENVIRONMENT="$RUNTIME_ROOT/project_venv"
+if [[ ! -f "$UV_PROJECT_ENVIRONMENT/environment_verified.txt" ]]; then
+  echo "ERROR: locked runtime verification is missing: $UV_PROJECT_ENVIRONMENT/environment_verified.txt" >&2
+  exit 1
+fi
+export UV_LINK_MODE=hardlink
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR/src"
 cp "$CONFIG" "$SCRATCH_DIR/config.yaml"
