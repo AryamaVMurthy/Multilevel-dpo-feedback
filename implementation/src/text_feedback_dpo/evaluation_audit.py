@@ -83,7 +83,9 @@ def rescore_checkpoint_evaluation(
             evidence_supported=evaluator_result.get("evidence_supported"),
         )
         needs_model = bool(deterministic.get("requires_model_judgment"))
-        corrected = model_correct if needs_model else model_correct and bool(deterministic["correct"])
+        # Match the live evaluator: clear deterministic cases are decided by the
+        # checker, while ambiguous cases remain under the model evaluator.
+        corrected = model_correct if needs_model else bool(deterministic["correct"])
         updated_result = {
             **evaluator_result,
             "correct": corrected,

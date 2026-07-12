@@ -136,6 +136,49 @@ class EvaluationAuditTest(unittest.TestCase):
             self.assertEqual(result["truncation_rate"], 0.0)
             self.assertTrue((root / "audit" / "report.html").exists())
 
+    def test_rescore_uses_deterministic_truth_when_model_disagrees(self):
+        predictions = [
+            {
+                "id": "m1",
+                "teacher_free": True,
+                "prompt_tokens": 10,
+                "generated_tokens": 20,
+                "terminated": True,
+                "truncated": False,
+                "finish_reason": "final_answer",
+                "evaluator_result": {
+                    "answer": "6",
+                    "correct": False,
+                    "model_correct": False,
+                },
+            }
+        ]
+        examples = [
+            {
+                "id": "m1",
+                "domain": "math",
+                "source": "EleutherAI/hendrycks_math",
+                "gold_answer": "6",
+            }
+        ]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_jsonl(root / "predictions.jsonl", predictions)
+            write_jsonl(root / "examples.jsonl", examples)
+            result = rescore_checkpoint_evaluation(
+                predictions_path=root / "predictions.jsonl",
+                examples_path=root / "examples.jsonl",
+                output_dir=root / "rescore",
+                source_commit="b" * 40,
+            )
+            self.assertEqual(result["rescored_correct"], 1)
+            self.assertEqual(result["changed_ids"], ["m1"])
+            rescored = [
+                json.loads(line)
+                for line in (root / "rescore" / "predictions.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(rescored[0]["evaluator_result"]["correct"])
+
     def test_disagreement_or_missing_generation_metadata_fails_gate(self):
         predictions = [
             {
