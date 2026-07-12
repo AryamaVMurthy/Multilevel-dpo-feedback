@@ -311,6 +311,16 @@ class NativePipelineTest(unittest.TestCase):
             r"\boxed{\begin{pmatrix}1 & 0\end{pmatrix}}",
         )
 
+        unclosed = parse_evaluator_output(
+            "<verdict>WRONG</verdict>\n<evaluated_answer>\\boxed{(6, 55)}"
+        )
+        self.assertFalse(unclosed["correct"])
+        self.assertEqual(unclosed["serialization"], "tagged_text_v1_unclosed_repair")
+        self.assertEqual(
+            unclosed["serialization_repair"],
+            "inferred_unique_evaluated_answer_to_end_of_message",
+        )
+
         with self.assertRaisesRegex(ValueError, "verdict"):
             parse_evaluator_output("<evaluated_answer>4</evaluated_answer>")
 

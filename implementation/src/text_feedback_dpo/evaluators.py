@@ -53,17 +53,43 @@ def parse_evaluator_output(raw: str) -> dict[str, Any]:
         raw,
         flags=re.DOTALL,
     )
-    if match is None:
-        raise ValueError(
-            "evaluator output must contain exactly one verdict tag followed by exactly one evaluated_answer tag"
+    if match is not None:
+        verdict, answer = match.groups()
+        serialization = "tagged_text_v1"
+    else:
+        # Some Qwen generations stop immediately after the answer while still emitting the
+        # unique verdict and answer opening tags. Accept only that exact end-of-message shape,
+        # and label it so the repair remains visible in collection artifacts and audits.
+        unclosed = re.fullmatch(
+            r"\s*<verdict>\s*(CORRECT|WRONG)\s*</verdict>\s*"
+            r"<evaluated_answer>(.+?)\s*",
+            raw,
+            flags=re.DOTALL,
         )
-    verdict, answer = match.groups()
+        if unclosed is None:
+            raise ValueError(
+                "evaluator output must contain exactly one verdict tag followed by exactly one evaluated_answer tag"
+            )
+        verdict, answer = unclosed.groups()
+        serialization = "tagged_text_v1_unclosed_repair"
     answer = answer.strip()
     if not answer:
         raise ValueError("evaluator evaluated_answer must be non-empty")
-    if any(tag in answer for tag in ("<verdict>", "</verdict>", "<evaluated_answer>")):
+    if any(
+        tag in answer
+        for tag in (
+            "<verdict>",
+            "</verdict>",
+            "<evaluated_answer>",
+            "</evaluated_answer>",
+            r"\end{evaluated_answer}",
+        )
+    ):
         raise ValueError("evaluator evaluated_answer must not contain evaluator protocol tags")
-    return {"correct": verdict == "CORRECT", "answer": answer, "serialization": "tagged_text_v1"}
+    result = {"correct": verdict == "CORRECT", "answer": answer, "serialization": serialization}
+    if serialization == "tagged_text_v1_unclosed_repair":
+        result["serialization_repair"] = "inferred_unique_evaluated_answer_to_end_of_message"
+    return result
 
 
 def parse_student_feedback_output(raw: str) -> str:
