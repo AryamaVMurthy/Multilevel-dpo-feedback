@@ -81,6 +81,7 @@ class NativePipelineTest(unittest.TestCase):
             guidance="Recheck the final arithmetic operation.",
         )
         self.assertIn("directionally correct", prompt.lower())
+        self.assertIn("do not reject a hint merely because it is general", prompt.lower())
         self.assertIn("exactly one token: valid or invalid", prompt.lower())
 
     def test_model_guidance_critic_preserves_its_generation_metadata(self):

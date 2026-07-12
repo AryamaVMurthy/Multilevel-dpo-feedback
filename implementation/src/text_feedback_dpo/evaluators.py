@@ -195,9 +195,12 @@ def build_guidance_critic_prompt(
     return f"""Check whether a teacher hint is directionally correct and relevant.
 
 Use the problem, gold answer, failed response, and evaluator result as privileged review context.
-Return VALID only if the hint points toward an actual error or useful verification and does not
-reinforce a false interpretation. Return INVALID if it is mathematically wrong, irrelevant,
-unsupported, or points away from the gold solution. Do not judge answer leakage in this role.
+Return VALID when the hint is a reasonable, answer-free check that is compatible with the problem
+and does not reinforce the failed interpretation. Broad advice is valid when it points toward a
+real relation, constraint, operation, or verification the student can use. Return INVALID only if
+the hint asserts a false mathematical claim, is unrelated to the problem, or points away from the
+gold solution. Do not reject a hint merely because it is general or does not name the exact error;
+do not judge answer leakage in this role.
 
 Do not provide analysis, reasoning, headings, or a preamble. Return exactly one token: VALID or INVALID.
 

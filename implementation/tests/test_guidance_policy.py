@@ -24,6 +24,18 @@ class GuidancePolicyTest(unittest.TestCase):
         self.assertEqual(result["word_count"], 10)
         self.assertEqual(result["sentence_count"], 1)
 
+    def test_accepts_free_two_sentence_hint_within_teacher_budget(self):
+        result = validate_guidance_surface(
+            "The first reduction changes the constraint. Recheck that relation before substituting values.",
+            problem=self.problem,
+            gold_answer=self.gold,
+            evidence=self.evidence,
+        )
+
+        self.assertTrue(result["valid"], result)
+        self.assertEqual(result["sentence_count"], 2)
+        self.assertLessEqual(result["word_count"], 40)
+
     def test_rejects_only_too_short_or_direct_answer_surface_leaks(self):
         for hint, reason in (
             ("Recheck the calculation.", "word_count"),

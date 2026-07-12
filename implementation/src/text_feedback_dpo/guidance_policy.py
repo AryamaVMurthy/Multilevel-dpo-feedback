@@ -45,9 +45,9 @@ def _validate(
     if not stripped:
         reasons.append("empty")
     if enforce_length:
-        if not 5 <= len(words) <= 25:
+        if not 5 <= len(words) <= 40:
             reasons.append("word_count")
-        if _sentence_count(stripped) != 1:
+        if not 1 <= _sentence_count(stripped) <= 2:
             reasons.append("sentence_count")
     answer_tokens = _normalized_tokens(gold_answer)
     hint_tokens = _normalized_tokens(stripped)
