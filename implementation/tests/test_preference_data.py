@@ -109,6 +109,28 @@ class PreferenceDataTest(unittest.TestCase):
             self.assertTrue(all(len(value["sha256"]) == 64 for value in manifest["artifacts"].values()))
             self.assertEqual(metrics["response_sft_rows"], 3)
 
+    def test_build_preferences_rejects_dataset_directory_with_actionable_error(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_dir = root / "math-materialized-v1"
+            dataset_dir.mkdir()
+            collection = root / "collection.jsonl.zst"
+            append_jsonl_zst(
+                collection,
+                {"id": "m1", "attempts": self.attempts[:3]},
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"dataset_path must be a JSONL file; pass the concrete .*train\.jsonl\.zst path",
+            ):
+                run_build_preferences(
+                    collection_path=collection,
+                    dataset_path=dataset_dir,
+                    output_dir=root / "preferences",
+                    seed=17,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

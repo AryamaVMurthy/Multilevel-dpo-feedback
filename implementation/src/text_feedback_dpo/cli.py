@@ -862,6 +862,11 @@ def run_build_preferences(
             if not isinstance(attempt, dict):
                 raise ValueError(f"merged collection record {example_id} contains invalid attempt")
             attempts.append({"id": example_id, **attempt})
+    if dataset_path.is_dir():
+        raise ValueError(
+            "dataset_path must be a JSONL file; pass the concrete "
+            "train.jsonl.zst path inside the materialized dataset directory"
+        )
     examples = read_jsonl_zst(dataset_path)
     datasets = build_preference_datasets(
         attempts=attempts,
