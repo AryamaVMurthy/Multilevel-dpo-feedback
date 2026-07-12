@@ -172,6 +172,8 @@ def build_paper_dpo_config_kwargs(
         "save_strategy": "no",
         "remove_unused_columns": False,
         "bf16": True,
+        "gradient_checkpointing": True,
+        "use_cache": False,
         "loss_type": loss_type,
         **profile,
     }

@@ -140,6 +140,8 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(dpo["max_length"], 18432)
         self.assertEqual(dpo["gradient_accumulation_steps"], 16)
         self.assertTrue(dpo["bf16"])
+        self.assertTrue(dpo["gradient_checkpointing"])
+        self.assertFalse(dpo["use_cache"])
         self.assertEqual(dpo["beta"], 0.1)
         self.assertEqual(dpo["optim"], "adamw_torch_fused")
         self.assertEqual(dpo["loss_type"], "sigmoid_norm")
