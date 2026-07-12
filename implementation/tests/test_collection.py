@@ -72,8 +72,20 @@ class CollectionTest(unittest.TestCase):
         config_path = repo / "configs" / "paper" / "math.yaml"
         config = load_paper_experiment(config_path)
         examples = [
-            {"id": "m1", "domain": "math", "problem": "Compute one.", "gold_answer": "4"},
-            {"id": "m2", "domain": "math", "problem": "Compute two.", "gold_answer": "7"},
+            {
+                "id": "m1",
+                "domain": "math",
+                "problem": "Compute one.",
+                "gold_answer": "4",
+                "reference_solution": "Compute one and obtain 4.",
+            },
+            {
+                "id": "m2",
+                "domain": "math",
+                "problem": "Compute two.",
+                "gold_answer": "7",
+                "reference_solution": "Compute two and obtain 7.",
+            },
         ]
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -151,7 +163,13 @@ class CollectionTest(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         config_path = repo / "configs" / "paper" / "math.yaml"
         config = load_paper_experiment(config_path)
-        examples = [{"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}]
+        examples = [{
+            "id": "m1",
+            "domain": "math",
+            "problem": "Compute.",
+            "gold_answer": "4",
+            "reference_solution": "Compute and obtain 4.",
+        }]
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             dataset_dir = root / "data"

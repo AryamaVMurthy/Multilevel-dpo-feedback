@@ -15,6 +15,7 @@ class PromptTest(unittest.TestCase):
             policy: build_privileged_guidance_prompt(
                 problem="What is 2 + 2?",
                 gold_answer="4",
+                reference_solution="2 + 2 = 4.",
                 rollout="The answer is 5.",
                 result={"correct": False},
                 domain="math",
@@ -30,6 +31,7 @@ class PromptTest(unittest.TestCase):
         self.assertIn("identify the general error", prompts["error_and_hint"].lower())
         self.assertIn("one slight directional hint", prompts["error_and_hint"].lower())
         for prompt in prompts.values():
+            self.assertIn("Reference solution (teacher-only):\n2 + 2 = 4.", prompt)
             self.assertIn("must not reveal", prompt.lower())
             self.assertIn("equivalent expression", prompt.lower())
             self.assertIn("decisive intermediate", prompt.lower())
@@ -42,6 +44,7 @@ class PromptTest(unittest.TestCase):
             build_privileged_guidance_prompt(
                 problem="p",
                 gold_answer="g",
+                reference_solution="Reference derivation.",
                 rollout="r",
                 result={"correct": False},
                 domain="math",

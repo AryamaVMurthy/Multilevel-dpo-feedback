@@ -88,12 +88,15 @@ def build_privileged_guidance_prompt(
     *,
     problem: str,
     gold_answer: str,
+    reference_solution: str,
     rollout: str,
     result: dict,
     domain: str,
     feedback_policy: str,
     prior_reviews: list[dict] | None = None,
 ) -> str:
+    if not isinstance(reference_solution, str) or not reference_solution.strip():
+        raise ValueError("reference_solution must be a non-empty teacher-only string")
     policy_instructions = {
         "error_only": (
             "Identify the general error in the approach or inference. Explain why that approach is invalid, "
@@ -150,6 +153,9 @@ Problem:
 
 Gold answer (teacher-only):
 {gold_answer}
+
+Reference solution (teacher-only):
+{reference_solution}
 
 Earlier student response:
 {rollout}

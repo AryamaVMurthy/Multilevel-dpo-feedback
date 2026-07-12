@@ -38,6 +38,7 @@ class NativeCliTest(unittest.TestCase):
                         "domain": "math",
                         "problem": "What is 2 + 2?",
                         "gold_answer": "4",
+                        "reference_solution": "2 + 2 = 4.",
                     }
                 )
                 + "\n",

@@ -228,12 +228,14 @@ class NativePipelineTest(unittest.TestCase):
         prompt = build_privileged_guidance_prompt(
             problem="What is 2 + 2?",
             gold_answer="4",
+            reference_solution="2 + 2 = 4.",
             rollout=WRONG,
             result={"correct": False, "reason": "arithmetic error"},
             domain="math",
             feedback_policy="hint_only",
         )
         self.assertIn("Gold answer (teacher-only):\n4", prompt)
+        self.assertIn("Reference solution (teacher-only):\n2 + 2 = 4.", prompt)
         self.assertIn("must not reveal", prompt.lower())
         self.assertIn("slight directional hint", prompt.lower())
         self.assertIn("understand the mathematical issue", prompt.lower())
@@ -245,6 +247,7 @@ class NativePipelineTest(unittest.TestCase):
         prompt = build_privileged_guidance_prompt(
             problem="What is 2 + 2?",
             gold_answer="4",
+            reference_solution="2 + 2 = 4.",
             rollout=WRONG,
             result={"correct": False},
             domain="math",
@@ -262,6 +265,18 @@ class NativePipelineTest(unittest.TestCase):
         self.assertIn("Previous rejected hint", prompt)
         self.assertIn("answer_disclosure", prompt)
         self.assertIn("write different standalone feedback", prompt.lower())
+
+    def test_guidance_prompt_requires_reference_solution(self):
+        with self.assertRaisesRegex(ValueError, "reference_solution"):
+            build_privileged_guidance_prompt(
+                problem="p",
+                gold_answer="g",
+                reference_solution="",
+                rollout="r",
+                result={"correct": False},
+                domain="math",
+                feedback_policy="hint_only",
+            )
 
     def test_evaluator_output_uses_tagged_verdict_and_evaluated_answer(self):
         parsed = parse_evaluator_output(

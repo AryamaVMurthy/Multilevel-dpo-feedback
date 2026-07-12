@@ -502,9 +502,15 @@ def run_native_pipeline(
         regeneration: int,
         prior_reviews: list[dict[str, Any]],
     ) -> str:
+        reference_solution = example.get("reference_solution")
+        if not isinstance(reference_solution, str) or not reference_solution.strip():
+            raise ValueError(
+                f"teacher guidance requires reference_solution for {example.get('id')}"
+            )
         prompt = build_privileged_guidance_prompt(
             problem=str(example["problem"]),
             gold_answer=str(example["gold_answer"]),
+            reference_solution=reference_solution,
             rollout=rollout,
             result=result,
             domain=str(example["domain"]),
