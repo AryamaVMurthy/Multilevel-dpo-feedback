@@ -142,7 +142,7 @@ class NativePipelineTest(unittest.TestCase):
     def test_model_evaluator_preserves_exact_generation_metadata(self):
         evaluator = make_model_evaluator(
             generate=lambda *_args, **_kwargs: ModelGeneration(
-                text='{"correct": true, "answer": "4", "confidence": 1.0, "reason": "matches"}',
+                text="<verdict>CORRECT</verdict>\n<evaluated_answer>4</evaluated_answer>",
                 prompt_tokens=90,
                 generated_tokens=18,
                 terminated=True,
@@ -236,16 +236,28 @@ class NativePipelineTest(unittest.TestCase):
         self.assertIn("answer_disclosure", prompt)
         self.assertIn("write a different hint", prompt.lower())
 
-    def test_evaluator_output_requires_explicit_correctness_and_confidence(self):
+    def test_evaluator_output_uses_tagged_verdict_and_evaluated_answer(self):
         parsed = parse_evaluator_output(
-            '{"correct": true, "answer": "4", "confidence": 0.98, "reason": "matches"}'
+            "<verdict>CORRECT</verdict>\n<evaluated_answer>12/\\sqrt{3}</evaluated_answer>"
         )
         self.assertTrue(parsed["correct"])
-        self.assertEqual(parsed["answer"], "4")
-        self.assertAlmostEqual(parsed["confidence"], 0.98)
+        self.assertEqual(parsed["answer"], "12/\\sqrt{3}")
 
-        with self.assertRaisesRegex(ValueError, "correct"):
-            parse_evaluator_output('{"answer": "4"}')
+        with self.assertRaisesRegex(ValueError, "verdict"):
+            parse_evaluator_output("<evaluated_answer>4</evaluated_answer>")
+
+    def test_evaluator_output_rejects_ambiguous_or_surrounding_content(self):
+        invalid_outputs = (
+            "CORRECT",
+            "<verdict>MAYBE</verdict><evaluated_answer>4</evaluated_answer>",
+            "prefix<verdict>CORRECT</verdict><evaluated_answer>4</evaluated_answer>",
+            "<verdict>CORRECT</verdict><evaluated_answer>4</evaluated_answer>suffix",
+            "<verdict>CORRECT</verdict><verdict>WRONG</verdict><evaluated_answer>4</evaluated_answer>",
+            "<verdict>CORRECT</verdict><evaluated_answer></evaluated_answer>",
+        )
+        for raw in invalid_outputs:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                parse_evaluator_output(raw)
 
     def test_guidance_guard_accepts_explicit_single_token_contract(self):
         parsed = parse_guidance_guard_output("SAFE")
@@ -256,19 +268,10 @@ class NativePipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SAFE or UNSAFE"):
             parse_guidance_guard_output("MAYBE")
 
-    def test_evaluator_accepts_native_reasoning_around_final_json(self):
-        parsed = parse_evaluator_output(
-            'I checked the response carefully.\n'
-            '{"correct": true, "answer": "4", "confidence": 0.98, "reason": "matches"}\n'
-            'This judgment is final.'
-        )
-        self.assertTrue(parsed["correct"])
-
     def test_model_evaluator_attaches_domain_checks_without_hiding_model_judgment(self):
         evaluator = make_model_evaluator(
             generate=lambda *_args, **_kwargs: (
-                '{"correct": true, "answer": "4", "confidence": 0.98, '
-                '"reason": "matches"}'
+                "<verdict>CORRECT</verdict>\n<evaluated_answer>4</evaluated_answer>"
             ),
             generation_kwargs={},
         )
@@ -286,7 +289,7 @@ class NativePipelineTest(unittest.TestCase):
         outputs = iter(
             [
                 '{false,"$74","reason","high"}',
-                '{"correct": false, "answer": "$74", "confidence": 0.91, "reason": "does not match"}',
+                "<verdict>WRONG</verdict>\n<evaluated_answer>$74</evaluated_answer>",
             ]
         )
         evaluator = make_model_evaluator(
@@ -318,7 +321,7 @@ class NativePipelineTest(unittest.TestCase):
             )
         self.assertEqual(caught.exception.raw_outputs, ["invalid one", "invalid two"])
 
-    def test_structured_role_prompts_require_json_without_preceding_reasoning(self):
+    def test_structured_role_prompts_require_tagged_evaluator_output(self):
         example = {
             "domain": "math",
             "problem": "What is 2 + 2?",
@@ -326,21 +329,16 @@ class NativePipelineTest(unittest.TestCase):
         }
         evaluator_prompt = build_evaluator_prompt(example=example, response=WRONG)
         guard_prompt = build_guidance_guard_prompt(example=example, guidance="Recheck the operation.")
-        self.assertIn("first character", evaluator_prompt.lower())
+        self.assertIn("<verdict>", evaluator_prompt.lower())
+        self.assertIn("<evaluated_answer>", evaluator_prompt.lower())
         self.assertIn("do not provide analysis", evaluator_prompt.lower())
-        self.assertIn("at most 160 characters", evaluator_prompt.lower())
-        self.assertIn("do not use quotation marks", evaluator_prompt.lower())
-        self.assertIn("single line", evaluator_prompt.lower())
-        self.assertIn("plain ascii", evaluator_prompt.lower())
-        self.assertIn("do not use latex", evaluator_prompt.lower())
-        self.assertIn('immediately after `"answer":`', evaluator_prompt.lower())
+        self.assertIn("normal mathematical notation", evaluator_prompt.lower())
         repair_prompt = build_evaluator_repair_prompt(
             original_prompt=evaluator_prompt,
             raw='{"answer":"\\boxed{4}"}',
-            error="model output does not contain a valid JSON object",
+            error="missing verdict tag",
         )
-        self.assertIn("double every backslash", repair_prompt.lower())
-        self.assertIn("answer value must be surrounded", repair_prompt.lower())
+        self.assertIn("exactly two tagged fields", repair_prompt.lower())
         self.assertIn("exactly one token: safe or unsafe", guard_prompt.lower())
         self.assertIn("safe example", guard_prompt.lower())
         self.assertIn("unsafe example", guard_prompt.lower())

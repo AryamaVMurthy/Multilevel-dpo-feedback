@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict
 from typing import Any, Callable
@@ -45,22 +46,23 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
 
 
 def parse_evaluator_output(raw: str) -> dict[str, Any]:
-    value = _parse_json_object(raw.strip())
-    required = ("correct", "answer", "confidence", "reason")
-    missing = [key for key in required if key not in value]
-    if missing:
-        raise ValueError(f"evaluator output is missing required fields: {', '.join(missing)}")
-    if not isinstance(value["correct"], bool):
-        raise ValueError("evaluator field correct must be boolean")
-    if not isinstance(value["answer"], str):
-        raise ValueError("evaluator field answer must be a string")
-    if not value["answer"].strip():
-        raise ValueError("evaluator field answer must be non-empty")
-    if not isinstance(value["confidence"], (int, float)) or not 0 <= float(value["confidence"]) <= 1:
-        raise ValueError("evaluator confidence must be between 0 and 1")
-    if not isinstance(value["reason"], str) or not value["reason"].strip():
-        raise ValueError("evaluator reason must be non-empty")
-    return value
+    match = re.fullmatch(
+        r"\s*<verdict>\s*(CORRECT|WRONG)\s*</verdict>\s*"
+        r"<evaluated_answer>(.*?)</evaluated_answer>\s*",
+        raw,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise ValueError(
+            "evaluator output must contain exactly one verdict tag followed by exactly one evaluated_answer tag"
+        )
+    verdict, answer = match.groups()
+    answer = answer.strip()
+    if not answer:
+        raise ValueError("evaluator evaluated_answer must be non-empty")
+    if any(tag in answer for tag in ("<verdict>", "</verdict>", "<evaluated_answer>")):
+        raise ValueError("evaluator evaluated_answer must not contain evaluator protocol tags")
+    return {"correct": verdict == "CORRECT", "answer": answer, "serialization": "tagged_text_v1"}
 
 
 def parse_guidance_guard_output(raw: str) -> dict[str, Any]:
@@ -108,23 +110,13 @@ Use the gold answer and controlled evidence only for evaluation. The model respo
 private reasoning followed by an answer. Decide whether its final answer is correct, not whether
 its style matches another model.
 
-Do not provide analysis, reasoning, headings, or a preamble. The first character of your response
-must be '{{' and the last character must be '}}'. Return exactly one JSON object with these fields:
-correct: boolean
-answer: string containing the answer you evaluated, written in plain ASCII
-confidence: number from 0 to 1
-reason: short single-line explanation, at most 160 characters, with no quotation marks or braces
-Do not use LaTeX commands or backslashes in the answer string. Write fractions with /, powers with
-^, and tuples or intervals with parentheses or brackets, for example (-1/8, 1/2).
-The answer value must always be a JSON string. Immediately after `"answer":` output a double
-quotation mark, then the plain-ASCII answer, then another double quotation mark. Never emit the
-answer as an unquoted number, tuple, list, object, boolean, or null.
-Do not use quotation marks or braces inside the reason string.
-Use a single line for the reason string.
-For SearchQA also include answer_type and evidence_supported.
-Use JSON field names exactly as shown in this shape example:
-{{"correct":false,"answer":"sample answer","confidence":0.90,"reason":"answer does not match"}}
-Confidence must be a JSON number, never a word such as low, medium, or high.
+Do not provide analysis, reasoning, headings, JSON, or a preamble. Return exactly two tagged fields
+in this order. Put only CORRECT or WRONG in <verdict>. Copy the final answer being evaluated into
+<evaluated_answer>; normal mathematical notation, LaTeX, tuples, quotes, and multiple lines are
+allowed without escaping.
+<verdict>WRONG</verdict>
+<evaluated_answer>the final answer from the model response</evaluated_answer>
+Do not add any text outside these two fields and do not repeat either field.
 
 Problem:
 {example["problem"]}
@@ -148,11 +140,9 @@ Validation error: {error}
 Invalid response:
 {raw}
 
-Return a corrected JSON object now. Preserve your judgment, but use the exact required field names
-and JSON value types. Convert the answer to plain ASCII without LaTeX. If a backslash is truly
-unavoidable in any JSON string, double every backslash so the object remains valid JSON. Output
-only the corrected object, from '{{' through '}}'. The answer value must be surrounded by double
-quotation marks even when it looks like a number, tuple, list, or interval.
+Return exactly two tagged fields now: one <verdict> containing CORRECT or WRONG, followed by one
+non-empty <evaluated_answer>. Preserve the judgment and answer. Do not emit JSON, analysis, a
+preamble, or any text outside the two tags. Normal mathematical notation requires no escaping.
 """
 
 
@@ -240,17 +230,6 @@ def make_model_evaluator(
             generation_records.append(asdict(generation))
             try:
                 candidate = parse_evaluator_output(raw)
-                actual_answer_type = candidate.get("answer_type", "unknown")
-                if not isinstance(actual_answer_type, str) or not actual_answer_type.strip():
-                    raise ValueError("evaluator field answer_type must be a non-empty string when supplied")
-                model_evidence_supported = candidate.get("evidence_supported")
-                if model_evidence_supported is not None and not isinstance(model_evidence_supported, bool):
-                    raise ValueError("evaluator field evidence_supported must be boolean when supplied")
-                if example.get("domain") == "search_qa":
-                    if "answer_type" not in candidate:
-                        raise ValueError("SearchQA evaluator output is missing answer_type")
-                    if "evidence_supported" not in candidate:
-                        raise ValueError("SearchQA evaluator output is missing evidence_supported")
                 parsed = candidate
                 break
             except ValueError as exc:
@@ -270,15 +249,12 @@ def make_model_evaluator(
                 )
         if parsed is None:
             raise RuntimeError("evaluator regeneration loop exited without a result")
-        actual_answer_type = parsed.get("answer_type", "unknown")
-        model_evidence_supported = parsed.get("evidence_supported")
         try:
             deterministic = evaluate_domain_answer(
                 domain=str(example["domain"]),
                 prediction=parsed["answer"],
                 example=example,
-                actual_answer_type=actual_answer_type,
-                evidence_supported=model_evidence_supported,
+                actual_answer_type="unknown",
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ModelOutputParseError(
@@ -294,6 +270,8 @@ def make_model_evaluator(
         parsed["deterministic"] = deterministic
         parsed["deterministic_correct"] = bool(deterministic["correct"])
         parsed["requires_model_judgment"] = requires_model_judgment
+        parsed["confidence"] = float(deterministic["confidence"])
+        parsed["confidence_source"] = "deterministic_checker"
         # Deterministic checks act as a consistency gate for clear cases. Ambiguous cases remain
         # under the evaluator model's judgment and are visible in the result for auditability.
         parsed["correct"] = model_correct if requires_model_judgment else model_correct and bool(deterministic["correct"])
