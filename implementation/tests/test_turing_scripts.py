@@ -19,6 +19,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",
             "turing_merge_collection.sh",
+            "turing_build_preferences.sh",
             "turing_tune_paper.sh",
             "turing_train_paper.sh",
             "turing_evaluate_paper.sh",
@@ -106,6 +107,10 @@ class TuringScriptTest(unittest.TestCase):
         self.assertIn("uv run --frozen --no-sync", freeze_baseline)
         merge_collection = Path("scripts/turing_merge_collection.sh").read_text(encoding="utf-8")
         self.assertIn("uv run --frozen --no-sync", merge_collection)
+        build_preferences = Path("scripts/turing_build_preferences.sh").read_text(encoding="utf-8")
+        self.assertIn("build-preferences", build_preferences)
+        self.assertIn("COLLECTION_PATH:?COLLECTION_PATH is required", build_preferences)
+        self.assertIn("DATASET_PATH:?DATASET_PATH is required", build_preferences)
         rescore = Path("scripts/turing_rescore_evaluation.sh").read_text(encoding="utf-8")
         self.assertEqual(rescore.count("uv run --frozen --no-sync"), 2)
         merge_evaluations = Path("scripts/turing_merge_evaluations.sh").read_text(encoding="utf-8")
@@ -180,6 +185,7 @@ class TuringScriptTest(unittest.TestCase):
             "turing_freeze_decoding.sh",
             "turing_freeze_baseline.sh",
             "turing_collect_array.sh",
+            "turing_build_preferences.sh",
             "turing_tune_paper.sh",
             "turing_train_paper.sh",
             "turing_evaluate_paper.sh",
