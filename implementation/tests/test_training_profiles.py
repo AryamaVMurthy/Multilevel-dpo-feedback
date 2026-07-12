@@ -8,6 +8,7 @@ from text_feedback_dpo.cli import (
     _paper_candidates,
     _paper_evaluator,
     _selection_metric,
+    _tuning_validation_failure,
     run_train_paper,
 )
 from text_feedback_dpo.experiment_config import load_paper_experiment
@@ -22,6 +23,36 @@ from text_feedback_dpo.training import (
 
 
 class TrainingProfileTest(unittest.TestCase):
+    def test_tuning_validation_gate_rejects_failures_and_excess_truncation(self):
+        config = load_paper_experiment(Path("configs/paper/math.yaml"))
+        with TemporaryDirectory() as tmp:
+            failures = Path(tmp) / "failures.jsonl"
+            failures.write_text("", encoding="utf-8")
+            self.assertIsNone(
+                _tuning_validation_failure(
+                    config,
+                    {"common": {"truncation_rate": 0.05}},
+                    failures_path=failures,
+                )
+            )
+            self.assertIn(
+                "truncation rate",
+                _tuning_validation_failure(
+                    config,
+                    {"common": {"truncation_rate": 0.051}},
+                    failures_path=failures,
+                ),
+            )
+            failures.write_text('{"error":"parse"}\n', encoding="utf-8")
+            self.assertIn(
+                "failures",
+                _tuning_validation_failure(
+                    config,
+                    {"common": {"truncation_rate": 0.0}},
+                    failures_path=failures,
+                ),
+            )
+
     def test_response_sft_reuses_frozen_standard_dpo_optimizer_candidate(self):
         candidate = _paper_candidates(
             load_paper_experiment(Path("configs/paper/math.yaml")),

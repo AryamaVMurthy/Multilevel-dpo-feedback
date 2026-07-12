@@ -1053,6 +1053,28 @@ def _selection_metric(config: Any, metrics: dict[str, Any]) -> float:
     return float(metrics["search_qa"]["exact_match"])
 
 
+def _tuning_validation_failure(
+    config: Any,
+    metrics: dict[str, Any],
+    *,
+    failures_path: Path,
+) -> str | None:
+    common = metrics.get("common")
+    if not isinstance(common, dict):
+        raise ValueError("tuning validation metrics are missing the common metric group")
+    truncation_rate = common.get("truncation_rate")
+    if not isinstance(truncation_rate, (int, float)) or isinstance(truncation_rate, bool):
+        raise ValueError("tuning validation metrics require a numeric truncation rate")
+    if not failures_path.exists():
+        raise FileNotFoundError(f"tuning validation failures artifact does not exist: {failures_path}")
+    if failures_path.stat().st_size:
+        return "tuning validation contains model or evaluator failures"
+    maximum = float(config.evaluation["max_truncation_rate"])
+    if float(truncation_rate) > maximum:
+        return f"tuning validation truncation rate {float(truncation_rate):.6f} exceeds {maximum:.6f}"
+    return None
+
+
 def run_tune_paper(
     *,
     config_path: Path,
@@ -1071,6 +1093,11 @@ def run_tune_paper(
     if ledger.get("method") != method:
         raise ValueError("search ledger method does not match tune method")
     candidate = _candidate_from_ledger(ledger, candidate_id)
+    observation_key = f"{stage}:{candidate_id}"
+    if observation_key in ledger.get("observations", {}):
+        raise ValueError(
+            f"search ledger already contains observation {observation_key}; use a fresh ledger for a rerun"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     if method.endswith("dpo"):
         train_metrics = train_paper_dpo(
@@ -1114,15 +1141,27 @@ def run_tune_paper(
         adapter_manifest=adapter_manifest,
     )
     artifact_hash = hashlib.sha256((output_dir / "train" / "train_metrics.json").read_bytes()).hexdigest()
+    failure_reason = _tuning_validation_failure(
+        config,
+        validation_metrics,
+        failures_path=output_dir / "validation" / "failures.jsonl",
+    )
     register_observation(
         ledger,
         candidate_id=candidate_id,
         stage=stage,
-        status="valid",
-        metrics={"selection_metric": _selection_metric(config, validation_metrics), "gpu_hours": 0.0},
+        status="invalid" if failure_reason else "valid",
+        metrics={
+            "selection_metric": _selection_metric(config, validation_metrics),
+            "truncation_rate": validation_metrics["common"]["truncation_rate"],
+            "gpu_hours": 0.0,
+        },
         artifact_hash=artifact_hash,
+        failure_reason=failure_reason,
     )
     ledger_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if failure_reason:
+        raise RuntimeError(f"tuning candidate failed validation gate: {failure_reason}")
     return {"candidate_id": candidate_id, "stage": stage, "validation": validation_metrics, "train": train_metrics}
 
 
