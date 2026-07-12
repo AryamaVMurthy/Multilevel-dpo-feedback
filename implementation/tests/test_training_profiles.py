@@ -262,6 +262,7 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(sft["max_length"], 18432)
         self.assertEqual(sft["gradient_accumulation_steps"], 16)
         self.assertTrue(sft["completion_only_loss"])
+        self.assertEqual(sft["loss_type"], "nll")
         self.assertTrue(sft["gradient_checkpointing"])
         self.assertTrue(sft["bf16"])
         self.assertEqual(sft["optim"], "adamw_torch_fused")

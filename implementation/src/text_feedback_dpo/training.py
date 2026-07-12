@@ -220,6 +220,7 @@ def build_paper_sft_config_kwargs(
         "gradient_checkpointing": True,
         "use_cache": False,
         "completion_only_loss": True,
+        "loss_type": "nll",
         **profile,
     }
 
