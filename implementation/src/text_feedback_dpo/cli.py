@@ -1178,7 +1178,13 @@ def run_train_paper(
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
     freeze = json.loads(freeze_manifest_path.read_text(encoding="utf-8"))
-    allowed_freeze_method = "standard_dpo" if method in {"response_sft", "on_policy_distillation"} else method
+    standard_candidate_methods = {
+        "response_sft",
+        "on_policy_distillation",
+        "multilevel_dpo",
+        "matched_dpo",
+    }
+    allowed_freeze_method = "standard_dpo" if method in standard_candidate_methods else method
     if freeze.get("method") != allowed_freeze_method or not freeze.get("candidate"):
         raise ValueError("freeze manifest does not contain the requested method and candidate")
     payload = freeze["candidate"]

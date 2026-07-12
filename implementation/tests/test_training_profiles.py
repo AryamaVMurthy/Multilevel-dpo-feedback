@@ -91,6 +91,43 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(train.call_args.kwargs["candidate"], candidate)
         self.assertEqual(train.call_args.kwargs["rows"][0]["prompt"], "Solve.")
 
+    def test_multilevel_and_matched_reuse_frozen_standard_optimizer_candidate(self):
+        candidate = _paper_candidates(
+            load_paper_experiment(Path("configs/paper/math.yaml")),
+            "standard_dpo",
+        )[0]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "pairs.jsonl"
+            data.write_text(
+                json.dumps({"prompt": "Solve.", "chosen": "right", "rejected": "wrong"}) + "\n",
+                encoding="utf-8",
+            )
+            freeze = root / "standard-freeze.json"
+            freeze.write_text(
+                json.dumps({
+                    "method": "standard_dpo",
+                    "candidate_id": candidate.candidate_id,
+                    "candidate": vars(candidate),
+                }),
+                encoding="utf-8",
+            )
+            for method in ("multilevel_dpo", "matched_dpo"):
+                with self.subTest(method=method), mock.patch(
+                    "text_feedback_dpo.cli.train_paper_dpo",
+                    return_value={"method": method},
+                ) as train:
+                    result = run_train_paper(
+                        config_path=Path("configs/paper/math.yaml"),
+                        method=method,
+                        seed=17,
+                        data_path=data,
+                        freeze_manifest_path=freeze,
+                        output_dir=root / method,
+                    )
+                    self.assertEqual(result["method"], method)
+                    self.assertEqual(train.call_args.kwargs["candidate"], candidate)
+
     def test_math_primary_and_length_desensitized_ledgers_are_objectively_labeled(self):
         config = load_paper_experiment(Path("configs/paper/math.yaml"))
         primary = _paper_candidates(config, "standard_dpo")
