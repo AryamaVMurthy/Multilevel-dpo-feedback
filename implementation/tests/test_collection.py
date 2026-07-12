@@ -13,10 +13,11 @@ from text_feedback_dpo.models import ModelGeneration, ModelProvider
 
 class ScriptedProvider(ModelProvider):
     def __init__(self):
+        self.prompts = []
         self.outputs = {
             "student": iter(["wrong one", "right one", "right two"]),
             "teacher": iter([
-                "Recheck how the quantities relate before answering fully.",
+                "<student_feedback>Recheck how the quantities relate before answering fully.</student_feedback>",
             ]),
         }
 
@@ -24,6 +25,7 @@ class ScriptedProvider(ModelProvider):
         return next(self.outputs[role])
 
     def generate_result(self, role, prompt, **kwargs):
+        self.prompts.append({"role": role, "prompt": prompt})
         text = self.generate(role, prompt, **kwargs)
         return ModelGeneration(
             text=text,
@@ -115,7 +117,22 @@ class CollectionTest(unittest.TestCase):
             protocol = json.loads((output_dir / "shard-0000" / "protocol.json").read_text())
             self.assertEqual(protocol["source_commit"], "a" * 40)
             self.assertEqual(protocol["artifact_schema"], "paper-v3")
+            self.assertEqual(protocol["feedback_policy"], "hint_only")
             self.assertIn("guidance_critic", protocol["role_generation"])
+            retry_prompts = [
+                item["prompt"]
+                for item in provider.prompts
+                if item["role"] == "student" and "General problem-solving advice" in item["prompt"]
+            ]
+            self.assertEqual(len(retry_prompts), 1)
+            self.assertIn("General problem-solving advice", retry_prompts[0])
+            self.assertNotIn("Teacher guidance", retry_prompts[0])
+            self.assertNotIn("Solve again", retry_prompts[0])
+            self.assertNotIn("<student_feedback>", retry_prompts[0])
+            self.assertEqual(
+                records[0]["guidance"][0]["parsed_student_feedback"],
+                "Recheck how the quantities relate before answering fully.",
+            )
             completion = json.loads((output_dir / "shard-0000" / "complete.json").read_text())
             self.assertEqual(completion["protocol_hash"], protocol["protocol_hash"])
 

@@ -13,6 +13,7 @@ from text_feedback_dpo.evaluators import (
     make_model_evaluator,
     make_model_guidance_critic,
     make_model_guidance_guard,
+    parse_student_feedback_output,
 )
 from text_feedback_dpo.experiment_config import load_paper_experiment
 from text_feedback_dpo.io import append_jsonl_zst, read_jsonl, read_jsonl_zst, write_json_atomic, write_jsonl
@@ -60,6 +61,7 @@ def _build_protocol_manifest(
         "dataset_manifest_hash": dataset_manifest_hash,
         "artifact_schema": config.collection["artifact_schema"],
         "prompt_protocol": config.collection["prompt_protocol"],
+        "feedback_policy": config.collection["feedback_policy"],
         "models": config.models,
         "role_generation": {
             role: asdict(profile) for role, profile in sorted(config.generation.roles.items())
@@ -231,13 +233,22 @@ def collect_paper_shard(
                 rollout=rollout,
                 result=result,
                 domain=str(example_row["domain"]),
+                feedback_policy=str(config.collection["feedback_policy"]),
                 prior_reviews=prior_reviews,
             )
             start = time.monotonic_ns()
             generation = provider.generate_result(
                 "teacher", prompt, **paper_generation_kwargs(config, role="teacher")
             )
-            guidance = generation.text
+            raw_teacher_output = generation.text
+            try:
+                guidance = parse_student_feedback_output(raw_teacher_output)
+            except ValueError as exc:
+                raise ModelOutputParseError(
+                    role="teacher",
+                    raw=raw_teacher_output,
+                    message=str(exc),
+                ) from exc
             generation_events.append(
                 {
                     "role": "teacher",
@@ -250,7 +261,9 @@ def collect_paper_shard(
             guidance_events.append({
                 "attempt": attempt,
                 "regeneration": regeneration,
-                "raw_teacher_output": guidance,
+                "raw_teacher_output": raw_teacher_output,
+                "parsed_student_feedback": guidance,
+                "feedback_policy": config.collection["feedback_policy"],
                 "teacher_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
                 "teacher_model": config.models["teacher"]["id"],
             })
@@ -264,7 +277,7 @@ def collect_paper_shard(
             )
 
         def retry_prompt_builder(base_prompt: str, guidance: str) -> str:
-            return f"{base_prompt}\n\nTeacher guidance for reconsideration:\n{guidance}\nSolve again."
+            return f"{base_prompt}\n\nGeneral problem-solving advice:\n{guidance}\n"
 
         try:
             result = build_native_iterative_guidance_pairs(

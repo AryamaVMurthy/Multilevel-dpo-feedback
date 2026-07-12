@@ -84,7 +84,19 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.evaluation["generation_seed"], 20260711)
         self.assertEqual(config.evaluation["max_truncation_rate"], 0.05)
         self.assertEqual(config.evaluation["minimum_evaluator_audit_agreement"], 0.95)
+        self.assertEqual(config.collection["feedback_policy"], "hint_only")
         self.assertTrue(config.require_freeze_manifest_for_test)
+
+    def test_feedback_policy_is_required_and_validated(self):
+        missing = self._load_mapping("configs/paper/math.yaml")
+        del missing["collection"]["feedback_policy"]
+        with self.assertRaisesRegex(ValueError, r"collection\.feedback_policy.*required"):
+            self._write_and_load(missing)
+
+        invalid = self._load_mapping("configs/paper/math.yaml")
+        invalid["collection"]["feedback_policy"] = "automatic"
+        with self.assertRaisesRegex(ValueError, r"collection\.feedback_policy"):
+            self._write_and_load(invalid)
 
     def test_model_ids_and_revisions_are_exact_and_post_trained(self):
         for role, field, invalid in (

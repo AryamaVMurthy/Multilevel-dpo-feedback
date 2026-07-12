@@ -607,6 +607,7 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
             "shard_size",
             "artifact_schema",
             "prompt_protocol",
+            "feedback_policy",
         },
     )
     for field in ("max_guidance_steps", "max_guidance_regenerations", "shard_size"):
@@ -616,6 +617,10 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
     if collection["prompt_protocol"] not in {"qwen3-nonthinking-r1", "qwen3-nonthinking-final-r1"}:
         raise ValueError(
             "collection.prompt_protocol must be qwen3-nonthinking-r1 or qwen3-nonthinking-final-r1"
+        )
+    if collection["feedback_policy"] not in {"error_only", "hint_only", "error_and_hint"}:
+        raise ValueError(
+            "collection.feedback_policy must be error_only, hint_only, or error_and_hint"
         )
     training = _mapping(value["training"], "training")
     _strict_keys(

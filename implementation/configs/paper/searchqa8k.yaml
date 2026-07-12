@@ -31,6 +31,7 @@ generation:
   guidance_guard: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
   guidance_critic: {enable_thinking: false, do_sample: false, max_new_tokens: 8}
 collection:
+  feedback_policy: hint_only
   max_guidance_steps: 3
   max_guidance_regenerations: 2
   shard_size: 250
