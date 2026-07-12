@@ -244,6 +244,20 @@ class NativePipelineTest(unittest.TestCase):
         self.assertNotIn("proper nouns", prompt.lower())
         self.assertIn(WRONG, prompt)
 
+    def test_truncated_response_requests_concise_teacher_feedback(self):
+        prompt = build_privileged_guidance_prompt(
+            problem="What is 2 + 2?",
+            gold_answer="4",
+            reference_solution="2 + 2 = 4.",
+            rollout="unfinished response",
+            result={"correct": False, "student_truncation_override": True},
+            domain="math",
+            feedback_policy="hint_only",
+        )
+        self.assertIn("reached the generation limit", prompt)
+        self.assertIn("keeping the derivation concise", prompt)
+        self.assertIn("final boxed answer sooner", prompt)
+
     def test_guidance_regeneration_prompt_includes_prior_review_without_answer(self):
         prompt = build_privileged_guidance_prompt(
             problem="What is 2 + 2?",

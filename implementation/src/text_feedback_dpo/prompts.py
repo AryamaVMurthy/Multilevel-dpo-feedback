@@ -115,6 +115,12 @@ def build_privileged_guidance_prompt(
         raise ValueError(
             "feedback_policy must be error_only, hint_only, or error_and_hint"
         )
+    truncation_instruction = ""
+    if result.get("student_truncation_override") is True:
+        truncation_instruction = (
+            "\nThe student response reached the generation limit. The student-facing feedback must also "
+            "advise keeping the derivation concise and reaching the final boxed answer sooner.\n"
+        )
     review_text = ""
     if prior_reviews:
         latest = prior_reviews[-1]
@@ -142,6 +148,7 @@ only with the original problem.
 
 Feedback policy: {feedback_policy}
 {policy_instructions[feedback_policy]}
+{truncation_instruction}
 
 Return concise feedback of at most forty words. Do not copy phrases or numerical results from the gold
 solution. The answer-leakage prohibition applies even when revealing the answer would make the feedback

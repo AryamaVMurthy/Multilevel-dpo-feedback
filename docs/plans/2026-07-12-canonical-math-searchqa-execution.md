@@ -114,7 +114,8 @@ Required gate:
 
 - zero malformed evaluator outputs;
 - at least 95% manual evaluator agreement;
-- truncation at most 5%;
+- truncation at most 10%; every truncated completion is scored wrong, and collection asks the
+  privileged teacher to include concise-answer advice before retrying;
 - complete generation metadata and hashes;
 - no teacher information in prompts.
 

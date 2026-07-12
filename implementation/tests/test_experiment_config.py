@@ -87,7 +87,8 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.training["max_sequence_tokens"], 18432)
         self.assertTrue(config.evaluation["baseline_before_training"])
         self.assertEqual(config.evaluation["generation_seed"], 20260711)
-        self.assertEqual(config.evaluation["max_truncation_rate"], 0.05)
+        self.assertEqual(config.evaluation["max_truncation_rate"], 0.10)
+        self.assertEqual(config.collection["prompt_protocol"], "qwen3-nonthinking-final-r2")
         self.assertEqual(config.evaluation["minimum_evaluator_audit_agreement"], 0.95)
         self.assertEqual(config.collection["feedback_policy"], "hint_only")
         self.assertTrue(config.require_freeze_manifest_for_test)
@@ -153,7 +154,7 @@ class PaperExperimentConfigTest(unittest.TestCase):
         self.assertEqual(config.dataset.validation_tune_fraction, 2 / 3)
         self.assertEqual(len(config.dataset.subjects), 7)
         self.assertTrue(config.generation.roles["student"].stop_after_final_answer)
-        self.assertEqual(config.collection["prompt_protocol"], "qwen3-nonthinking-final-r1")
+        self.assertEqual(config.collection["prompt_protocol"], "qwen3-nonthinking-final-r2")
 
     def test_math_config_rejects_noncanonical_subject_order_or_primary_levels(self):
         value = self._load_mapping("configs/paper/math.yaml")

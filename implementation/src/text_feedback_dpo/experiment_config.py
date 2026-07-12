@@ -622,9 +622,14 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         _positive_int(collection[field], f"collection.{field}")
     if collection["artifact_schema"] != "paper-v3":
         raise ValueError("collection.artifact_schema must be paper-v3")
-    if collection["prompt_protocol"] not in {"qwen3-nonthinking-r1", "qwen3-nonthinking-final-r1"}:
+    if collection["prompt_protocol"] not in {
+        "qwen3-nonthinking-r1",
+        "qwen3-nonthinking-final-r1",
+        "qwen3-nonthinking-final-r2",
+    }:
         raise ValueError(
-            "collection.prompt_protocol must be qwen3-nonthinking-r1 or qwen3-nonthinking-final-r1"
+            "collection.prompt_protocol must be qwen3-nonthinking-r1, "
+            "qwen3-nonthinking-final-r1, or qwen3-nonthinking-final-r2"
         )
     if collection["feedback_policy"] not in {"error_only", "hint_only", "error_and_hint"}:
         raise ValueError(
@@ -641,6 +646,8 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
         raise ValueError("training.final_seeds must contain exactly three seeds")
     _number(training["max_epochs"], "training.max_epochs")
     _number_tuple(training["checkpoint_fractions"], "training.checkpoint_fractions")
+    if tuple(training["checkpoint_fractions"]) != (0.25, 0.5, 0.75, 1.0):
+        raise ValueError("training.checkpoint_fractions must be exactly 0.25, 0.5, 0.75, and 1.0")
     if _positive_int(training["max_sequence_tokens"], "training.max_sequence_tokens") != 18432:
         raise ValueError("training.max_sequence_tokens must be exactly 18432")
     evaluation = _mapping(value["evaluation"], "evaluation")
@@ -678,8 +685,8 @@ def load_paper_experiment(path: Path) -> PaperExperimentConfig:
     generation_config = _parse_generation(value["generation"])
     student_generation = generation_config.roles["student"]
     if dataset_config.name in {"math", "gsm8k"}:
-        if collection["prompt_protocol"] != "qwen3-nonthinking-final-r1":
-            raise ValueError("math paper configs must use qwen3-nonthinking-final-r1")
+        if collection["prompt_protocol"] != "qwen3-nonthinking-final-r2":
+            raise ValueError("math paper configs must use qwen3-nonthinking-final-r2")
         if not student_generation.stop_after_final_answer:
             raise ValueError("math paper configs must enable student final-answer stopping")
     else:

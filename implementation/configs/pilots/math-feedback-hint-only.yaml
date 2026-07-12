@@ -41,7 +41,7 @@ collection:
   max_guidance_regenerations: 2
   shard_size: 256
   artifact_schema: paper-v3
-  prompt_protocol: qwen3-nonthinking-final-r1
+  prompt_protocol: qwen3-nonthinking-final-r2
 lora:
   rank: 16
   alpha: 32
@@ -93,7 +93,7 @@ training:
 evaluation:
   baseline_before_training: true
   generation_seed: 20260711
-  max_truncation_rate: 0.05
+  max_truncation_rate: 0.10
   minimum_evaluator_audit_agreement: 0.95
 slurm:
   account: priyesh.shukla

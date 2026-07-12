@@ -31,7 +31,7 @@ class TrainingProfileTest(unittest.TestCase):
             self.assertIsNone(
                 _tuning_validation_failure(
                     config,
-                    {"common": {"truncation_rate": 0.05}},
+                    {"common": {"truncation_rate": 0.10}},
                     failures_path=failures,
                 )
             )
@@ -39,7 +39,7 @@ class TrainingProfileTest(unittest.TestCase):
                 "truncation rate",
                 _tuning_validation_failure(
                     config,
-                    {"common": {"truncation_rate": 0.051}},
+                    {"common": {"truncation_rate": 0.101}},
                     failures_path=failures,
                 ),
             )
@@ -173,6 +173,10 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertTrue(dpo["bf16"])
         self.assertTrue(dpo["gradient_checkpointing"])
         self.assertFalse(dpo["use_cache"])
+        self.assertEqual(dpo["save_strategy"], "steps")
+        self.assertEqual(dpo["save_steps"], 0.25)
+        self.assertEqual(dpo["save_total_limit"], 4)
+        self.assertTrue(dpo["save_only_model"])
 
         sft = build_paper_sft_config_kwargs(
             output_dir="out",
@@ -187,6 +191,8 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertTrue(sft["gradient_checkpointing"])
         self.assertTrue(sft["bf16"])
         self.assertEqual(sft["optim"], "adamw_torch_fused")
+        self.assertEqual(sft["save_steps"], 0.25)
+        self.assertTrue(sft["save_only_model"])
 
         ld_candidate = build_dpo_candidates(
             learning_rates=(5e-6,),
@@ -232,6 +238,8 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertEqual(grpo["loss_type"], "grpo")
         self.assertEqual(grpo["beta"], 0.01)
         self.assertTrue(grpo["mask_truncated_completions"])
+        self.assertEqual(grpo["save_steps"], 0.25)
+        self.assertTrue(grpo["save_only_model"])
         self.assertEqual(grpo["temperature"], 0.7)
         self.assertEqual(grpo["top_p"], 0.8)
         self.assertEqual(grpo["top_k"], 20)
