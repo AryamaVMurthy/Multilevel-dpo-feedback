@@ -300,6 +300,17 @@ class NativePipelineTest(unittest.TestCase):
         self.assertTrue(parsed["correct"])
         self.assertEqual(parsed["answer"], "12/\\sqrt{3}")
 
+        latex_environment_close = parse_evaluator_output(
+            "<verdict>WRONG</verdict>\n"
+            "<evaluated_answer>\\boxed{\\begin{pmatrix}1 & 0\\end{pmatrix}}"
+            "\\end{evaluated_answer}"
+        )
+        self.assertFalse(latex_environment_close["correct"])
+        self.assertEqual(
+            latex_environment_close["answer"],
+            r"\boxed{\begin{pmatrix}1 & 0\end{pmatrix}}",
+        )
+
         with self.assertRaisesRegex(ValueError, "verdict"):
             parse_evaluator_output("<evaluated_answer>4</evaluated_answer>")
 

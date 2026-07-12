@@ -48,7 +48,8 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
 def parse_evaluator_output(raw: str) -> dict[str, Any]:
     match = re.fullmatch(
         r"\s*<verdict>\s*(CORRECT|WRONG)\s*</verdict>\s*"
-        r"<evaluated_answer>(.*?)</evaluated_answer>\s*",
+        r"<evaluated_answer>(.*?)"
+        r"(?:</evaluated_answer>|\\end\{evaluated_answer\})\s*",
         raw,
         flags=re.DOTALL,
     )
