@@ -1063,6 +1063,7 @@ def run_tune_paper(
     validation_path: Path,
     output_dir: Path,
     ledger_path: Path,
+    max_sequence_tokens: int | None = None,
 ) -> dict[str, Any]:
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
@@ -1079,6 +1080,7 @@ def run_tune_paper(
             output_dir=output_dir / "train",
             candidate=candidate,
             seed=config.dataset.seed,
+            max_sequence_tokens=max_sequence_tokens,
         )
     else:
         evaluator = _paper_evaluator(config)
@@ -1475,6 +1477,11 @@ def main() -> None:
     tune.add_argument("--validation", required=True, type=Path)
     tune.add_argument("--output-dir", required=True, type=Path)
     tune.add_argument("--ledger", required=True, type=Path)
+    tune.add_argument(
+        "--max-sequence-tokens",
+        type=int,
+        help="Explicit smoke-only DPO sequence-length override after a measured OOM; omitted for canonical 18432.",
+    )
     paper_train = subparsers.add_parser("train-paper")
     paper_train.add_argument("--config", required=True, type=Path)
     paper_train.add_argument(
@@ -1638,6 +1645,7 @@ def main() -> None:
             validation_path=args.validation,
             output_dir=args.output_dir,
             ledger_path=args.ledger,
+            max_sequence_tokens=args.max_sequence_tokens,
         )
     elif args.command == "train-paper":
         result = run_train_paper(

@@ -92,11 +92,18 @@ def train_paper_dpo(
     output_dir: Path,
     candidate: DpoCandidate,
     seed: int,
+    max_sequence_tokens: int | None = None,
 ) -> dict[str, Any]:
     if method not in {"standard_dpo", "multilevel_dpo", "matched_dpo", "ld_dpo"}:
         raise ValueError("paper DPO method must be standard_dpo, multilevel_dpo, matched_dpo, or ld_dpo")
     if not pairs:
         raise ValueError("paper DPO training requires non-empty preference pairs")
+    canonical_max_length = int(config.training["max_sequence_tokens"])
+    effective_max_length = canonical_max_length if max_sequence_tokens is None else int(max_sequence_tokens)
+    if effective_max_length <= 0:
+        raise ValueError("max_sequence_tokens must be positive")
+    if effective_max_length > canonical_max_length:
+        raise ValueError("max_sequence_tokens override cannot exceed the canonical paper sequence length")
     _seed(seed)
     try:
         from datasets import Dataset
@@ -134,7 +141,7 @@ def train_paper_dpo(
             max_steps=max_steps,
             candidate=candidate,
             effective_global_batch=effective_batch,
-            max_length=int(config.training["max_sequence_tokens"]),
+            max_length=effective_max_length,
             loss_type=loss_type,
             ld_alpha=ld_alpha,
         ),
@@ -163,6 +170,14 @@ def train_paper_dpo(
         "seed": seed,
         "pairs": len(pairs),
         "max_steps": max_steps,
+        "max_sequence_tokens": effective_max_length,
+        "canonical_max_sequence_tokens": canonical_max_length,
+        "sequence_length_override": (
+            None if max_sequence_tokens is None else {
+                "requested": effective_max_length,
+                "reason": "explicit smoke override after measured CUDA OOM at canonical DPO length",
+            }
+        ),
         "loss_type": loss_type,
         "ld_alpha": ld_alpha,
         "train_metrics": result.metrics,

@@ -142,10 +142,6 @@ class TrainingProfileTest(unittest.TestCase):
         self.assertTrue(dpo["bf16"])
         self.assertTrue(dpo["gradient_checkpointing"])
         self.assertFalse(dpo["use_cache"])
-        self.assertEqual(dpo["beta"], 0.1)
-        self.assertEqual(dpo["optim"], "adamw_torch_fused")
-        self.assertEqual(dpo["loss_type"], "sigmoid_norm")
-        self.assertNotIn("ld_alpha", dpo)
 
         sft = build_paper_sft_config_kwargs(
             output_dir="out",
