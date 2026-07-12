@@ -89,4 +89,4 @@ trap cleanup EXIT
 "${RUNNER[@]}" python -m text_feedback_dpo.cli tune-paper \
   --config "$CONFIG" --method "$METHOD" --candidate-id "$CANDIDATE_ID" \
   --stage "$STAGE_ID" --data "$DATA_PATH" --validation "$VALIDATION_PATH" \
-  --output-dir "$OUTPUT_DIR" --ledger "$LEDGER_PATH"
+  --output-dir "$OUTPUT_DIR" --ledger "$LEDGER_PATH" "$@"
