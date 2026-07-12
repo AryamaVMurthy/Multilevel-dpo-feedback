@@ -454,6 +454,39 @@ class NativePipelineTest(unittest.TestCase):
         ])
         self.assertEqual(len(result["attempts"]), 3)
 
+    def test_malformed_teacher_feedback_is_retried_and_recorded(self):
+        examples = [
+            {"id": "m1", "domain": "math", "problem": "Compute.", "gold_answer": "4"}
+        ]
+        teacher_calls = []
+
+        def teacher(*_args):
+            teacher_calls.append(True)
+            if len(teacher_calls) == 1:
+                raise ModelOutputParseError(
+                    role="teacher",
+                    raw="missing tag",
+                    message="teacher output must contain exactly one student_feedback block",
+                )
+            return "Recheck the operation before finalizing the result."
+
+        outputs = iter([WRONG, RIGHT])
+        result = build_native_iterative_guidance_pairs(
+            examples=examples,
+            base_prompt_builder=lambda example: example["problem"],
+            retry_prompt_builder=lambda base, guidance: f"{base}\n{guidance}",
+            student_generate=lambda _prompt: next(outputs),
+            evaluate=lambda _example, response: {"correct": response == RIGHT},
+            teacher_guidance=teacher,
+            guidance_guard=lambda *_args: {"safe": True},
+            max_guidance_steps=1,
+            max_guidance_regenerations=1,
+        )
+
+        self.assertEqual(len(result["pairs"]), 1)
+        self.assertEqual(teacher_calls, [True, True])
+        self.assertEqual(result["attempts"][0]["guidance_records"][0]["error_code"], "teacher_output_parse_failed")
+
     def test_native_collector_does_not_create_pairs_after_unsafe_guidance(self):
         examples = [
             {

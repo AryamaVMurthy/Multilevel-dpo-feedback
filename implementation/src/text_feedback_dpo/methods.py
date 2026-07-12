@@ -7,6 +7,7 @@ from typing import Any
 from text_feedback_dpo.prompts import build_student_prompt
 from text_feedback_dpo.scoring import evaluate_rollout
 from text_feedback_dpo.guidance_policy import validate_accumulated_guidance, validate_guidance_surface
+from text_feedback_dpo.evaluators import ModelOutputParseError
 from text_feedback_dpo.models import ModelGeneration, normalize_model_generation
 
 
@@ -296,14 +297,28 @@ def build_native_iterative_guidance_pairs(
             safe_guidance: str | None = None
             safe_accumulated: str | None = None
             for regeneration in range(max_guidance_regenerations + 1):
-                guidance = teacher_guidance(
-                    example,
-                    response,
-                    result,
-                    attempt + 1,
-                    regeneration,
-                    guidance_attempts,
-                )
+                try:
+                    guidance = teacher_guidance(
+                        example,
+                        response,
+                        result,
+                        attempt + 1,
+                        regeneration,
+                        guidance_attempts,
+                    )
+                except ModelOutputParseError as exc:
+                    guidance_attempts.append(
+                        {
+                            "regeneration": regeneration,
+                            "error_code": "teacher_output_parse_failed",
+                            "role": exc.role,
+                            "message": str(exc),
+                            "raw_output": exc.raw,
+                            "raw_outputs": exc.raw_outputs,
+                            "parse_failures": exc.parse_failures,
+                        }
+                    )
+                    continue
                 if not isinstance(guidance, str) or not guidance.strip():
                     raise ValueError(f"teacher guidance for {example_id} attempt {attempt + 1} is empty")
                 surface_result = validate_guidance_surface(
@@ -361,7 +376,13 @@ def build_native_iterative_guidance_pairs(
                     record.get("guard") is not None and not bool(record["guard"].get("safe"))
                     for record in guidance_attempts
                 )
-                if critic_rejected and not guard_rejected:
+                parse_rejected = any(
+                    record.get("error_code") == "teacher_output_parse_failed"
+                    for record in guidance_attempts
+                )
+                if parse_rejected and not critic_rejected and not guard_rejected:
+                    error_code = "teacher_output_parse_failed"
+                elif critic_rejected and not guard_rejected:
                     error_code = "invalid_guidance"
                 elif guard_rejected:
                     error_code = "unsafe_guidance"
