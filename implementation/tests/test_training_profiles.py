@@ -128,6 +128,43 @@ class TrainingProfileTest(unittest.TestCase):
                     self.assertEqual(result["method"], method)
                     self.assertEqual(train.call_args.kwargs["candidate"], candidate)
 
+    def test_train_paper_passes_explicit_sequence_length_override_to_dpo(self):
+        candidate = _paper_candidates(
+            load_paper_experiment(Path("configs/paper/math.yaml")),
+            "standard_dpo",
+        )[0]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "pairs.jsonl"
+            data.write_text(
+                json.dumps({"prompt": "Solve.", "chosen": "right", "rejected": "wrong"}) + "\n",
+                encoding="utf-8",
+            )
+            freeze = root / "standard-freeze.json"
+            freeze.write_text(
+                json.dumps({
+                    "method": "standard_dpo",
+                    "candidate_id": candidate.candidate_id,
+                    "candidate": vars(candidate),
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "text_feedback_dpo.cli.train_paper_dpo",
+                return_value={"method": "standard_dpo"},
+            ) as train:
+                run_train_paper(
+                    config_path=Path("configs/paper/math.yaml"),
+                    method="standard_dpo",
+                    seed=17,
+                    data_path=data,
+                    freeze_manifest_path=freeze,
+                    output_dir=root / "output",
+                    max_sequence_tokens=12288,
+                )
+
+        self.assertEqual(train.call_args.kwargs["max_sequence_tokens"], 12288)
+
     def test_math_primary_and_length_desensitized_ledgers_are_objectively_labeled(self):
         config = load_paper_experiment(Path("configs/paper/math.yaml"))
         primary = _paper_candidates(config, "standard_dpo")

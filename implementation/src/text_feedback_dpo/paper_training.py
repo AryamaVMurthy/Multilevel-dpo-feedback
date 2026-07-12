@@ -176,7 +176,7 @@ def train_paper_dpo(
         "sequence_length_override": (
             None if max_sequence_tokens is None else {
                 "requested": effective_max_length,
-                "reason": "explicit smoke override after measured CUDA OOM at canonical DPO length",
+                "reason": "explicit override after measured training OOM at canonical paper sequence length",
             }
         ),
         "loss_type": loss_type,
@@ -203,6 +203,7 @@ def train_paper_sft(
     output_dir: Path,
     candidate: DpoCandidate,
     seed: int,
+    max_sequence_tokens: int | None = None,
 ) -> dict[str, Any]:
     if method not in {"response_sft", "on_policy_distillation"}:
         raise ValueError("paper SFT method must be response_sft or on_policy_distillation")
@@ -219,6 +220,12 @@ def train_paper_sft(
     output_dir.mkdir(parents=True, exist_ok=True)
     effective_batch = int(config.dpo_search.effective_global_batch)
     max_steps = max(1, (len(rows) + effective_batch - 1) // effective_batch)
+    canonical_max_length = int(config.training["max_sequence_tokens"])
+    effective_max_length = canonical_max_length if max_sequence_tokens is None else int(max_sequence_tokens)
+    if effective_max_length <= 0:
+        raise ValueError("max_sequence_tokens must be positive")
+    if effective_max_length > canonical_max_length:
+        raise ValueError("max_sequence_tokens override cannot exceed the canonical paper sequence length")
     model, tokenizer = _load_student(config)
     coverage = discover_lora_coverage(
         model,
@@ -238,7 +245,7 @@ def train_paper_sft(
             max_steps=max_steps,
             candidate=candidate,
             effective_global_batch=effective_batch,
-            max_length=int(config.training["max_sequence_tokens"]),
+            max_length=effective_max_length,
         ),
         seed=seed,
     )
@@ -264,6 +271,14 @@ def train_paper_sft(
         "seed": seed,
         "examples": len(rows),
         "max_steps": max_steps,
+        "max_sequence_tokens": effective_max_length,
+        "canonical_max_sequence_tokens": canonical_max_length,
+        "sequence_length_override": (
+            None if max_sequence_tokens is None else {
+                "requested": effective_max_length,
+                "reason": "explicit override after measured training OOM at canonical paper sequence length",
+            }
+        ),
         "completion_only_loss": True,
         "optimizer_source": "frozen_standard_dpo_candidate",
         "train_metrics": result.metrics,

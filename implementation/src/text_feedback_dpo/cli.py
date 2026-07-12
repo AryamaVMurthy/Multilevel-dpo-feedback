@@ -1179,6 +1179,7 @@ def run_train_paper(
     freeze_manifest_path: Path,
     output_dir: Path,
     evaluator: Any | None = None,
+    max_sequence_tokens: int | None = None,
 ) -> dict[str, Any]:
     config = load_paper_experiment(config_path)
     validate_paper_experiment(config)
@@ -1202,6 +1203,7 @@ def run_train_paper(
             output_dir=output_dir,
             candidate=candidate,
             seed=seed,
+            max_sequence_tokens=max_sequence_tokens,
         )
     if method in {"response_sft", "on_policy_distillation"}:
         return train_paper_sft(
@@ -1211,7 +1213,10 @@ def run_train_paper(
             output_dir=output_dir,
             candidate=candidate,
             seed=seed,
+            max_sequence_tokens=max_sequence_tokens,
         )
+    if max_sequence_tokens is not None:
+        raise ValueError("max_sequence_tokens override is only valid for DPO and SFT paper training")
     if evaluator is None:
         evaluator = _paper_evaluator(config)
     return train_paper_grpo(
@@ -1552,6 +1557,11 @@ def main() -> None:
     paper_train.add_argument("--data", required=True, type=Path)
     paper_train.add_argument("--freeze-manifest", required=True, type=Path)
     paper_train.add_argument("--output-dir", required=True, type=Path)
+    paper_train.add_argument(
+        "--max-sequence-tokens",
+        type=int,
+        help="Explicit sequence-length override after a measured training OOM; omitted for canonical 18432.",
+    )
     paper_eval = subparsers.add_parser("evaluate-paper")
     paper_eval.add_argument("--config", required=True, type=Path)
     paper_eval.add_argument("--checkpoint", type=Path)
@@ -1705,6 +1715,7 @@ def main() -> None:
             data_path=args.data,
             freeze_manifest_path=args.freeze_manifest,
             output_dir=args.output_dir,
+            max_sequence_tokens=args.max_sequence_tokens,
         )
     elif args.command == "evaluate-paper":
         result = run_evaluate_paper(

@@ -20,6 +20,7 @@ PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
 MODEL_CACHE_DIR="${MODEL_CACHE_DIR:?MODEL_CACHE_DIR is required}"
 TURING_ACCOUNT="${TURING_ACCOUNT:?TURING_ACCOUNT is required}"
 RUNTIME_ROOT="${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
+MAX_SEQUENCE_TOKENS="${MAX_SEQUENCE_TOKENS:-}"
 
 module load u22/cuda/12.4
 export PATH="$HOME/.local/bin:$PATH"
@@ -84,6 +85,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"${RUNNER[@]}" python -m text_feedback_dpo.cli train-paper \
-  --config "$CONFIG" --method "$METHOD" --seed "$SEED" --data "$DATA_PATH" \
+TRAIN_ARGS=(
+  --config "$CONFIG" --method "$METHOD" --seed "$SEED" --data "$DATA_PATH"
   --freeze-manifest "$FREEZE_MANIFEST" --output-dir "$OUTPUT_DIR"
+)
+if [[ -n "$MAX_SEQUENCE_TOKENS" ]]; then
+  if ! [[ "$MAX_SEQUENCE_TOKENS" =~ ^[0-9]+$ ]] || (( MAX_SEQUENCE_TOKENS <= 0 )); then
+    echo "ERROR: MAX_SEQUENCE_TOKENS must be a positive integer when set: $MAX_SEQUENCE_TOKENS" >&2
+    exit 1
+  fi
+  TRAIN_ARGS+=(--max-sequence-tokens "$MAX_SEQUENCE_TOKENS")
+fi
+
+"${RUNNER[@]}" python -m text_feedback_dpo.cli train-paper \
+  "${TRAIN_ARGS[@]}"
