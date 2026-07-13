@@ -856,7 +856,11 @@ def cmd_collect(args: argparse.Namespace) -> None:
         run_fixed_retrieval_pipeline,
     )
     from text_feedback_dpo.collection import collect_dataset_batchwise
-    from text_feedback_dpo.feedback import FeedbackFormatError, parse_feedback
+    from text_feedback_dpo.feedback import (
+        FeedbackFormatError,
+        adapt_plain_recovery_hint,
+        parse_feedback,
+    )
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
@@ -870,6 +874,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         load_teacher,
         load_tokenizer,
         render_teacher_prompts,
+        extract_qwen_final_content,
         set_generation_seed,
         validate_teacher_identity,
     )
@@ -1074,7 +1079,7 @@ Explicit recovery constraint:
 The private answer was redacted. Do not name or quote any candidate answer from the
 question, failed response, source titles, or source snippets. Do not reveal an entity,
 date, number, place, or other answer candidate. Give only a generic directional hint
-about checking the responsible region, in at most 12 words. Return the JSON object now.
+about checking the responsible region, in at most 12 words. Return only the short hint.
 """
 
             fallback_source_prompts = [redact_teacher_gold(prompt) for prompt in prompts] if args.teacher_thinking else []
@@ -1087,14 +1092,34 @@ about checking the responsible region, in at most 12 words. Return the JSON obje
                     prompt + """
 
 Second recovery correction:
-The previous hint failed the safety contract. Emit exactly one short JSON hint using
-only this safe direction: \"Inspect the responsible region.\" Do not add an answer,
-entity, source wording, explanation, or any other field.
+The previous hint failed the safety contract. Return only this exact short hint:
+Inspect the responsible region.
 """
                     for prompt in fallback_source_prompts
                 ],
                 enable_thinking=False,
             ) if args.teacher_thinking else []
+
+            def adapt_recovery_outputs(raw_outputs, *, indices, stage):
+                adapted = []
+                wrapped_count = 0
+                for raw in raw_outputs:
+                    try:
+                        content = extract_qwen_final_content(raw)
+                    except RuntimeErrorExplicit:
+                        adapted.append(raw)
+                        continue
+                    wrapped = adapt_plain_recovery_hint(content)
+                    wrapped_count += int(wrapped != content)
+                    adapted.append(wrapped)
+                print(json.dumps({
+                    "event": "teacher_recovery_output_adapter",
+                    "stage": stage,
+                    "original_indices": indices,
+                    "wrapped_plain_hint_count": wrapped_count,
+                    "fallback_reason": "explicit_plain_hint_to_json_wrapper",
+                }, sort_keys=True), file=sys.stderr, flush=True)
+                return adapted
 
             def explicit_nonthinking_fallback(indices):
                 if not fallback_rendered:
@@ -1119,13 +1144,14 @@ entity, source wording, explanation, or any other field.
                     "gold_redacted": True,
                     "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_context_redacted_generic_hint",
                 }, sort_keys=True), file=sys.stderr, flush=True)
-                return batched_generate(
+                raw_outputs = batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
                     batch_size=args.teacher_batch_size,
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                     forbidden_token_sequences=forbidden_token_sequences,
                 )
+                return adapt_recovery_outputs(raw_outputs, indices=indices, stage="first")
 
             def explicit_nonthinking_fallback_retry(indices):
                 if not fallback_retry_rendered:
@@ -1149,13 +1175,14 @@ entity, source wording, explanation, or any other field.
                     "max_new_tokens": legal_max_new_tokens,
                     "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_second_attempt",
                 }, sort_keys=True), file=sys.stderr, flush=True)
-                return batched_generate(
+                raw_outputs = batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
                     batch_size=args.teacher_batch_size,
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                     forbidden_token_sequences=forbidden_token_sequences,
                 )
+                return adapt_recovery_outputs(raw_outputs, indices=indices, stage="retry")
 
             try:
                 final_outputs, output_report = bounded_teacher_outputs(

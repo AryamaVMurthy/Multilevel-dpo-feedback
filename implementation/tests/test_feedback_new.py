@@ -1,10 +1,22 @@
 import unittest
 
-from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, is_feedback_shape_valid, parse_feedback
+from text_feedback_dpo.feedback import (
+    FeedbackFormatError,
+    adapt_plain_recovery_hint,
+    diagnose_attempt,
+    is_feedback_shape_valid,
+    parse_feedback,
+)
 from text_feedback_dpo.prompts import build_teacher_prompt
 
 
 class FeedbackContractTest(unittest.TestCase):
+    def test_plain_recovery_hint_is_explicitly_wrapped_without_content_repair(self):
+        wrapped = adapt_plain_recovery_hint("Inspect the responsible region.")
+        self.assertEqual(wrapped, '{"hint": "Inspect the responsible region."}')
+        self.assertEqual(adapt_plain_recovery_hint('{"hint":"Inspect the region."}'), '{"hint":"Inspect the region."}')
+        self.assertEqual(adapt_plain_recovery_hint("first line\nsecond line"), "first line\nsecond line")
+
     def test_feedback_shape_validator_rejects_truncated_teacher_json(self):
         self.assertTrue(is_feedback_shape_valid('{"hint":"Inspect the associated person."}'))
         self.assertFalse(is_feedback_shape_valid('{"hint":"Inspect the associated person.'))

@@ -53,6 +53,32 @@ def is_feedback_shape_valid(text: str) -> bool:
     return isinstance(hint, str) and bool(hint.strip()) and len(hint.strip().split()) <= 24
 
 
+def adapt_plain_recovery_hint(text: str) -> str:
+    """Explicitly wrap a short plain recovery hint in the feedback schema.
+
+    Recovery generation is intentionally asked for plain text because strict
+    JSON is an unnecessary failure mode in a no-thinking repair path.  This
+    adapter never invents or edits words; it only wraps a single-line,
+    short, non-structured model output.  Anything else is returned unchanged
+    so the normal validator fails fast with its original contract error.
+    """
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    if is_feedback_shape_valid(stripped):
+        return stripped
+    if (
+        not stripped
+        or "\n" in stripped
+        or "\r" in stripped
+        or len(stripped.split()) > 24
+        or any(marker in stripped for marker in ("{", "}", "[", "]", "```"))
+        or re.match(r"^[A-Za-z][A-Za-z ]*:", stripped)
+    ):
+        return stripped
+    return json.dumps({"hint": stripped}, ensure_ascii=False)
+
+
 def parse_feedback(text: str, *, gold_answer: str) -> MinimalFeedback:
     try:
         payload = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
