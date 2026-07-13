@@ -2,9 +2,9 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `1b9fb767291498ced2080b903e62d3d18cd126e1`
+**Last observed remote commit:** `0d506a03d4ec5c4287a5c25ba5ba041f331150bc`
 
-**Current local implementation commit:** `c52962c7d858e8e54b21527df56fe8d0319eebe5`
+**Current local implementation commit:** `f0f154fabb6c65ad025257db570b4d3747d79cb0`
 
 ## Executive status
 
@@ -124,12 +124,16 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - The next implementation uses an explicit bounded per-row retry: preserve 1,024 as the primary cap, retry only outputs that are both malformed and exactly budget-exhausted at 2,048, verify the retry prompt remains within 4,096 before inference, log original indices/reason/token counts, and fail if the retry remains malformed. Short malformed outputs are not retried. This is a declared control policy, not a hidden fallback.
 - Local commit `3bb0267` adds a canonical trajectory auditor producing JSON, JSONL, CSV, and HTML with exact question/gold/query/retrieval/response/hint/retry/sibling/eligibility evidence. Runtime latency and per-row teacher token counts remain explicit unavailable fields when older logs do not contain correlatable telemetry; they are never estimated.
 - Local commit `c52962c` adds batched multi-seed no-hint bootstrap collection and a one-GPU Turing launcher. The model is loaded once, each seed is generated across the active example batch, every artifact is canonically revalidated, and duplicate/tampered/incomplete output fails explicitly.
+- Job `13783` remeasured the commit/config-bound SDPA baseline after adding explicit teacher retry: 22.132 generated tokens/second, 97.6% mean measured utilization, 10.47 GiB framework peak memory. Frozen decision SHA-256: `4095b1d0eee507c10d33765b9e8e50f3a6a04630dd4c21ce155d3435d5405d30`.
+- Job `13786` selected the deterministic 128-example train-only bootstrap pool in one streaming pass over the pinned train file. Pool SHA-256: `f2c3df4c0ef3272183e07d26e8546516391972722b4bc64f69d697f135959836`; selected-ID SHA-256: `bbaba67ed0d9e4cc824469cfcd9a60623bacdf756527cac3f6f3dd3b9c324a05`.
+- Jobs `13789` and `13790` are currently running in parallel on node10: the corrected two-GPU teacher smoke and the 128-example/two-seed/batch-4 no-hint student bootstrap pilot, respectively.
+- Local commit `f0f154f` splits bootstrap SFT selection by task. A no-hint query is eligible when canonical BM25 retrieves answer-bearing evidence even if the response fails; a response remains eligible only when it is parse-valid, answer-correct, supported, cited, untruncated, student-generated, and no-hint.
 - Because the audited base set has zero fully correct continuations, the existing SFT builder would currently produce zero rows for this sample.
 - No optimizer step has run for SFT, DPO, GRPO, or DAPO.
 
 ## Verification state
 
-- Local tests: 289 passed, 14 upstream deprecation warnings, 171 subtests passed.
+- Local tests: 293 passed, 14 upstream deprecation warnings, 171 subtests passed.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
