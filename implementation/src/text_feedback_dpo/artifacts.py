@@ -36,6 +36,28 @@ def _validate_identity_hash(section_name: str, section: dict) -> None:
         raise ValueError(f"active manifest {section_name} identity hash mismatch")
 
 
+def _parse_jsonl_objects(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    seen_ids: set[str] = set()
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            raise ValueError(f"artifact JSONL contains a blank line: {path.name}:{line_number}")
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"artifact contains invalid JSON: {path.name}:{line_number}: {exc}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"artifact JSONL row must be a JSON object: {path.name}:{line_number}")
+        row_id = row.get("id")
+        if not isinstance(row_id, str) or not row_id.strip():
+            raise ValueError(f"active prediction JSONL row requires a non-empty id: {path.name}:{line_number}")
+        if row_id in seen_ids:
+            raise ValueError(f"artifact JSONL contains duplicate id: {row_id}")
+        seen_ids.add(row_id)
+        rows.append(row)
+    return rows
+
+
 def _validate_active_manifest(directory: Path, manifest: dict) -> None:
     model = _require_mapping(manifest, "model", ("identity", "revision", "policy_hash"))
     dataset = _require_mapping(manifest, "dataset", ("source", "revision", "sha256"))
@@ -88,7 +110,8 @@ def _validate_active_manifest(directory: Path, manifest: dict) -> None:
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual_hash != artifact["sha256"]:
             raise ValueError(f"artifact sha256 mismatch: {artifact['path']}")
-        row_count = sum(bool(line.strip()) for line in path.read_text(encoding="utf-8").splitlines())
+        parsed_rows = _parse_jsonl_objects(path)
+        row_count = len(parsed_rows)
         if row_count != artifact["rows"]:
             raise ValueError(f"artifact row count mismatch: {artifact['path']}")
         if row_count != manifest_rows:

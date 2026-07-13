@@ -133,6 +133,7 @@ def evaluate_active_predictions(examples: list[dict], predictions: list[dict]) -
     from text_feedback_dpo.responses import parse_cited_response, render_cited_response
     from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, tokenize_query
     from text_feedback_dpo.scoring import score_cited_response
+    from text_feedback_dpo.trajectories import validate_active_artifact
 
     example_by_id: dict[str, dict] = {}
     for example in examples:
@@ -151,7 +152,9 @@ def evaluate_active_predictions(examples: list[dict], predictions: list[dict]) -
 
     rows = []
     for example_id, example in example_by_id.items():
-        prediction = prediction_by_id[example_id]
+        prediction = validate_active_artifact(
+            prediction_by_id[example_id], example=example, hints=[]
+        )
         raw_query = prediction.get("raw_query")
         if not isinstance(raw_query, str):
             raise ValueError(f"active prediction {example_id} requires raw_query string")

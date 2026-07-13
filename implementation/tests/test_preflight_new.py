@@ -29,16 +29,34 @@ class PreflightQualityTest(unittest.TestCase):
         for field, value in (("bm25_score", 999.0), ("url", "https://evil.test"), ("requested_top_k", 7)):
             tampered = copy.deepcopy(prediction)
             tampered["ranked_search_results"][0][field] = value
-            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "retrieval artifact mismatch"):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "ranked retrieval"):
                 summarize_response_quality([example], [tampered], protocol="active-search")
         tampered_metrics = copy.deepcopy(prediction)
         tampered_metrics["retrieval_metrics"]["recall@8"] = 0.0
-        with self.assertRaisesRegex(ValueError, "retrieval metrics mismatch"):
+        with self.assertRaisesRegex(ValueError, "retrieval_metrics"):
             summarize_response_quality([example], [tampered_metrics], protocol="active-search")
 
-    def test_active_preflight_ignores_persisted_score_and_reports_protocol_and_capability_metrics(self):
+    def test_active_preflight_rejects_every_forged_persisted_canonical_field(self):
         example, prediction = self._active_fixture()
-        prediction["cited_score"] = {"parse_valid": False, "exact_match": 0.0}
+        mutations = {
+            "cited_score": {**prediction["cited_score"], "citation_recall": 0.25},
+            "parsed_response": {**prediction["parsed_response"], "answer": "forged"},
+            "rendered_visible_response": "forged",
+            "error_code": "forged",
+            "query_prompt": prediction["query_prompt"] + " ",
+            "query_prompt_hash": "0" * 64,
+            "response_prompt": prediction["response_prompt"] + " ",
+            "response_prompt_hash": "1" * 64,
+            "retrieval_context_hash": "2" * 64,
+            "canonical_ranked_search_results": [],
+        }
+        for field, value in mutations.items():
+            forged = copy.deepcopy(prediction)
+            forged[field] = value
+            expected = "canonical ranked retrieval" if field == "canonical_ranked_search_results" else field
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, expected):
+                summarize_response_quality([example], [forged], protocol="active-search")
+
         metrics = summarize_response_quality([example], [prediction], protocol="active-search")
         self.assertEqual(metrics["answer_capability_exact_match"], 1.0)
         self.assertEqual(metrics["protocol_exact_match"], 1.0)
@@ -58,7 +76,7 @@ class PreflightQualityTest(unittest.TestCase):
         example, prediction = self._active_fixture()
         prediction["raw_response"] = None
         prediction["error_code"] = "line_count"
-        with self.assertRaisesRegex(ValueError, "raw_response null"):
+        with self.assertRaisesRegex(ValueError, "raw_response text"):
             summarize_response_quality([example], [prediction], protocol="active-search")
 
     def test_active_preflight_rejects_contradictory_stage_truncation_flags(self):

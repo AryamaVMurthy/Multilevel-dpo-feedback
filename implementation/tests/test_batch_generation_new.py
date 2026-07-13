@@ -19,6 +19,29 @@ def source_records(prefix: str) -> list[dict]:
 
 
 class BatchGenerationTest(unittest.TestCase):
+    def test_active_rows_validate_nonempty_canonical_sources_before_generation(self):
+        base = {"id": "bad", "question": "Who?", "gold_answer": "Ada"}
+        invalid_sources = (
+            None,
+            [],
+            "not-a-list",
+            [{"source_id": "S001", "original_rank": 1, "title": "Ada", "snippet": "Ada"}],
+            [
+                {"source_id": "S001", "original_rank": 1, "title": "Ada", "url": "https://example.test/1", "snippet": "Ada"},
+                {"source_id": "S001", "original_rank": 2, "title": "Ada 2", "url": "https://example.test/2", "snippet": "Ada"},
+            ],
+        )
+        for sources in invalid_sources:
+            calls = []
+            with self.subTest(sources=sources), self.assertRaises((TypeError, ValueError)):
+                run_fixed_retrieval_pipeline(
+                    [{**base, "sources": sources}],
+                    query_generate_batch=lambda prompts: calls.append(prompts),
+                    response_generate_batch=lambda prompts: calls.append(prompts),
+                    policy_hash="policy-v1",
+                )
+            self.assertEqual(calls, [])
+
     def test_search_query_parser_is_strict_without_rejecting_legitimate_math(self):
         self.assertEqual(parse_search_query("prove 3 > 2"), "prove 3 > 2")
         self.assertEqual(parse_search_query("compare 3 < 4 and 5 > 2"), "compare 3 < 4 and 5 > 2")

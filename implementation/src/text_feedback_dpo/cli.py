@@ -399,18 +399,30 @@ def cmd_generate_searchqa(args: argparse.Namespace) -> None:
 
 def cmd_build_preferences(args: argparse.Namespace) -> None:
     from text_feedback_dpo.preferences import build_preference_rows
+    from text_feedback_dpo.trajectories import revalidate_cached_trajectory
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with args.output.open("w", encoding="utf-8") as handle:
-        for trajectory in iter_jsonl(args.trajectories):
-            for row in build_preference_rows(trajectory):
-                handle.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
-                count += 1
-        handle.flush()
-    if count == 0:
+    examples = read_unique_jsonl(args.data, label="preference example")
+    trajectories = read_unique_jsonl(args.trajectories, label="preference trajectory")
+    example_by_id = {str(example["id"]): example for example in examples}
+    trajectory_by_id = {str(trajectory["id"]): trajectory for trajectory in trajectories}
+    if set(example_by_id) != set(trajectory_by_id) or len(examples) != len(trajectories):
+        raise ValueError("preference trajectory/example ID parity mismatch")
+    preference_rows = []
+    for example_id in example_by_id:
+        trajectory = trajectory_by_id[example_id]
+        siblings = trajectory.get("no_hint_siblings")
+        if not isinstance(siblings, list):
+            raise ValueError(f"preference trajectory {example_id} requires no_hint_siblings")
+        sibling_seeds = [sibling.get("seed") if isinstance(sibling, dict) else None for sibling in siblings]
+        validated = revalidate_cached_trajectory(
+            trajectory, example=example_by_id[example_id], expected_sibling_seeds=sibling_seeds,
+        )
+        preference_rows.extend(build_preference_rows(validated))
+    if not preference_rows:
         args.output.unlink(missing_ok=True)
         raise ValueError("no valid preference rows were produced")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(preference_rows, args.output)
 
 
 def cmd_collect(args: argparse.Namespace) -> None:
@@ -529,10 +541,27 @@ def cmd_collect(args: argparse.Namespace) -> None:
             return run_student_requests(requests, seed=kwargs["seed"])
 
         def sibling_batch(requests, **_kwargs):
-            outputs = []
-            for request in requests:
-                outputs.extend(run_student_requests([request], seed=request["seed"]))
-            return outputs
+            if not isinstance(requests, list) or not requests:
+                raise ValueError("sibling generation requires a nonempty request batch")
+            grouped = {}
+            for index, request in enumerate(requests):
+                if not isinstance(request, dict) or not isinstance(request.get("seed"), int):
+                    raise ValueError(f"sibling request {index} requires an integer seed")
+                grouped.setdefault(request["seed"], []).append((index, request))
+            ordered_outputs = [None] * len(requests)
+            for seed, indexed_requests in grouped.items():
+                batch = [request for _, request in indexed_requests]
+                generated = run_student_requests(batch, seed=seed)
+                if len(generated) != len(batch):
+                    raise ValueError(
+                        f"sibling seed {seed} cardinality mismatch: "
+                        f"expected {len(batch)}, got {len(generated)}"
+                    )
+                for (index, _request), artifact in zip(indexed_requests, generated, strict=True):
+                    ordered_outputs[index] = artifact
+            if any(output is None for output in ordered_outputs):
+                raise ValueError("sibling generation did not populate every requested artifact")
+            return ordered_outputs
 
         def teacher_batch(prompts, **kwargs):
             rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
@@ -724,6 +753,7 @@ def build_parser() -> argparse.ArgumentParser:
     active_generate.add_argument("--context-budget", type=int, default=4096)
     active_generate.set_defaults(func=cmd_generate_searchqa)
     preferences = sub.add_parser("build-preferences")
+    preferences.add_argument("--data", required=True, type=Path)
     preferences.add_argument("--trajectories", required=True, type=Path)
     preferences.add_argument("--output", required=True, type=Path)
     preferences.set_defaults(func=cmd_build_preferences)

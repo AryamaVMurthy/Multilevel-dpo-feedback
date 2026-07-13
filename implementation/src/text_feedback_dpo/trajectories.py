@@ -116,6 +116,13 @@ def validate_active_artifact(
     for key in ("policy_hash",):
         if not isinstance(artifact[key], str) or not artifact[key].strip():
             raise TrajectoryError(f"active artifact {example_id} requires non-empty {key}")
+    sources = example.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise TrajectoryError(f"active artifact {example_id} requires nonempty canonical source records")
+    try:
+        retriever = FixedBM25Retriever(sources, k1=FIXED_K1, b=FIXED_B)
+    except (TypeError, ValueError) as exc:
+        raise TrajectoryError(f"active artifact {example_id} has invalid canonical source records: {exc}") from exc
 
     expected_input_hash = _structured_hash({"id": example_id, "question": example.get("question"), "sources": example.get("sources")})
     _require_exact_field(artifact, "input_hash", expected_input_hash, example_id=example_id)
@@ -133,7 +140,6 @@ def validate_active_artifact(
             normalized_query = None
         if normalized_query is not None:
             query_valid = True
-            retriever = FixedBM25Retriever(example["sources"], k1=FIXED_K1, b=FIXED_B)
             expected_ranked = retriever.search(normalized_query, top_k=FIXED_TOP_K)
     if artifact["ranked_search_results"] != expected_ranked:
         raise TrajectoryError(f"active artifact {example_id} ranked retrieval does not match canonical BM25 recomputation")
@@ -206,6 +212,162 @@ def _success(artifact: Mapping[str, object]) -> bool:
         and artifact["truncation"]["query"] is False
         and artifact["truncation"]["response"] is False
     )
+
+
+def revalidate_cached_trajectory(
+    trajectory: object,
+    *,
+    example: Mapping[str, object],
+    expected_sibling_seeds: Sequence[int],
+) -> dict[str, Any]:
+    """Reject cached trajectory tampering by replaying every canonical validation step."""
+    from text_feedback_dpo.preferences import build_preference_rows
+
+    if not isinstance(trajectory, Mapping):
+        raise TrajectoryError("cached trajectory must be a mapping")
+    example_id = str(example.get("id", ""))
+    if str(trajectory.get("id")) != example_id:
+        raise TrajectoryError(f"cached trajectory ID mismatch for {example_id}")
+    if any(isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 for seed in expected_sibling_seeds):
+        raise TrajectoryError(f"cached trajectory {example_id} sibling seeds must be nonnegative integers")
+    if len(set(expected_sibling_seeds)) != len(expected_sibling_seeds):
+        raise TrajectoryError(f"cached trajectory {example_id} sibling seeds must be unique")
+    _require_exact_field(trajectory, "example_identity", _structured_hash(example), example_id=example_id)
+    expected_query_prompt = build_search_query_prompt(dict(example), [])
+    _require_exact_field(trajectory, "prompt", expected_query_prompt, example_id=example_id)
+    _require_exact_field(trajectory, "query_prompt", expected_query_prompt, example_id=example_id)
+    _require_exact_field(
+        trajectory, "query_prompt_hash", _structured_hash(expected_query_prompt), example_id=example_id
+    )
+    attempts = trajectory.get("attempts")
+    interventions = trajectory.get("interventions")
+    siblings = trajectory.get("no_hint_siblings")
+    if not isinstance(attempts, list) or not isinstance(interventions, list) or not isinstance(siblings, list):
+        raise TrajectoryError(f"cached trajectory {example_id} requires attempts, interventions, and no_hint_siblings lists")
+    intervention_by_attempt: dict[int, Mapping[str, object]] = {}
+    for level, intervention in enumerate(interventions, start=1):
+        if not isinstance(intervention, Mapping):
+            raise TrajectoryError(f"cached trajectory {example_id} intervention must be a mapping")
+        attempt_index = intervention.get("attempt_index")
+        if isinstance(attempt_index, bool) or not isinstance(attempt_index, int) or attempt_index in intervention_by_attempt:
+            raise TrajectoryError(f"cached trajectory {example_id} intervention attempt indices must be unique integers")
+        if intervention.get("level") != level or intervention.get("escalation_level") != level:
+            raise TrajectoryError(f"cached trajectory {example_id} intervention escalation order mismatch")
+        hint = intervention.get("hint")
+        if not isinstance(hint, str) or not hint.strip():
+            raise TrajectoryError(f"cached trajectory {example_id} intervention hint must be non-empty")
+        intervention_by_attempt[attempt_index] = intervention
+
+    hints: list[str] = []
+    validated_attempts: list[dict[str, Any]] = []
+    expected_interventions: list[dict[str, object]] = []
+    first_success: dict[str, Any] | None = None
+    for expected_index, attempt in enumerate(attempts):
+        if not isinstance(attempt, Mapping) or attempt.get("attempt_index") != expected_index:
+            raise TrajectoryError(f"cached trajectory {example_id} attempt order mismatch")
+        artifact = validate_active_artifact(attempt.get("artifact"), example=example, hints=hints)
+        diagnostics = diagnose_attempt(artifact)
+        success = _success(artifact)
+        expected_attempt_fields = {
+            "response": artifact.get("raw_response"), "correct": success,
+            "score": dict(artifact["cited_score"]), "diagnostics": diagnostics,
+            "responsible_region": diagnostics["responsible_region"],
+            "no_hint": not hints, "provenance": "student",
+        }
+        for field, expected in expected_attempt_fields.items():
+            if attempt.get(field) != expected:
+                raise TrajectoryError(f"cached trajectory {example_id} attempt {expected_index} {field} mismatch")
+        validated_attempts.append({**dict(attempt), "artifact": artifact})
+        if success and first_success is None:
+            first_success = artifact
+        intervention = intervention_by_attempt.get(expected_index)
+        if intervention is not None:
+            if success:
+                raise TrajectoryError(f"cached trajectory {example_id} has an intervention after success")
+            expected_interventions.append(_intervention_metadata(
+                attempt_index=expected_index,
+                feedback_hint=str(intervention["hint"]),
+                level=len(expected_interventions) + 1,
+                diagnostics=diagnostics,
+            ))
+            hints.append(str(intervention["hint"]))
+    if set(intervention_by_attempt) - set(range(len(attempts))):
+        raise TrajectoryError(f"cached trajectory {example_id} intervention references a missing attempt")
+    if trajectory.get("chosen") != first_success or trajectory.get("resolved") is not (first_success is not None):
+        raise TrajectoryError(f"cached trajectory {example_id} chosen/resolved mismatch")
+
+    validated_siblings: list[dict[str, Any]] = []
+    sibling_seeds: list[int] = []
+    for sibling in siblings:
+        artifact = validate_active_artifact(sibling, example=example, hints=[])
+        seed = sibling.get("seed") if isinstance(sibling, Mapping) else None
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise TrajectoryError(f"cached trajectory {example_id} sibling seed must be an integer")
+        success = _success(artifact)
+        if sibling.get("verified_no_hint_success") is not success or sibling.get("future_sibling_gain") != float(success):
+            raise TrajectoryError(f"cached trajectory {example_id} sibling verification mismatch")
+        validated_siblings.append({**artifact, "seed": seed, "verified_no_hint_success": success, "future_sibling_gain": float(success)})
+        sibling_seeds.append(seed)
+    if sibling_seeds and sibling_seeds != list(expected_sibling_seeds):
+        raise TrajectoryError(f"cached trajectory {example_id} sibling seeds mismatch cache manifest")
+
+    success_count = sum(_success(sibling) for sibling in validated_siblings)
+    hinted = bool(interventions)
+    missing_siblings = hinted and first_success is not None and not validated_siblings
+    sft_eligible = bool(first_success) and (not hinted or success_count > 0) and not missing_siblings
+    preference_eligible = bool(hinted and validated_siblings and 0 < success_count < len(validated_siblings))
+    for field, expected in (
+        ("training_eligible", sft_eligible), ("sft_eligible", sft_eligible),
+        ("preference_eligible", preference_eligible),
+    ):
+        if trajectory.get(field) is not expected:
+            raise TrajectoryError(f"cached trajectory {example_id} {field} mismatch")
+    if first_success is None:
+        expected_verification: dict[str, object] = {"status": "unresolved", "eligible": False}
+    elif not hinted:
+        expected_verification = {"status": "not_required", "eligible": True}
+    elif missing_siblings:
+        expected_verification = {"status": "missing_sibling_generator", "eligible": False}
+    else:
+        denominator = len(validated_siblings)
+        gain = success_count / denominator
+        expected_verification = {
+            "status": "verified", "sibling_count": denominator, "success_count": success_count,
+            "future_sibling_gain": gain, "future_sibling_gain_numerator": success_count,
+            "future_sibling_gain_denominator": denominator, "seeds": sibling_seeds,
+            "evaluator_version": first_success["evaluator_version"], "eligible": bool(success_count),
+            "sft_eligible": bool(success_count),
+            "preference_eligible": 0 < success_count < denominator,
+        }
+        for expected_intervention in expected_interventions:
+            expected_intervention["future_sibling_gain"] = gain
+            expected_intervention["future_sibling_gain_numerator"] = success_count
+            expected_intervention["future_sibling_gain_denominator"] = denominator
+            expected_intervention["efficiency_numerator"] = gain
+            expected_intervention["efficiency_score"] = gain / expected_intervention["efficiency_denominator"]
+    if trajectory.get("sibling_verification") != expected_verification:
+        raise TrajectoryError(f"cached trajectory {example_id} sibling_verification mismatch")
+    if interventions != expected_interventions:
+        raise TrajectoryError(f"cached trajectory {example_id} interventions mismatch")
+    expected_ranked = rank_interventions(expected_interventions) if validated_siblings else []
+    if trajectory.get("ranked_interventions") != expected_ranked:
+        raise TrajectoryError(f"cached trajectory {example_id} ranked_interventions mismatch")
+    if first_success is not None:
+        for field in ("policy_hash", "response_prompt_hash", "evaluator_version"):
+            _require_exact_field(trajectory, field, first_success[field], example_id=example_id)
+    normalized = {
+        **dict(trajectory), "attempts": validated_attempts,
+        "interventions": expected_interventions, "ranked_interventions": expected_ranked,
+        "chosen": first_success, "no_hint_siblings": validated_siblings,
+    }
+    expected_rows = build_preference_rows(normalized) if preference_eligible else []
+    if trajectory.get("preference_rows", []) != expected_rows:
+        raise TrajectoryError(f"cached trajectory {example_id} preference_rows mismatch")
+    for field in ("preference_exclusions", "preference_exclusion_counts"):
+        empty = {} if field.endswith("counts") else []
+        if trajectory.get(field, empty) != normalized.get(field, empty):
+            raise TrajectoryError(f"cached trajectory {example_id} {field} mismatch")
+    return normalized
 
 
 def _intervention_metadata(*, attempt_index: int, feedback_hint: str, level: int, diagnostics: Mapping[str, object]) -> dict[str, object]:
@@ -286,6 +448,8 @@ def _verify_siblings(
         "seeds": [item["seed"] for item in siblings],
         "evaluator_version": chosen["evaluator_version"],
         "eligible": bool(success_count),
+        "sft_eligible": bool(success_count),
+        "preference_eligible": 0 < success_count < denominator,
     }
     return siblings, verification
 
@@ -311,6 +475,9 @@ def _finish_trajectory(
         "no_hint_siblings": [],
         "sibling_verification": {"status": "not_required"},
         "training_eligible": False,
+        "sft_eligible": False,
+        "preference_eligible": False,
+        "example_identity": _structured_hash(example),
         "ranked_interventions": [],
     }
     if chosen is None:
@@ -319,6 +486,7 @@ def _finish_trajectory(
     hinted_success = bool(interventions)
     if not hinted_success:
         result["training_eligible"] = True
+        result["sft_eligible"] = True
         result["sibling_verification"] = {"status": "not_required", "eligible": True}
         return result
     if sibling_generate is None:
@@ -330,6 +498,8 @@ def _finish_trajectory(
     result["no_hint_siblings"] = siblings
     result["sibling_verification"] = verification
     result["training_eligible"] = verification["eligible"]
+    result["sft_eligible"] = verification["sft_eligible"]
+    result["preference_eligible"] = verification["preference_eligible"]
     for intervention in interventions:
         intervention["future_sibling_gain"] = verification["future_sibling_gain"]
         intervention["future_sibling_gain_numerator"] = verification["future_sibling_gain_numerator"]

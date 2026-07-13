@@ -99,14 +99,14 @@ def _ranked_pairs(
         raise ValueError("preference chosen completion must be a verified no-hint success")
     rows: list[dict[str, object]] = []
     for rejected in ordered[1:]:
-        if _gain(best) <= _gain(rejected):
-            continue
         chosen_text = _completion(best.get(completion_field), field=completion_field)
         rejected_text = _completion(rejected.get(completion_field), field=completion_field)
         if chosen_text == rejected_text:
             _record_exclusion(
                 trajectory, kind=kind, reason="identical", chosen=best, rejected=rejected
             )
+            continue
+        if _gain(best) <= _gain(rejected):
             continue
         rows.append({
             "id": f"{trajectory['id']}::{kind}::{best.get('seed')}::{rejected.get('seed')}",
@@ -130,9 +130,18 @@ def _query_context(trajectory: Mapping[str, object]) -> tuple[str, str]:
     return prompt, prompt_hash
 
 
+def _preference_eligible(trajectory: Mapping[str, object]) -> bool:
+    explicit = trajectory.get("preference_eligible")
+    if explicit is not None:
+        if not isinstance(explicit, bool):
+            raise ValueError("preference_eligible must be boolean")
+        return explicit
+    return trajectory.get("training_eligible") is True
+
+
 def build_query_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
     """Rank student queries generated from byte-identical no-hint prompts."""
-    if not trajectory.get("training_eligible"):
+    if not _preference_eligible(trajectory):
         return []
     prompt, prompt_hash = _query_context(trajectory)
     siblings = trajectory.get("no_hint_siblings")
@@ -186,7 +195,7 @@ def _response_context(candidate: Mapping[str, object]) -> tuple[tuple[str, str, 
 
 def build_response_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
     """Rank responses only within byte-identical canonical retrieval contexts."""
-    if not trajectory.get("training_eligible"):
+    if not _preference_eligible(trajectory):
         return []
     siblings = trajectory.get("no_hint_siblings")
     if not isinstance(siblings, list):

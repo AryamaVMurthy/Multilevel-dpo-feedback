@@ -334,11 +334,3 @@ def generate_student_batch(
         )
         for response, scratchpad in zip(response_records, scratchpad_records, strict=True)
     ]
-
-
-def choose_teacher_candidate(candidates: list[str], *, quantization: str) -> dict:
-    if not candidates:
-        raise ValueError("teacher candidates must not be empty")
-    if quantization not in {"4bit", "bf16"}:
-        raise ValueError("teacher quantization must be 4bit or bf16")
-    return {"model_id": candidates[0], "quantization": quantization, "selection_reason": "first_explicit_candidate_requires_runtime_fit_probe"}

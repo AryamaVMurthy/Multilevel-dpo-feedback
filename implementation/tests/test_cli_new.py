@@ -199,7 +199,7 @@ class CLITest(unittest.TestCase):
         if command == "collect":
             return ["--data", "x.jsonl", "--output", "y.jsonl", "--student-model", "Qwen/Qwen3-4B-Base", "--teacher-model", "Qwen/Qwen3-32B", "--student-revision", "student-rev", "--teacher-revision", "teacher-rev", "--dataset-revision", "data-rev", "--prompt-version", "fixed-retrieval-cited-v1", "--policy-version", "sft-v1", "--seed", "7", "--teacher-quantization", "4bit", "--attention-implementation", "sdpa", "--student-device", "cuda:1", "--teacher-device", "cuda:0", "--trajectory-cache", "cache.jsonl", "--policy-hash", "p1", "--sibling-count", "2", "--sibling-seeds", "101", "102"]
         if command == "build-preferences":
-            return ["--trajectories", "x.jsonl", "--output", "y.jsonl"]
+            return ["--data", "data.jsonl", "--trajectories", "x.jsonl", "--output", "y.jsonl"]
         if command == "build-sft-data":
             return ["--data", "x.jsonl", "--output", "y.jsonl"]
         if command == "evaluate":

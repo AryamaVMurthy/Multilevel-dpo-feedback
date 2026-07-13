@@ -15,7 +15,6 @@ from text_feedback_dpo.trajectories import TrajectoryError, validate_active_arti
 
 EVALUATOR_VERSION = "cited-response-evaluator-v1"
 
-
 def source_records() -> list[dict]:
     return [
         {
@@ -178,8 +177,78 @@ class Task6PreferenceContextTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unverified success"):
             build_response_preference_rows(trajectory)
 
+    def test_equal_gain_identical_completion_is_counted_before_gain_filter(self):
+        chosen = self._candidate(active_artifact(response=correct_response()), gain=1.0, verified=True, seed=101)
+        duplicate = self._candidate(active_artifact(response=correct_response()), gain=1.0, verified=True, seed=102)
+        rejected = self._candidate(active_artifact(response=wrong_response()), gain=0.0, verified=False, seed=103)
+        trajectory = {
+            "id": "q1", "training_eligible": True, "preference_eligible": True,
+            "query_prompt": chosen["query_prompt"], "query_prompt_hash": chosen["query_prompt_hash"],
+            "policy_hash": "policy-v1", "no_hint_siblings": [chosen, duplicate, rejected],
+            "preference_exclusions": [], "preference_exclusion_counts": {},
+        }
+        rows = build_response_preference_rows(trajectory)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(trajectory["preference_exclusion_counts"], {"identical_response_completion": 1})
+        self.assertEqual(trajectory["preference_exclusions"][0]["rejected_seed"], 102)
+
 
 class Task6CollectionAndCliTest(unittest.TestCase):
+    def test_build_preferences_requires_dataset_and_revalidates_siblings(self):
+        def student(requests, **_kwargs):
+            return [active_artifact(
+                response=correct_response() if request["hints"] else wrong_response(),
+                hints=tuple(request["hints"]),
+            ) for request in requests]
+
+        def siblings(requests, **_kwargs):
+            return [active_artifact(
+                response=correct_response() if request["seed"] == 101 else wrong_response()
+            ) for request in requests]
+
+        trajectory = collect_dataset_batchwise(
+            examples=[example()], student_generate_batch=student,
+            teacher_generate_batch=lambda _prompts, **_kwargs: ['{"hint":"Focus on the associated person."}'],
+            max_interventions=1, sibling_generate_batch=siblings,
+            sibling_seeds=(101, 102), student_seed=7,
+        )[0]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data.jsonl"
+            trajectories = root / "trajectories.jsonl"
+            output = root / "preferences.jsonl"
+            data.write_text(json.dumps(example()) + "\n", encoding="utf-8")
+            trajectories.write_text(json.dumps(trajectory) + "\n", encoding="utf-8")
+            args = build_parser().parse_args([
+                "build-preferences", "--data", str(data),
+                "--trajectories", str(trajectories), "--output", str(output),
+            ])
+            args.func(args)
+            self.assertTrue(output.read_text(encoding="utf-8").strip())
+
+            forged = copy.deepcopy(trajectory)
+            forged["no_hint_siblings"][1]["raw_response"] = correct_response()
+            forged["no_hint_siblings"][1]["verified_no_hint_success"] = True
+            forged["no_hint_siblings"][1]["future_sibling_gain"] = 1.0
+            trajectories.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "cited_score|parsed_response"):
+                args.func(args)
+
+            forged = copy.deepcopy(trajectory)
+            forged["no_hint_siblings"][1]["ranked_search_results"][0]["title"] = "forged"
+            forged["no_hint_siblings"][1]["canonical_ranked_search_results"] = copy.deepcopy(
+                forged["no_hint_siblings"][1]["ranked_search_results"]
+            )
+            with self.assertRaisesRegex(ValueError, "ranked retrieval"):
+                trajectories.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+                args.func(args)
+
+            forged = copy.deepcopy(trajectory)
+            forged["sibling_verification"]["success_count"] = 2
+            trajectories.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "sibling_verification"):
+                args.func(args)
+
     def test_hinted_success_without_sibling_generator_is_explicitly_ineligible(self):
         calls = []
 
@@ -208,13 +277,15 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             data = root / "data.jsonl"
             output = root / "trajectories.jsonl"
             cache = root / "cache.jsonl"
-            data.write_text(json.dumps(example()) + "\n", encoding="utf-8")
+            second = copy.deepcopy(example())
+            second["id"] = "q2"
+            data.write_text(json.dumps(example()) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
             args = build_parser().parse_args([
                 "collect", "--data", str(data), "--output", str(output),
                 "--student-model", "Qwen/Qwen3-4B-Base", "--student-revision", "student-rev",
                 "--teacher-model", "Qwen/Qwen3-32B", "--teacher-revision", "teacher-rev",
                 "--dataset-revision", "data-rev", "--prompt-version", "fixed-retrieval-cited-v1",
-                "--policy-version", "sft-v1", "--policy-hash", "policy-v1", "--seed", "7",
+                "--policy-version", "sft-v1", "--policy-hash", "a" * 64, "--seed", "7",
                 "--sibling-count", "2", "--sibling-seeds", "101", "102",
                 "--teacher-quantization", "4bit", "--attention-implementation", "sdpa",
                 "--student-device", "cuda:1", "--teacher-device", "cuda:0",
@@ -222,11 +293,13 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             ])
             current_seed = {"value": None}
             teacher_calls = []
+            student_stage_calls = []
 
             def set_seed(seed):
                 current_seed["value"] = seed
 
             def student_records(_model, _tokenizer, prompts, **_kwargs):
+                student_stage_calls.append((current_seed["value"], len(prompts), prompts[0].endswith("Search query:")))
                 if prompts[0].endswith("Search query:"):
                     return [GeneratedText("Ada algorithm", False) for _ in prompts]
                 success = "Hints:" in prompts[0] or current_seed["value"] == 101
@@ -249,8 +322,12 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             ):
                 args.func(args)
 
-            row = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+            output_rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([row["id"] for row in output_rows], ["q1", "q2"])
+            row = output_rows[0]
             self.assertTrue(row["training_eligible"])
+            self.assertTrue(row["sft_eligible"])
+            self.assertTrue(row["preference_eligible"])
             self.assertEqual(row["sibling_verification"]["seeds"], [101, 102])
             self.assertEqual(row["sibling_verification"]["sibling_count"], 2)
             self.assertEqual(len(row["ranked_interventions"]), 1)
@@ -267,6 +344,8 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             ):
                 self.assertIn(key, manifest)
             self.assertEqual(manifest["sibling_seeds"], [101, 102])
+            sibling_query_calls = [call for call in student_stage_calls if call[0] in {101, 102} and call[2]]
+            self.assertEqual(sibling_query_calls, [(101, 2, True), (102, 2, True)])
 
 
 if __name__ == "__main__":

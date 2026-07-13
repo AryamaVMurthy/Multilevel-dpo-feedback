@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -43,9 +44,57 @@ def build_cache_manifest(
     seed: int,
     policy_hash: str,
 ) -> dict:
+    from text_feedback_dpo.batch_generation import (
+        EVALUATOR_VERSION, FIXED_B, FIXED_K1, FIXED_TOP_K, PROMPT_VERSION, RESPONSE_SCHEMA_VERSION,
+    )
+    from text_feedback_dpo.runtime import validate_teacher_identity
+    from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
+
+    actual_teacher_identity = validate_teacher_identity(
+        teacher_model, revision=teacher_revision, quantization=teacher_quantization,
+        fallback_reason=teacher_fallback_reason,
+    )
+    if teacher_identity != actual_teacher_identity:
+        raise ValueError("teacher model/identity/4bit mapping mismatch")
+    for field, value in (("student_model", student_model), ("student_revision", student_revision),
+                         ("teacher_revision", teacher_revision), ("dataset_revision", dataset_revision),
+                         ("policy_version", policy_version)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"cache manifest requires pinned non-empty {field}")
+    hashes = {
+        "dataset_hash": dataset_hash, "source_schema_hash": source_schema_hash,
+        "retrieval_hash": retrieval_hash, "prompt_hash": prompt_hash,
+        "response_schema_hash": response_schema_hash, "evaluator_hash": evaluator_hash,
+        "policy_hash": policy_hash,
+    }
+    for field, value in hashes.items():
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError(f"cache manifest {field} must be a lowercase SHA-256")
+    expected_retrieval = {
+        "identity": "fixed_bm25", "schema_version": 1,
+        "requested_top_k": FIXED_TOP_K, "k1": FIXED_K1, "b": FIXED_B,
+    }
+    expected_identities = {
+        "source_schema_hash": _identity_hash({"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}),
+        "retrieval_hash": _identity_hash(expected_retrieval),
+        "prompt_hash": _identity_hash({"identity": PROMPT_VERSION}),
+        "response_schema_hash": _identity_hash({"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION}),
+        "evaluator_hash": _identity_hash({"identity": EVALUATOR_VERSION}),
+    }
+    if dataset_schema != SOURCE_SCHEMA or source_schema_version != SOURCE_SCHEMA_VERSION:
+        raise ValueError("cache manifest dataset/source schema identity mismatch")
+    if retrieval_config != expected_retrieval:
+        raise ValueError("cache manifest retrieval configuration mismatch")
+    if prompt_version != PROMPT_VERSION or response_schema_version != RESPONSE_SCHEMA_VERSION or evaluator_version != EVALUATOR_VERSION:
+        raise ValueError("cache manifest prompt/response/evaluator identity mismatch")
+    for field, expected in expected_identities.items():
+        if hashes[field] != expected:
+            raise ValueError(f"cache manifest {field} identity mismatch")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("cache manifest seed must be a nonnegative integer")
     manifest = {
-        "manifest_version": 2,
-        "schema_version": 2,
+        "manifest_version": 3,
+        "schema_version": 3,
         "student_model": student_model,
         "student_revision": student_revision,
         "teacher_model": teacher_model,
@@ -95,12 +144,21 @@ def build_cache_manifest(
         raise ValueError("sibling_seeds must be an explicit list of integer seeds")
     if len(sibling_seeds) != sibling_count:
         raise ValueError("sibling_count must exactly match sibling_seeds")
+    if any(seed_value < 0 for seed_value in sibling_seeds):
+        raise ValueError("sibling_seeds must be nonnegative")
+    if len(set(sibling_seeds)) != len(sibling_seeds):
+        raise ValueError("sibling_seeds must be unique")
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return {**manifest, "cache_hash": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
 
 
 def _manifest_path(cache_path: Path) -> Path:
     return cache_path.with_suffix(".manifest.json")
+
+
+def _identity_hash(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _verify_existing_manifest(cache_path: Path, expected: dict) -> None:
@@ -168,7 +226,10 @@ def load_or_build_rollouts(*, examples: list[dict], cache_path: Path, cache_mani
 
 
 def load_or_build_trajectories(*, examples: list[dict], cache_path: Path, cache_manifest: dict, generate: Callable[[list[dict]], list[dict]]) -> list[dict]:
+    from text_feedback_dpo.trajectories import revalidate_cached_trajectory
+
     expected_ids = [str(example["id"]) for example in examples]
+    example_by_id = {str(example["id"]): example for example in examples}
     expected_identity = {str(example["id"]): _row_identity(example, cache_manifest) for example in examples}
     cached: dict[str, dict] = {}
     if cache_path.exists():
@@ -186,7 +247,10 @@ def load_or_build_trajectories(*, examples: list[dict], cache_path: Path, cache_
                 raise ValueError(f"cached trajectory row_identity mismatch for {row_id}")
             if str(row_id) in cached:
                 raise ValueError(f"duplicate cached trajectory: {row_id}")
-            cached[str(row_id)] = row
+            cached[str(row_id)] = revalidate_cached_trajectory(
+                row, example=example_by_id[str(row_id)],
+                expected_sibling_seeds=cache_manifest["sibling_seeds"],
+            )
     missing = [example for example in examples if str(example["id"]) not in cached]
     if missing:
         generated = generate(missing)

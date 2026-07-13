@@ -126,8 +126,13 @@ def _validate_rows(rows: list[dict]) -> None:
             raise ValueError(f"SearchQA row {example_id} requires a non-empty question")
         if not isinstance(row.get("gold_answer"), str) or not row["gold_answer"].strip():
             raise ValueError(f"SearchQA row {example_id} requires a non-empty gold_answer")
-        if "sources" not in row:
-            raise ValueError(f"SearchQA row {example_id} requires structured sources")
+        sources = row.get("sources")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError(f"SearchQA row {example_id} requires a nonempty list of structured sources")
+        try:
+            FixedBM25Retriever(sources, k1=FIXED_K1, b=FIXED_B)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"SearchQA row {example_id} has invalid canonical sources: {exc}") from exc
 
 
 def parse_search_query(text: str) -> str:

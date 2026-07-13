@@ -118,6 +118,43 @@ class ArtifactTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "supported format"):
                 validate_artifacts(root)
 
+    def test_active_manifest_parses_jsonl_objects_and_rejects_blank_or_duplicate_ids(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "predictions.jsonl"
+            source_identity = {"identity": "searchqa.search_results.v1", "version": 1}
+            prompt_identity = {"identity": "fixed-retrieval-cited-v1"}
+            response_identity = {"identity": "cited-response", "schema_version": 1}
+
+            def write_case(text, rows):
+                artifact.write_text(text, encoding="utf-8")
+                manifest = {
+                    "command": "generate-searchqa", "max_length": 4096, "rows": rows,
+                    "model": {"identity": "model", "revision": "rev", "policy_hash": "a" * 64},
+                    "dataset": {"source": "searchqa", "revision": "data-rev", "sha256": "b" * 64},
+                    "source_schema": {**source_identity, "sha256": self._identity_hash(source_identity)},
+                    "retrieval": {"identity": "fixed_bm25", "schema_version": 1, "requested_top_k": 8, "k1": 1.2, "b": 0.75},
+                    "prompt": {**prompt_identity, "sha256": self._identity_hash(prompt_identity)},
+                    "response": {**response_identity, "sha256": self._identity_hash(response_identity)},
+                    "generation": {"context_budget": 4096, "query_max_new_tokens": 32, "response_max_new_tokens": 256},
+                    "timing": {"pipeline_wall_ms": 1.0}, "required_files": [artifact.name],
+                    "artifacts": [{"path": artifact.name, "format": "jsonl", "rows": rows,
+                                   "bytes": artifact.stat().st_size,
+                                   "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}],
+                }
+                (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+            for text, rows, message in (
+                ('{"id":"1"}\n\n', 1, "blank"),
+                ('{"id":"1"\n', 1, "invalid JSON"),
+                ('[1, 2]\n', 1, "JSON object"),
+                ('{"id":"1"}\n{"id":"1"}\n', 2, "duplicate.*id"),
+            ):
+                with self.subTest(text=text):
+                    write_case(text, rows)
+                    with self.assertRaisesRegex(ValueError, message):
+                        validate_artifacts(root)
+
 
 if __name__ == "__main__":
     unittest.main()

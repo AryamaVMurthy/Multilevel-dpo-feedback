@@ -86,9 +86,13 @@ def _batch_siblings(
             "future_sibling_gain": gain, "future_sibling_gain_numerator": success_count,
             "future_sibling_gain_denominator": denominator,
             "seeds": [item["seed"] for item in siblings], "eligible": bool(success_count),
+            "sft_eligible": bool(success_count),
+            "preference_eligible": 0 < success_count < denominator,
             "evaluator_version": chosen["evaluator_version"],
         }
         state["training_eligible"] = bool(success_count)
+        state["sft_eligible"] = bool(success_count)
+        state["preference_eligible"] = 0 < success_count < denominator
         for intervention in state["interventions"]:
             intervention["future_sibling_gain"] = gain
             intervention["future_sibling_gain_numerator"] = success_count
@@ -118,6 +122,7 @@ def collect_dataset_batchwise(
             "id": example_id, "example": example, "hints": [], "attempts": [], "interventions": [],
             "resolved": False, "chosen": None, "query_prompt": build_search_query_prompt(example, []),
             "no_hint_siblings": [], "training_eligible": False,
+            "sft_eligible": False, "preference_eligible": False,
             "ranked_interventions": [],
         }
         for example_id, example in zip(ids, examples, strict=True)
@@ -195,8 +200,13 @@ def collect_dataset_batchwise(
     rows = []
     for example_id in ids:
         state = states[example_id]
+        if not state["resolved"]:
+            state["sibling_verification"] = {"status": "unresolved", "eligible": False}
+        elif not state["interventions"]:
+            state["sibling_verification"] = {"status": "not_required", "eligible": True}
         trajectory = {
             "id": state["id"], "prompt": state["query_prompt"], "query_prompt": state["query_prompt"],
+            "example_identity": _structured_hash(state["example"]),
             "query_prompt_hash": _structured_hash(state["query_prompt"]),
             "attempts": state["attempts"], "interventions": state["interventions"],
             "ranked_interventions": state["ranked_interventions"],
@@ -204,12 +214,14 @@ def collect_dataset_batchwise(
             "no_hint_siblings": state["no_hint_siblings"],
             "sibling_verification": state.get("sibling_verification", {"status": "not_required"}),
             "training_eligible": state["training_eligible"] if state["interventions"] else state["resolved"],
+            "sft_eligible": state["sft_eligible"] if state["interventions"] else state["resolved"],
+            "preference_eligible": state["preference_eligible"] if state["interventions"] else False,
         }
         if trajectory["chosen"]:
             chosen = trajectory["chosen"]
             for key in ("policy_hash", "response_prompt_hash", "evaluator_version"):
                 if key in chosen:
                     trajectory[key] = chosen[key]
-        trajectory["preference_rows"] = build_preference_rows(trajectory) if trajectory["training_eligible"] else []
+        trajectory["preference_rows"] = build_preference_rows(trajectory) if trajectory["preference_eligible"] else []
         rows.append(trajectory)
     return rows

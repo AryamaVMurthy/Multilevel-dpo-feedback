@@ -15,6 +15,13 @@ class MinimalFeedback:
     hint: str
 
 
+_COMMON_GOLD_TOKENS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is",
+    "it", "of", "on", "or", "that", "the", "this", "to", "was", "what", "when", "where",
+    "which", "who", "why", "with",
+})
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     payload: dict[str, object] = {}
     for key, value in pairs:
@@ -29,16 +36,21 @@ def _normalized_tokens(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[\w]+", value, flags=re.UNICODE))
 
 
-def _contains_gold_leak(hint: str, gold_answer: str) -> bool:
+def _gold_leak_kind(hint: str, gold_answer: str) -> str | None:
     exact_hint = " ".join(unicodedata.normalize("NFKC", hint).casefold().split())
     exact_gold = " ".join(unicodedata.normalize("NFKC", gold_answer).casefold().split())
     if exact_gold and exact_gold in exact_hint:
-        return True
+        return "full"
     gold_tokens = _normalized_tokens(gold_answer)
     hint_tokens = _normalized_tokens(hint)
     if not gold_tokens:
-        return False
-    return any(hint_tokens[index : index + len(gold_tokens)] == gold_tokens for index in range(len(hint_tokens) - len(gold_tokens) + 1))
+        return None
+    if any(hint_tokens[index : index + len(gold_tokens)] == gold_tokens for index in range(len(hint_tokens) - len(gold_tokens) + 1)):
+        return "full"
+    meaningful = {token for token in gold_tokens if len(token) >= 3 and token not in _COMMON_GOLD_TOKENS}
+    if meaningful.intersection(hint_tokens):
+        return "token"
+    return None
 
 
 def parse_feedback(text: str, *, gold_answer: str) -> MinimalFeedback:
@@ -58,7 +70,12 @@ def parse_feedback(text: str, *, gold_answer: str) -> MinimalFeedback:
         raise FeedbackFormatError("hint exceeds 24 words")
     if not isinstance(gold_answer, str) or not gold_answer.strip():
         raise FeedbackFormatError("gold answer is required for leakage checks")
-    if _contains_gold_leak(hint, gold_answer):
+    if not _normalized_tokens(gold_answer):
+        raise FeedbackFormatError("gold answer must contain meaningful normalized tokens")
+    leak_kind = _gold_leak_kind(hint, gold_answer)
+    if leak_kind == "token":
+        raise FeedbackFormatError("hint contains a meaningful gold answer token")
+    if leak_kind == "full":
         raise FeedbackFormatError("hint contains the gold answer")
     return MinimalFeedback(hint=hint)
 
