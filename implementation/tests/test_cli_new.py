@@ -164,6 +164,19 @@ class CLITest(unittest.TestCase):
         self.assertEqual(parsed.response_min_new_tokens, 8)
         self.assertEqual(parsed.func.__name__, "cmd_evaluate_sft_reproduction")
 
+    def test_sft_capability_cli_requires_all_hashed_lineage_artifacts(self):
+        parsed = build_parser().parse_args([
+            "evaluate-sft-capability",
+            "--sft-data", "balanced.jsonl", "--sft-data-sha256", "a" * 64,
+            "--reproduction", "reproduction.jsonl", "--reproduction-sha256", "b" * 64,
+            "--examples", "pool.jsonl", "--examples-sha256", "c" * 64,
+            "--bootstrap", "bootstrap.jsonl", "--bootstrap-sha256", "d" * 64,
+            "--output", "capability.jsonl", "--report", "capability.json",
+        ])
+        self.assertEqual(parsed.sft_data.name, "balanced.jsonl")
+        self.assertEqual(parsed.bootstrap_sha256, "d" * 64)
+        self.assertEqual(parsed.func.__name__, "cmd_evaluate_sft_capability")
+
     def test_teacher_probe_supplies_bounded_retrieved_context_to_private_prompt(self):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "teacher-probe.json"

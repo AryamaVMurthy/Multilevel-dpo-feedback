@@ -317,6 +317,45 @@ def cmd_evaluate_sft_reproduction(args: argparse.Namespace) -> None:
     write_json(args.report, summary)
 
 
+def cmd_evaluate_sft_capability(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.monitoring import build_sft_capability_report
+
+    artifacts = (
+        ("SFT data", args.sft_data, args.sft_data_sha256),
+        ("reproduction", args.reproduction, args.reproduction_sha256),
+        ("examples", args.examples, args.examples_sha256),
+        ("bootstrap", args.bootstrap, args.bootstrap_sha256),
+    )
+    actual_hashes: dict[str, str] = {}
+    for label, path, expected_hash in artifacts:
+        if not path.is_file():
+            raise FileNotFoundError(f"SFT capability {label} artifact is missing: {path}")
+        actual_hash = _sha256_file_streaming(path)
+        if actual_hash != expected_hash:
+            raise ValueError(
+                f"SFT capability {label} hash mismatch: expected {expected_hash}, got {actual_hash}"
+            )
+        actual_hashes[label] = actual_hash
+    rows = read_unique_jsonl(args.sft_data, label="SFT capability rows")
+    reproduction = read_unique_jsonl(args.reproduction, label="SFT capability reproduction")
+    examples = read_unique_jsonl(args.examples, label="SFT capability examples")
+    bootstrap = read_unique_jsonl(args.bootstrap, label="SFT capability bootstrap")
+    records, summary = build_sft_capability_report(
+        rows,
+        reproduction,
+        examples_by_id={str(row["id"]): row for row in examples},
+        bootstrap_by_id={str(row["id"]): row for row in bootstrap},
+    )
+    summary["artifact_sha256"] = {
+        "sft_data": actual_hashes["SFT data"],
+        "reproduction": actual_hashes["reproduction"],
+        "examples": actual_hashes["examples"],
+        "bootstrap": actual_hashes["bootstrap"],
+    }
+    write_jsonl(records, args.output)
+    write_json(args.report, summary)
+
+
 def cmd_precompute_dpo_refs(args: argparse.Namespace) -> None:
     from text_feedback_dpo.runtime import load_student, load_tokenizer
     from text_feedback_dpo.trainers import precompute_reference_log_probs, validate_prompt_completion_lengths
@@ -1222,6 +1261,21 @@ def build_parser() -> argparse.ArgumentParser:
     reproduction.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
     reproduction.add_argument("--device", default="cuda:0")
     reproduction.set_defaults(func=cmd_evaluate_sft_reproduction)
+    capability = sub.add_parser(
+        "evaluate-sft-capability",
+        help="canonically score checkpoint SFT generations against sealed bootstrap lineage",
+    )
+    capability.add_argument("--sft-data", required=True, type=Path)
+    capability.add_argument("--sft-data-sha256", required=True)
+    capability.add_argument("--reproduction", required=True, type=Path)
+    capability.add_argument("--reproduction-sha256", required=True)
+    capability.add_argument("--examples", required=True, type=Path)
+    capability.add_argument("--examples-sha256", required=True)
+    capability.add_argument("--bootstrap", required=True, type=Path)
+    capability.add_argument("--bootstrap-sha256", required=True)
+    capability.add_argument("--output", required=True, type=Path)
+    capability.add_argument("--report", required=True, type=Path)
+    capability.set_defaults(func=cmd_evaluate_sft_capability)
     refs = sub.add_parser("precompute-dpo-ref-log-probs")
     refs.add_argument("--config", required=True, type=Path)
     refs.add_argument("--data", required=True, type=Path)

@@ -121,6 +121,19 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("#SBATCH --gres=gpu:1", text)
         self.assertNotIn("|| true", text)
 
+    def test_sft_capability_launcher_binds_every_lineage_hash_and_uses_no_gpu(self):
+        text = Path("scripts/turing_sft_capability.sh").read_text(encoding="utf-8")
+        for required in (
+            "EXPECTED_COMMIT", "SFT_DATA", "SFT_DATA_HASH", "REPRODUCTION",
+            "REPRODUCTION_HASH", "EXAMPLES", "EXAMPLES_HASH", "BOOTSTRAP",
+            "BOOTSTRAP_HASH", "OUTPUT", "REPORT",
+        ):
+            self.assertIn(f'require_env "{required}"', text)
+        self.assertIn("evaluate-sft-capability", text)
+        self.assertIn("fallback_reason=none", text)
+        self.assertNotIn("#SBATCH --gres=gpu:", text)
+        self.assertNotIn("|| true", text)
+
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):
