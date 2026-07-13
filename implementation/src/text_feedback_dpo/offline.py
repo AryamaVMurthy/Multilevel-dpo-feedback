@@ -58,7 +58,8 @@ def build_cache_manifest(
     policy_hash: str,
 ) -> dict:
     from text_feedback_dpo.batch_generation import (
-        EVALUATOR_VERSION, FIXED_B, FIXED_K1, FIXED_TOP_K, PROMPT_VERSION, RESPONSE_SCHEMA_VERSION,
+        EVALUATOR_VERSION, FIXED_B, FIXED_K1, FIXED_TOP_K, PROMPT_VERSION,
+        RESPONSE_SCHEMA_VERSION, SCAFFOLD_PROMPT_VERSION,
     )
     from text_feedback_dpo.runtime import validate_teacher_identity
     from text_feedback_dpo.prompts import prompt_builder_identity
@@ -99,7 +100,7 @@ def build_cache_manifest(
     expected_identities = {
         "source_schema_hash": _identity_hash({"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}),
         "retrieval_hash": _identity_hash(expected_retrieval),
-        "prompt_hash": _identity_hash({"identity": PROMPT_VERSION, "builders": prompt_builders}),
+        "prompt_hash": _identity_hash({"identity": prompt_version, "builders": prompt_builders}),
         "response_schema_hash": _identity_hash({"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION}),
         "evaluator_hash": _identity_hash({"identity": EVALUATOR_VERSION}),
     }
@@ -107,7 +108,7 @@ def build_cache_manifest(
         raise ValueError("cache manifest dataset/source schema identity mismatch")
     if retrieval_config != expected_retrieval:
         raise ValueError("cache manifest retrieval configuration mismatch")
-    if prompt_version != PROMPT_VERSION or response_schema_version != RESPONSE_SCHEMA_VERSION or evaluator_version != EVALUATOR_VERSION:
+    if prompt_version not in {PROMPT_VERSION, SCAFFOLD_PROMPT_VERSION} or response_schema_version != RESPONSE_SCHEMA_VERSION or evaluator_version != EVALUATOR_VERSION:
         raise ValueError("cache manifest prompt/response/evaluator identity mismatch")
     for field, expected in expected_identities.items():
         if hashes[field] != expected:

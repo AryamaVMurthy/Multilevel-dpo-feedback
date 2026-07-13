@@ -11,7 +11,7 @@ from text_feedback_dpo.offline import (
     load_or_build_trajectories,
     student_policy_identity,
 )
-from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
+from text_feedback_dpo.batch_generation import SCAFFOLD_PROMPT_VERSION, run_fixed_retrieval_pipeline
 from text_feedback_dpo.runtime import GeneratedText
 from text_feedback_dpo.feedback import diagnose_attempt
 from text_feedback_dpo.prompts import prompt_builder_identity
@@ -102,6 +102,14 @@ def active_trajectory():
         "response_prompt_hash": artifact["response_prompt_hash"], "evaluator_version": artifact["evaluator_version"],
     }
 class OfflineReuseTest(unittest.TestCase):
+    def test_cache_manifest_accepts_the_selected_scaffold_prompt_identity(self):
+        scaffold_hash = _hash({
+            "identity": SCAFFOLD_PROMPT_VERSION, "builders": prompt_builder_identity(),
+        })
+        result = manifest(prompt_version=SCAFFOLD_PROMPT_VERSION, prompt_hash=scaffold_hash)
+        self.assertEqual(result["prompt_version"], SCAFFOLD_PROMPT_VERSION)
+        self.assertEqual(result["prompt_hash"], scaffold_hash)
+
     def test_student_policy_identity_is_canonical_and_weight_bound(self):
         first = student_policy_identity(
             student_model="Qwen/Qwen3-4B-Base",

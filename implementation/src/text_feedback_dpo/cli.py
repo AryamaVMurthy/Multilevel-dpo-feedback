@@ -851,7 +851,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         FIXED_B,
         FIXED_K1,
         FIXED_TOP_K,
-        PROMPT_VERSION,
+        PROMPT_VERSION, SCAFFOLD_PROMPT_VERSION,
         RESPONSE_SCHEMA_VERSION,
         run_fixed_retrieval_pipeline,
     )
@@ -874,8 +874,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
     examples = read_jsonl(args.data)
-    if args.prompt_version != PROMPT_VERSION:
-        raise ValueError(f"collect prompt_version must be {PROMPT_VERSION}")
+    if args.prompt_version not in {PROMPT_VERSION, SCAFFOLD_PROMPT_VERSION}:
+        raise ValueError(f"collect prompt_version must be one of {PROMPT_VERSION}, {SCAFFOLD_PROMPT_VERSION}")
     if args.sibling_count <= 0 or len(args.sibling_seeds) != args.sibling_count:
         raise ValueError("sibling_count must be positive and exactly match sibling_seeds")
     if len(set(args.sibling_seeds)) != len(args.sibling_seeds) or any(seed < 0 for seed in args.sibling_seeds):
@@ -1063,7 +1063,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         "identity": "fixed_bm25", "schema_version": 1,
         "requested_top_k": FIXED_TOP_K, "k1": FIXED_K1, "b": FIXED_B,
     }
-    prompt_identity = {"identity": PROMPT_VERSION, "builders": prompt_builder_identity()}
+    prompt_identity = {"identity": args.prompt_version, "builders": prompt_builder_identity()}
     response_identity = {"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION}
     evaluator_identity = {"identity": EVALUATOR_VERSION}
 
