@@ -5,379 +5,299 @@ import json
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
-from text_feedback_dpo.io import read_jsonl, write_jsonl
-from text_feedback_dpo.models import ModelProvider, TransformersModelProvider
-from text_feedback_dpo.observability import JsonlLogger
-from text_feedback_dpo.prompts import build_student_prompt, build_teacher_prompt
-from text_feedback_dpo.report import write_html_report
-from text_feedback_dpo.scoring import evaluate_rollout
+from text_feedback_dpo.dataset import attach_evidence, build_sft_row, load_searchqa_split_with_stats, write_jsonl
+from text_feedback_dpo.scoring import score_searchqa
 
 
-FAKE_STUDENT_ROLLOUT = """<plan>
-Solve with one arithmetic branch.
-</plan>
-<think branch="A">
-2 + 2 = 5.
-</think>
-<reflect>
-Branch comparison: one branch.
-Evidence / derivation check: the arithmetic should be checked.
-Verification: recalculating 2 + 2 does not support 5.
-Decision: answer
-</reflect>
-<final>
-5
-</final>"""
+def iter_jsonl(path: Path):
+    if not path.exists():
+        raise FileNotFoundError(f"JSONL input does not exist: {path}")
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSONL at {path}:{line_number}: {exc}") from exc
 
 
-FAKE_TEACHER_OUTPUT = """<feedback>
-The student should recompute the arithmetic and verify before final.
-</feedback>
-
-<corrected_rollout>
-<plan>
-Solve with one arithmetic branch and verify before final.
-</plan>
-<think branch="A">
-2 + 2 = 4.
-</think>
-<reflect>
-Branch comparison: one branch is sufficient.
-Evidence / derivation check: direct addition gives 4.
-Verification: recalculating 2 + 2 gives 4.
-Decision: answer
-</reflect>
-<final>
-4
-</final>
-</corrected_rollout>"""
+def read_jsonl(path: Path) -> list[dict]:
+    rows = list(iter_jsonl(path))
+    if not rows:
+        raise ValueError(f"JSONL input is empty: {path}")
+    return rows
 
 
-def _index_by_id(rows: list[dict], source_name: str) -> dict[str, dict]:
-    indexed: dict[str, dict] = {}
-    for row in rows:
-        row_id = row.get("id")
-        if not row_id:
-            raise ValueError(f"{source_name} row is missing required id")
-        if row_id in indexed:
-            raise ValueError(f"{source_name} contains duplicate id: {row_id}")
-        indexed[row_id] = row
-    return indexed
+def write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _extract_required_block(text: str, tag: str) -> str:
-    start_tag = f"<{tag}>"
-    end_tag = f"</{tag}>"
-    start = text.find(start_tag)
-    end = text.find(end_tag, start + len(start_tag))
-    if start < 0 or end < 0:
-        raise ValueError(f"teacher output missing <{tag}> block")
-    return text[start + len(start_tag) : end].strip()
+def cmd_prepare(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.runtime import load_tokenizer
+
+    tokenizer = load_tokenizer(args.tokenizer_model, revision=args.tokenizer_revision)
+    rows, load_stats = load_searchqa_split_with_stats(args.source, args.split, revision=args.revision, limit=args.limit)
+    rows = attach_evidence(rows, max_evidence_tokens=args.max_evidence_tokens, token_count=lambda text: len(tokenizer.encode(text, add_special_tokens=False)))
+    write_jsonl(rows, args.output)
+    manifest = {"source": args.source, "split": args.split, "rows": len(rows), "max_length": 4096, "load_stats": load_stats, "required_files": [args.output.name]}
+    write_json(args.output.with_suffix(".manifest.json"), manifest)
+    write_json(args.output.parent / "manifest.json", manifest)
 
 
-def _default_smoke_examples(max_examples: int) -> list[dict]:
-    examples = [
-        {
-            "id": "math-1",
-            "domain": "math",
-            "problem": "What is 2 + 2?",
-            "gold_answer": "4",
-        },
-        {
-            "id": "math-2",
-            "domain": "math",
-            "problem": "What is 3 + 3?",
-            "gold_answer": "6",
-        },
-        {
-            "id": "math-3",
-            "domain": "math",
-            "problem": "What is 5 - 2?",
-            "gold_answer": "3",
-        },
-        {
-            "id": "math-4",
-            "domain": "math",
-            "problem": "What is 7 + 1?",
-            "gold_answer": "8",
-        },
-        {
-            "id": "math-5",
-            "domain": "math",
-            "problem": "What is 10 / 2?",
-            "gold_answer": "5",
-        },
-    ]
-    return examples[:max_examples]
+def cmd_build_sft(args: argparse.Namespace) -> None:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with args.output.open("w", encoding="utf-8") as handle:
+        for row in iter_jsonl(args.data):
+            handle.write(json.dumps(build_sft_row(row), sort_keys=True, ensure_ascii=False) + "\n")
+            count += 1
+    if count == 0:
+        args.output.unlink(missing_ok=True)
+        raise ValueError("SFT input produced zero rows")
 
 
-def run_basic_pipeline(
-    *,
-    examples_path: Path,
-    rollouts_path: Path,
-    corrections_path: Path,
-    output_dir: Path,
-    run_id: str,
-) -> dict:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    logger = JsonlLogger(output_dir / "events.jsonl", run_id=run_id)
-    logger.event(
-        "run_start",
-        stage="load_inputs",
-        examples_path=str(examples_path),
-        rollouts_path=str(rollouts_path),
-        corrections_path=str(corrections_path),
-        output_dir=str(output_dir),
-    )
+def cmd_report(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.report import write_html_report
 
-    examples = read_jsonl(examples_path)
-    rollouts = _index_by_id(read_jsonl(rollouts_path), "rollouts")
-    corrections = _index_by_id(read_jsonl(corrections_path), "corrections")
+    write_html_report(args.output, json.loads(args.metrics.read_text(encoding="utf-8")), args.artifact)
 
-    pairs: list[dict] = []
-    rejections: list[dict] = []
-    verification_missing_rejections = 0
 
-    for example in examples:
-        example_id = example.get("id")
-        if not example_id:
-            raise ValueError("example row is missing required id")
-        if example_id not in rollouts:
-            raise ValueError(f"missing rollout for example id: {example_id}")
-        if example_id not in corrections:
-            raise ValueError(f"missing correction for example id: {example_id}")
+def cmd_validate(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.artifacts import validate_artifacts
 
-        gold_answer = str(example["gold_answer"])
-        original_rollout = str(rollouts[example_id]["rollout"])
-        corrected_rollout = str(corrections[example_id]["corrected_rollout"])
-        original_result = evaluate_rollout(original_rollout, gold_answer)
-        corrected_result = evaluate_rollout(corrected_rollout, gold_answer)
+    write_json(args.output, validate_artifacts(args.directory))
 
-        logger.event(
-            "example_evaluated",
-            stage="evaluate",
-            example_id=example_id,
-            domain=example.get("domain"),
-            original_score=original_result["score"],
-            corrected_score=corrected_result["score"],
-            corrected_format_valid=corrected_result["format_valid"],
-            corrected_verification_present=corrected_result["verification_present"],
-            corrected_error_code=corrected_result["error_code"],
-        )
 
-        if not corrected_result["verification_present"]:
-            verification_missing_rejections += 1
+def cmd_compare(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.comparison import comparison_metrics
+    from text_feedback_dpo.report import write_html_report
 
-        accepted = (
-            original_result["score"] < corrected_result["score"]
-            and corrected_result["format_valid"]
-            and corrected_result["verification_present"]
-        )
-        if accepted:
-            pairs.append(
-                {
-                    "id": example_id,
-                    "prompt": str(example["problem"]),
-                    "chosen": corrected_rollout,
-                    "rejected": original_rollout,
-                    "metadata": {
-                        "domain": example.get("domain"),
-                        "original_score": original_result["score"],
-                        "corrected_score": corrected_result["score"],
-                        "feedback": corrections[example_id].get("feedback", ""),
-                    },
-                }
-            )
+    metrics = comparison_metrics(args.run)
+    write_json(args.output, metrics)
+    write_html_report(args.html, metrics, [args.output.name, *args.artifact])
+
+
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    examples = {row["id"]: row for row in read_jsonl(args.data)}
+    predictions = read_jsonl(args.predictions)
+    results = []
+    for prediction in predictions:
+        example_id = prediction.get("id", prediction.get("example_id"))
+        if example_id not in examples:
+            raise ValueError(f"prediction has unknown example id: {example_id}")
+        example = examples[example_id]
+        result = score_searchqa(prediction["response"], example["gold_answer"], example["packed_evidence"])
+        results.append({"id": example_id, **result})
+    exact = sum(row["exact_match"] for row in results) / len(results)
+    f1 = sum(row["f1"] for row in results) / len(results)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(results, args.output.with_suffix(".jsonl"))
+    write_json(args.output, {"examples": len(results), "exact_match": exact, "f1": f1, "correct": sum(row["correct"] for row in results)})
+
+
+def cmd_generate(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.prompts import build_student_prompt
+    from text_feedback_dpo.runtime import generate_batch, load_student, load_tokenizer
+
+    if args.batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    rows = read_jsonl(args.data)
+    tokenizer = load_tokenizer(args.model, revision=args.model_revision)
+    model = load_student(args.model, revision=args.model_revision, attention_implementation=args.attention_implementation)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with args.output.open("w", encoding="utf-8") as handle:
+        for start in range(0, len(rows), args.batch_size):
+            batch = rows[start : start + args.batch_size]
+            prompts = [row.get("prompt") or build_student_prompt(row, []) for row in batch]
+            responses = generate_batch(model, tokenizer, prompts, max_new_tokens=args.max_new_tokens, temperature=args.temperature, top_p=args.top_p)
+            for row, response in zip(batch, responses, strict=True):
+                handle.write(json.dumps({"id": row["id"], "response": response, "policy_hash": args.policy_hash}, ensure_ascii=False) + "\n")
+            handle.flush()
+
+
+def cmd_build_preferences(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.preferences import build_preference_rows
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with args.output.open("w", encoding="utf-8") as handle:
+        for trajectory in iter_jsonl(args.trajectories):
+            for row in build_preference_rows(trajectory):
+                handle.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
+                count += 1
+        handle.flush()
+    if count == 0:
+        args.output.unlink(missing_ok=True)
+        raise ValueError("no valid preference rows were produced")
+
+
+def cmd_collect(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.collection import collect_dataset_batchwise
+    from text_feedback_dpo.offline import load_or_build_trajectories
+    from text_feedback_dpo.runtime import generate_batch, load_student, load_teacher, load_tokenizer
+
+    examples = read_jsonl(args.data)
+    teacher_reason = "trajectory_cache_reused"
+    def generate_trajectories(pending):
+        nonlocal teacher_reason
+        student_tokenizer = load_tokenizer(args.student_model, revision=args.student_revision)
+        student = load_student(args.student_model, revision=args.student_revision, attention_implementation=args.attention_implementation, device=args.student_device)
+        teacher = None
+        try:
+            teacher_tokenizer = load_tokenizer(args.teacher_model, revision=args.teacher_revision)
+            teacher = load_teacher(args.teacher_model, revision=args.teacher_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
+            generate_batch(teacher, teacher_tokenizer, ["<teacher_probe><instruction>Return a minimal XML feedback object.</instruction></teacher_probe>"], max_new_tokens=4, temperature=0.0, top_p=1.0)
+            teacher_reason = "primary_teacher_loaded"
+        except RuntimeError as exc:
+            if not args.teacher_fallback_model:
+                raise RuntimeError(f"teacher load failed and no explicit fallback was supplied: {exc}") from exc
+            if not args.teacher_fallback_revision:
+                raise ValueError("teacher_fallback_revision is required when teacher fallback is configured")
+            del teacher
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
+            teacher_tokenizer = load_tokenizer(args.teacher_fallback_model, revision=args.teacher_fallback_revision)
+            teacher = load_teacher(args.teacher_fallback_model, revision=args.teacher_fallback_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
+            teacher_reason = f"fallback_reason=primary_teacher_load_failed:{type(exc).__name__}"
+
+        if args.generation_batch_size <= 0:
+            raise ValueError("generation_batch_size must be positive")
+
+        def batched_generate(model, tokenizer, prompts, **kwargs):
+            outputs = []
+            for start in range(0, len(prompts), args.generation_batch_size):
+                outputs.extend(generate_batch(model, tokenizer, prompts[start : start + args.generation_batch_size], **kwargs))
+            return outputs
+
+        def student_batch(prompts, **kwargs):
+            return batched_generate(student, student_tokenizer, prompts, **kwargs)
+
+        def teacher_batch(prompts, **kwargs):
+            return batched_generate(teacher, teacher_tokenizer, prompts, **kwargs)
+
+        return collect_dataset_batchwise(examples=pending, student_generate_batch=student_batch, teacher_generate_batch=teacher_batch, max_interventions=args.max_interventions)
+
+    rows = load_or_build_trajectories(examples=examples, cache_path=args.trajectory_cache, policy_hash=args.policy_hash, generate=generate_trajectories)
+    write_jsonl(rows, args.output)
+    manifest = {"student_model": args.student_model, "teacher_model": args.teacher_model, "teacher_reason": teacher_reason, "max_length": 4096, "max_interventions": args.max_interventions, "required_files": [args.output.name]}
+    write_json(args.output.with_suffix(".manifest.json"), manifest)
+    write_json(args.output.parent / "manifest.json", manifest)
+
+
+def cmd_train(args: argparse.Namespace) -> None:
+    config = load_config(args.config)
+    from text_feedback_dpo.trainers import run_dapo, run_dpo, run_grpo, run_sft
+
+    model_id = args.model or config["student_model"]
+    common = {"learning_rate": args.learning_rate, "epochs": args.epochs, "gradient_accumulation_steps": args.gradient_accumulation_steps, "deepspeed_config": args.deepspeed_config, "resume_from_checkpoint": args.resume_from_checkpoint, "save_steps": args.save_steps, "eval_steps": args.eval_steps, "dapo_enabled": args.method == "dapo", "attention_implementation": config["training"]["attention_implementation"], "model_revision": args.model_revision if args.model else config["student_revision"]}
+    kwargs = {"model_id": model_id, "train_path": args.train, "output_dir": args.output, "config": common}
+    if args.method in {"sft", "dpo"}:
+        kwargs["eval_path"] = args.eval
+    {"sft": run_sft, "dpo": run_dpo, "grpo": run_grpo, "dapo": run_dapo}[args.method](**kwargs)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="tfdpo")
+    sub = parser.add_subparsers(dest="command", required=True)
+    prepare = sub.add_parser("prepare-searchqa")
+    prepare.add_argument("--source", required=True)
+    prepare.add_argument("--split", required=True)
+    prepare.add_argument("--tokenizer-model", required=True)
+    prepare.add_argument("--tokenizer-revision", required=True)
+    prepare.add_argument("--revision", required=True)
+    prepare.add_argument("--output", required=True, type=Path)
+    prepare.add_argument("--max-evidence-tokens", required=True, type=int)
+    prepare.add_argument("--limit", type=int)
+    prepare.set_defaults(func=cmd_prepare)
+    evaluate = sub.add_parser("evaluate")
+    evaluate.add_argument("--data", required=True, type=Path)
+    evaluate.add_argument("--predictions", required=True, type=Path)
+    evaluate.add_argument("--output", required=True, type=Path)
+    evaluate.set_defaults(func=cmd_evaluate)
+    generate = sub.add_parser("generate")
+    generate.add_argument("--data", required=True, type=Path)
+    generate.add_argument("--output", required=True, type=Path)
+    generate.add_argument("--model", required=True)
+    generate.add_argument("--model-revision")
+    generate.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
+    generate.add_argument("--batch-size", type=int, default=4)
+    generate.add_argument("--max-new-tokens", type=int, default=512)
+    generate.add_argument("--temperature", type=float, default=0.0)
+    generate.add_argument("--top-p", type=float, default=1.0)
+    generate.add_argument("--policy-hash", default="unversioned-generate")
+    generate.set_defaults(func=cmd_generate)
+    preferences = sub.add_parser("build-preferences")
+    preferences.add_argument("--trajectories", required=True, type=Path)
+    preferences.add_argument("--output", required=True, type=Path)
+    preferences.set_defaults(func=cmd_build_preferences)
+    sft_data = sub.add_parser("build-sft-data")
+    sft_data.add_argument("--data", required=True, type=Path)
+    sft_data.add_argument("--output", required=True, type=Path)
+    sft_data.set_defaults(func=cmd_build_sft)
+    report = sub.add_parser("report")
+    report.add_argument("--metrics", required=True, type=Path)
+    report.add_argument("--output", required=True, type=Path)
+    report.add_argument("--artifact", action="append", default=[])
+    report.set_defaults(func=cmd_report)
+    validate = sub.add_parser("validate-run")
+    validate.add_argument("--directory", required=True, type=Path)
+    validate.add_argument("--output", required=True, type=Path)
+    validate.set_defaults(func=cmd_validate)
+    compare = sub.add_parser("compare")
+    compare.add_argument("--run", action="append", required=True)
+    compare.add_argument("--output", required=True, type=Path)
+    compare.add_argument("--html", required=True, type=Path)
+    compare.add_argument("--artifact", action="append", default=[])
+    compare.set_defaults(func=cmd_compare)
+    collect = sub.add_parser("collect")
+    collect.add_argument("--data", required=True, type=Path)
+    collect.add_argument("--output", required=True, type=Path)
+    collect.add_argument("--student-model", required=True)
+    collect.add_argument("--teacher-model", required=True)
+    collect.add_argument("--teacher-fallback-model")
+    collect.add_argument("--student-revision")
+    collect.add_argument("--teacher-revision", required=True)
+    collect.add_argument("--teacher-fallback-revision")
+    collect.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
+    collect.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
+    collect.add_argument("--student-device", required=True)
+    collect.add_argument("--teacher-device", required=True)
+    collect.add_argument("--max-interventions", type=int, default=4)
+    collect.add_argument("--generation-batch-size", type=int, default=8)
+    collect.add_argument("--trajectory-cache", required=True, type=Path)
+    collect.add_argument("--policy-hash", required=True)
+    collect.set_defaults(func=cmd_collect)
+    for method in ("sft", "dpo", "grpo", "dapo"):
+        train = sub.add_parser(f"train-{method}")
+        train.add_argument("--config", required=True, type=Path)
+        train.add_argument("--train", required=True, type=Path)
+        if method in {"sft", "dpo"}:
+            train.add_argument("--eval", required=True, type=Path)
         else:
-            reason = corrected_result["error_code"] or "corrected_not_better"
-            rejections.append(
-                {
-                    "id": example_id,
-                    "reason": reason,
-                    "original_result": original_result,
-                    "corrected_result": corrected_result,
-                }
-            )
-
-    metrics = {
-        "run_id": run_id,
-        "examples_total": len(examples),
-        "accepted_pairs": len(pairs),
-        "rejected_examples": len(rejections),
-        "verification_missing_rejections": verification_missing_rejections,
-    }
-    write_jsonl(output_dir / "pairs.jsonl", pairs)
-    write_jsonl(output_dir / "rejections.jsonl", rejections)
-    (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
-    write_html_report(output_dir / "report.html", metrics)
-    logger.event("run_end", stage="complete", **metrics)
-    return metrics
-
-
-def run_generate_pipeline(
-    *,
-    config_path: Path,
-    output_dir: Path | None = None,
-    model_provider: ModelProvider | None = None,
-    fake_smoke: bool = False,
-) -> dict:
-    config = load_config(config_path)
-    run_id = str(config["run_id"])
-    output = output_dir or Path(str(config["output_dir"]))
-    output.mkdir(parents=True, exist_ok=True)
-    logger = JsonlLogger(output / "events.jsonl", run_id=run_id)
-    logger.event("run_start", stage="generate", config_path=str(config_path), output_dir=str(output))
-
-    if fake_smoke and model_provider is None:
-        from text_feedback_dpo.models import FakeModelProvider
-
-        logger.event(
-            "fake_smoke_enabled",
-            stage="generate",
-            fallback_reason="explicit --fake-smoke test mode requested",
-        )
-        provider = FakeModelProvider({"student": FAKE_STUDENT_ROLLOUT, "teacher": FAKE_TEACHER_OUTPUT})
-    else:
-        provider = model_provider or TransformersModelProvider(
-            model_ids={"student": str(config["student_model"]), "teacher": str(config["teacher_model"])},
-        )
-
-    examples = _default_smoke_examples(int(config["max_examples"]))
-    rollouts: list[dict] = []
-    corrections: list[dict] = []
-    pairs: list[dict] = []
-    rejections: list[dict] = []
-    verification_missing_rejections = 0
-
-    for example in examples:
-        student_prompt = build_student_prompt(str(example["problem"]), str(example["domain"]))
-        student_rollout = provider.generate("student", student_prompt, **config["generation"])
-        rollouts.append({"id": example["id"], "prompt": student_prompt, "rollout": student_rollout})
-        original_result = evaluate_rollout(student_rollout, str(example["gold_answer"]))
-        logger.event(
-            "student_generated",
-            stage="student_generation",
-            example_id=example["id"],
-            domain=example["domain"],
-            original_score=original_result["score"],
-            original_error_code=original_result["error_code"],
-        )
-
-        teacher_prompt = build_teacher_prompt(
-            problem=str(example["problem"]),
-            gold_answer=str(example["gold_answer"]),
-            student_rollout=student_rollout,
-            result=original_result,
-            domain=str(example["domain"]),
-            teacher_mode=str(config["teacher_mode"]),
-        )
-        teacher_output = provider.generate("teacher", teacher_prompt, **config["teacher_generation"])
-        feedback = _extract_required_block(teacher_output, "feedback")
-        corrected_rollout = _extract_required_block(teacher_output, "corrected_rollout")
-        corrected_result = evaluate_rollout(corrected_rollout, str(example["gold_answer"]))
-        corrections.append(
-            {
-                "id": example["id"],
-                "prompt": teacher_prompt,
-                "feedback": feedback,
-                "corrected_rollout": corrected_rollout,
-                "corrected_result": corrected_result,
-            }
-        )
-        logger.event(
-            "teacher_corrected",
-            stage="teacher_correction",
-            example_id=example["id"],
-            domain=example["domain"],
-            corrected_score=corrected_result["score"],
-            corrected_error_code=corrected_result["error_code"],
-            corrected_verification_present=corrected_result["verification_present"],
-        )
-
-        if not corrected_result["verification_present"]:
-            verification_missing_rejections += 1
-        accepted = (
-            original_result["score"] < corrected_result["score"]
-            and corrected_result["format_valid"]
-            and corrected_result["verification_present"]
-        )
-        if accepted:
-            pairs.append(
-                {
-                    "id": example["id"],
-                    "prompt": str(example["problem"]),
-                    "chosen": corrected_rollout,
-                    "rejected": student_rollout,
-                    "metadata": {
-                        "domain": example["domain"],
-                        "original_score": original_result["score"],
-                        "corrected_score": corrected_result["score"],
-                        "feedback": feedback,
-                    },
-                }
-            )
-        else:
-            rejections.append(
-                {
-                    "id": example["id"],
-                    "reason": corrected_result["error_code"] or "corrected_not_better",
-                    "original_result": original_result,
-                    "corrected_result": corrected_result,
-                }
-            )
-
-    metrics = {
-        "run_id": run_id,
-        "examples_total": len(examples),
-        "accepted_pairs": len(pairs),
-        "rejected_examples": len(rejections),
-        "verification_missing_rejections": verification_missing_rejections,
-        "student_model": config["student_model"],
-        "teacher_model": config["teacher_model"],
-        "teacher_mode": config["teacher_mode"],
-    }
-    write_jsonl(output / "examples.jsonl", examples)
-    write_jsonl(output / "rollouts.jsonl", rollouts)
-    write_jsonl(output / "corrections.jsonl", corrections)
-    write_jsonl(output / "pairs.jsonl", pairs)
-    write_jsonl(output / "rejections.jsonl", rejections)
-    (output / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
-    write_html_report(output / "report.html", metrics)
-    logger.event("run_end", stage="complete", **metrics)
-    return metrics
+            train.set_defaults(eval=None)
+        train.add_argument("--output", required=True, type=Path)
+        train.add_argument("--model")
+        train.add_argument("--model-revision")
+        train.add_argument("--learning-rate", type=float, default=1e-6)
+        train.add_argument("--epochs", type=float, default=1.0)
+        train.add_argument("--gradient-accumulation-steps", type=int, default=32)
+        train.add_argument("--deepspeed-config", type=Path)
+        train.add_argument("--resume-from-checkpoint")
+        train.add_argument("--save-steps", type=int, default=100)
+        train.add_argument("--eval-steps", type=int, default=100)
+        train.set_defaults(func=cmd_train, method=method)
+    return parser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    basic = subparsers.add_parser("basic-pipeline")
-    basic.add_argument("--examples", required=True, type=Path)
-    basic.add_argument("--rollouts", required=True, type=Path)
-    basic.add_argument("--corrections", required=True, type=Path)
-    basic.add_argument("--output-dir", required=True, type=Path)
-    basic.add_argument("--run-id", required=True)
-    generate = subparsers.add_parser("generate-pipeline")
-    generate.add_argument("--config", required=True, type=Path)
-    generate.add_argument("--output-dir", type=Path)
-    generate.add_argument("--fake-smoke", action="store_true")
-    args = parser.parse_args()
-    if args.command == "basic-pipeline":
-        result = run_basic_pipeline(
-            examples_path=args.examples,
-            rollouts_path=args.rollouts,
-            corrections_path=args.corrections,
-            output_dir=args.output_dir,
-            run_id=args.run_id,
-        )
-    elif args.command == "generate-pipeline":
-        result = run_generate_pipeline(
-            config_path=args.config,
-            output_dir=args.output_dir,
-            fake_smoke=args.fake_smoke,
-        )
-    else:
-        raise SystemExit(f"unknown command: {args.command}")
-    print(json.dumps(result, sort_keys=True))
+    args = build_parser().parse_args()
+    args.func(args)
 
 
 if __name__ == "__main__":

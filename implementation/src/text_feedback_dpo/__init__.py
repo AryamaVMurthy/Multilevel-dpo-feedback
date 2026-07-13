@@ -1,2 +1,1 @@
-"""Basic textual-feedback DPO pipeline."""
-
+"""SearchQA-only minimal-intervention DPO runtime."""

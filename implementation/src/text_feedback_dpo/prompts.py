@@ -1,119 +1,30 @@
 from __future__ import annotations
 
-import json
+from xml.sax.saxutils import escape
+
+EMPTY_RESPONSE_SENTINEL = "__EMPTY_RESPONSE__"
 
 
-def _domain_verification(domain: str) -> str:
-    if domain == "math":
-        return (
-            "For Math, verify using arithmetic checks, substitution checks, "
-            "constraint checks, sign/range/unit checks, and branch agreement if multiple branches are used. "
-            "Use at most 2 branches."
-        )
-    if domain == "search_qa":
-        return (
-            "For Search-QA, verify the entity, relation, evidence support, and answer type. "
-            "Use controlled search observations only. Use at most 3 branches."
-        )
-    raise ValueError("domain must be math or search_qa")
+def build_student_prompt(example: dict, hints: list[str]) -> str:
+    hint_xml = "".join(f"<hint>{escape(hint)}</hint>" for hint in hints)
+    return f"""<student_task>
+  <instructions>Answer the SearchQA question using the supplied evidence. Think privately. Return only the XML response.</instructions>
+  <format><response><answer>short answer</answer><evidence>supporting evidence summary</evidence></response></format>
+  <question>{escape(example['question'])}</question>
+  <evidence>{escape(example['packed_evidence'])}</evidence>
+  <feedback_history>{hint_xml}</feedback_history>
+</student_task>"""
 
 
-def build_student_prompt(problem: str, domain: str) -> str:
-    return f"""You are solving a problem using a structured reasoning policy.
-
-You must use this format:
-
-<plan>
-High-level meta-plan. Decide the route, number of branches, tools needed, and verification needed before final answer.
-</plan>
-
-<think branch="A">
-Local reasoning for branch A.
-</think>
-
-<tool branch="A">
-Optional tool call and observation.
-</tool>
-
-<reflect>
-Branch comparison:
-Evidence / derivation check:
-Verification:
-Decision:
-</reflect>
-
-<final>
-Final answer only.
-</final>
-
-Rules:
-1. Do not give <final> before <reflect>.
-2. <reflect> must contain verification.
-3. Use tools only when useful.
-4. The final answer must be concise.
-5. {_domain_verification(domain)}
-
-Problem:
-{problem}
-"""
-
-
-def build_teacher_prompt(
-    *,
-    problem: str,
-    gold_answer: str,
-    student_rollout: str,
-    result: dict,
-    domain: str,
-    teacher_mode: str,
-) -> str:
-    if teacher_mode not in {"stronger_model", "same_model_privileged"}:
-        raise ValueError("teacher_mode must be stronger_model or same_model_privileged")
-
-    privileged = ""
-    if teacher_mode == "same_model_privileged":
-        privileged = (
-            "\nYou are given privileged training-only information. "
-            "This information is never available during student evaluation. "
-            "Use it only to write feedback and a corrected rollout.\n"
-        )
-
-    return f"""You are a teacher correcting a small language model's structured rollout.
-{privileged}
-The student must use:
-<plan>, <think>, <tool>, <reflect>, <final>.
-
-Your job:
-1. Give textual feedback.
-2. Explain what computation should change: planning, thinking, tool use, branching, reflection, verification.
-3. Explain what content should change: wrong route, missing evidence, bad arithmetic, wrong final type.
-4. Produce a corrected rollout in the same format.
-5. Do not add unnecessary branches.
-6. Ensure <reflect> contains real verification.
-7. Ensure <final> contains only the final answer.
-
-Domain:
-{domain}
-
-Problem:
-{problem}
-
-Gold answer:
-{gold_answer}
-
-Student rollout:
-{student_rollout}
-
-Student result:
-{json.dumps(result, sort_keys=True)}
-
-Return exactly:
-
-<feedback>
-...
-</feedback>
-
-<corrected_rollout>
-...
-</corrected_rollout>
-"""
+def build_teacher_prompt(example: dict, failed_response: str, interventions: list[dict]) -> str:
+    prior = "".join(f"<prior><hint>{escape(item['hint'])}</hint><scope>{escape(item['scope'])}</scope></prior>" for item in interventions)
+    failed_response_xml = escape(failed_response) if failed_response else EMPTY_RESPONSE_SENTINEL
+    return f"""<teacher_task>
+  <instructions>Use the gold answer only to localize the earliest responsible error. Return one minimal answer-free intervention. Do not provide a corrected answer or complete solution. If the failed response is empty, use {EMPTY_RESPONSE_SENTINEL} as error_span.</instructions>
+  <format><feedback><error_span>exact text from the failed response, or {EMPTY_RESPONSE_SENTINEL} when empty</error_span><hint>short correction hint</hint><scope>entity|relation|evidence|verification</scope></feedback></format>
+  <question>{escape(example['question'])}</question>
+  <evidence>{escape(example['packed_evidence'])}</evidence>
+  <gold_answer>{escape(example['gold_answer'])}</gold_answer>
+  <failed_response>{failed_response_xml}</failed_response>
+  <previous_interventions>{prior}</previous_interventions>
+</teacher_task>"""
