@@ -1,6 +1,6 @@
 import unittest
 
-from text_feedback_dpo.feedback import FeedbackFormatError, parse_feedback
+from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
 from text_feedback_dpo.prompts import build_teacher_prompt
 
 
@@ -19,15 +19,44 @@ class FeedbackContractTest(unittest.TestCase):
 
     def test_teacher_prompt_is_plain_and_controls_escalation_without_xml(self):
         prompt = build_teacher_prompt(
-            {"question": "Who?", "packed_evidence": "Ada evidence", "gold_answer": "Ada"},
+            {
+                "question": "Who?",
+                "gold_answer": "Ada",
+                "sources": [{"source_id": "S001", "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada evidence"}],
+            },
             "Grace",
             [{"hint": "Look for the writer.", "level": 1}],
+            raw_query="writer",
+            retrieved_sources=[{"source_id": "S001", "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada evidence"}],
+            diagnostics={"responsible_region": "answer", "error_code": "answer_mismatch"},
         )
-        self.assertIn("Escalation level: 2", prompt)
-        self.assertIn('Return exactly one JSON object: {"hint":"..."}', prompt)
+        self.assertIn('"escalation_level": 2', prompt)
+        self.assertIn('Return exactly one strict JSON object with exactly this shape: {"hint":"..."}', prompt)
         self.assertIn("Grace", prompt)
         self.assertNotIn("<feedback>", prompt)
         self.assertNotIn("<teacher_task>", prompt)
+
+    def test_diagnostics_select_the_earliest_failure_region_and_label_support_as_a_proxy(self):
+        base = {
+            "raw_query": "",
+            "ranked_search_results": [],
+            "raw_response": None,
+            "truncation": {"query": False, "response": False},
+            "cited_score": None,
+            "error_code": "query_invalid_format",
+        }
+        self.assertEqual(diagnose_attempt(base)["responsible_region"], "query/retrieval")
+
+        malformed = {**base, "raw_query": "writer", "ranked_search_results": [{"source_id": "S001"}], "error_code": "line_count", "cited_score": {"parse_valid": False}}
+        self.assertEqual(diagnose_attempt(malformed)["responsible_region"], "response grammar/truncation")
+
+        wrong_answer = {**malformed, "raw_response": "Answer: Grace", "error_code": None, "cited_score": {"parse_valid": True, "answer_correct": False, "lexical_cited_answer_support": 1.0}}
+        self.assertEqual(diagnose_attempt(wrong_answer)["responsible_region"], "answer")
+
+        unsupported = {**wrong_answer, "cited_score": {"parse_valid": True, "answer_correct": True, "lexical_cited_answer_support": 0.0, "citation_precision": 0.0}}
+        diagnostic = diagnose_attempt(unsupported)
+        self.assertEqual(diagnostic["responsible_region"], "lexical support proxy/citation selection")
+        self.assertTrue(diagnostic["lexical_support_is_proxy"])
 
 
 if __name__ == "__main__":

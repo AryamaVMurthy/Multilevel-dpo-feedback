@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 
 from text_feedback_dpo.responses import validate_retrieved_sources
@@ -88,20 +89,50 @@ def build_cited_response_prompt(
     return "\n".join(sections)
 
 
-def build_teacher_prompt(example: dict, failed_response: str, interventions: list[dict]) -> str:
-    level = len(interventions) + 1
-    failed = failed_response.strip() or EMPTY_RESPONSE_SENTINEL
-    prior = "\n".join(f"- Level {item['level']}: {item['hint']}" for item in interventions) or "None"
-    return f"""You are a privileged tutor. Localize the earliest reason the student's answer is wrong and give only the smallest useful correction hint.
+def build_teacher_prompt(
+    example: dict,
+    failed_response: str,
+    interventions: list[dict],
+    *,
+    raw_query: str | None = None,
+    retrieved_sources: Sequence[Mapping[str, object]] | None = None,
+    diagnostics: Mapping[str, object] | None = None,
+    repair_region: str | None = None,
+    escalation_level: int | None = None,
+) -> str:
+    """Build the private, answer-free Qwen3 teacher request."""
+    sources = example.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("teacher prompt requires complete example source records")
+    if retrieved_sources is None or not isinstance(retrieved_sources, Sequence) or isinstance(retrieved_sources, (str, bytes)):
+        raise ValueError("teacher prompt requires retrieved source records")
+    if diagnostics is None or not isinstance(diagnostics, Mapping):
+        raise ValueError("teacher prompt requires deterministic diagnostics")
+    if not isinstance(failed_response, str):
+        raise TypeError("failed response must be text")
+    level = len(interventions) + 1 if escalation_level is None else escalation_level
+    if isinstance(level, bool) or not isinstance(level, int) or level <= 0:
+        raise ValueError("escalation level must be a positive integer")
+    prior = [{"level": item.get("level"), "hint": item.get("hint")} for item in interventions]
+    request = {
+        "complete_source_records": sources,
+        "retrieved_records": list(retrieved_sources),
+        "question": example.get("question"),
+        "query": raw_query,
+        "private_gold_answer": example.get("gold_answer"),
+        "failed_response": failed_response.strip() or EMPTY_RESPONSE_SENTINEL,
+        "deterministic_diagnostics": dict(diagnostics),
+        "prior_hints": prior,
+        "escalation_level": level,
+        "repair_region": repair_region or diagnostics.get("responsible_region"),
+    }
+    return """You are a privileged Qwen3 instruct tutor. The fields below are private.
+Localize the earliest responsible region and provide one minimal, answer-free directional hint.
+At level 1 be slight and directional. Only after failed retries may specificity and repair scope increase.
+Never reveal, quote, spell, restate, encode, or imply the private gold answer.
+Never provide a critique, answer, solution, source text, citation choice, or extra field.
+Return exactly one strict JSON object with exactly this shape: {\"hint\":\"...\"}.
+The hint must be non-empty and at most 24 words.
 
-Do not reveal, quote, spell, or restate the gold answer. Do not provide a complete solution or critique. Use at most 24 words. At level 1, give a very slight directional hint. At later levels, increase specificity only enough to repair the remaining error.
-
-Question: {example['question']}
-Evidence: {example['packed_evidence']}
-Gold answer (private): {example['gold_answer']}
-Failed student answer: {failed}
-Previous hints:
-{prior}
-Escalation level: {level}
-
-Return exactly one JSON object: {{"hint":"..."}}"""
+Private request:
+""" + json.dumps(request, ensure_ascii=False, sort_keys=True, indent=2)

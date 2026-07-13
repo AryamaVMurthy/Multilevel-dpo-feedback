@@ -20,6 +20,15 @@ def manifest(**overrides):
         "intervention_policy": {"max_interventions": 4, "max_hint_words": 24},
         "seed": 7,
         "policy_hash": "checkpoint-hash",
+        "dataset_schema": "searchqa.search_results.v1",
+        "source_schema_version": 1,
+        "source_schema_hash": "source-schema-hash",
+        "retrieval_config": {"backend": "fixed_bm25", "top_k": 8, "k1": 1.2, "b": 0.75},
+        "retrieval_hash": "retrieval-hash",
+        "response_schema_version": 1,
+        "evaluator_version": "evaluator-v1",
+        "policy_version": "policy-v1",
+        "sibling_seeds": [101, 102],
     }
     values.update(overrides)
     return build_cache_manifest(**values)
@@ -30,12 +39,12 @@ class OfflineReuseTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             cache = Path(tmp) / "rollouts.jsonl"
             identity = manifest()
-            cache.write_text(json.dumps({"example_id": "1", "cache_hash": identity["cache_hash"], "response": "x"}) + "\n", encoding="utf-8")
+            cache.write_text(json.dumps({"example_id": "1", "row_identity": "row-identity", "cache_hash": identity["cache_hash"], "response": "x"}) + "\n", encoding="utf-8")
             cache.with_suffix(".manifest.json").write_text(json.dumps(identity), encoding="utf-8")
             calls = []
 
             rows = load_or_build_rollouts(
-                examples=[{"id": "1"}],
+                examples=[{"id": "1", "row_identity": "row-identity"}],
                 cache_path=cache,
                 cache_manifest=identity,
                 generate=lambda _example: calls.append(True),
@@ -61,11 +70,11 @@ class OfflineReuseTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             cache = Path(tmp) / "trajectories.jsonl"
             identity = manifest()
-            cache.write_text(json.dumps({"id": "1", "cache_hash": identity["cache_hash"], "resolved": True}) + "\n", encoding="utf-8")
+            cache.write_text(json.dumps({"id": "1", "row_identity": "row-identity", "cache_hash": identity["cache_hash"], "resolved": True}) + "\n", encoding="utf-8")
             cache.with_suffix(".manifest.json").write_text(json.dumps(identity), encoding="utf-8")
             calls = []
             rows = load_or_build_trajectories(
-                examples=[{"id": "1"}],
+                examples=[{"id": "1", "row_identity": "row-identity"}],
                 cache_path=cache,
                 cache_manifest=identity,
                 generate=lambda missing: calls.append(missing),
@@ -86,6 +95,13 @@ class OfflineReuseTest(unittest.TestCase):
             {"intervention_policy": {"max_interventions": 3}},
             {"seed": 8},
             {"policy_hash": "checkpoint-hash-2"},
+            {"dataset_schema": "other.schema"},
+            {"source_schema_version": 2},
+            {"retrieval_hash": "retrieval-hash-2"},
+            {"response_schema_version": 2},
+            {"evaluator_version": "evaluator-v2"},
+            {"policy_version": "policy-v2"},
+            {"sibling_seeds": [103, 104]},
         ]
         for change in changes:
             with self.subTest(change=change):
