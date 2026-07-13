@@ -20,14 +20,17 @@ set -euo pipefail
 : "${STUDENT_REVISION:?STUDENT_REVISION must be supplied with --export}"
 : "${TEACHER_MODEL:?TEACHER_MODEL must be supplied with --export}"
 : "${TEACHER_REVISION:?TEACHER_REVISION must be supplied with --export}"
-: "${TEACHER_FALLBACK_MODEL:?TEACHER_FALLBACK_MODEL must be supplied with --export}"
-: "${TEACHER_FALLBACK_REVISION:?TEACHER_FALLBACK_REVISION must be supplied with --export}"
+: "${DATASET_REVISION:?DATASET_REVISION must be supplied with --export}"
+: "${PROMPT_VERSION:?PROMPT_VERSION must be supplied with --export}"
+: "${SEED:?SEED must be supplied with --export}"
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
+[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || { echo "ERROR: invalid PROJECT_DIR" >&2; exit 2; }
 export PATH="$HOME/.local/bin:$PATH"
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}"
+export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" "$ROUND_DIR" logs
@@ -55,12 +58,13 @@ uv run --frozen python -m text_feedback_dpo.cli collect \
   --data "$DATA" --output "$TRAJECTORIES" \
   --student-model "$STUDENT_MODEL" --student-revision "$STUDENT_REVISION" \
   --teacher-model "$TEACHER_MODEL" --teacher-revision "$TEACHER_REVISION" \
-  --teacher-fallback-model "$TEACHER_FALLBACK_MODEL" --teacher-fallback-revision "$TEACHER_FALLBACK_REVISION" \
+  --dataset-revision "$DATASET_REVISION" --prompt-version "$PROMPT_VERSION" --seed "$SEED" \
   --teacher-quantization 4bit --attention-implementation "$ATTENTION_IMPLEMENTATION" \
   --student-device cuda:1 --teacher-device cuda:0 \
   --trajectory-cache "$ROUND_DIR/trajectory-cache.jsonl" \
   --policy-hash "${POLICY_HASH:?POLICY_HASH must be supplied with --export}" \
-  --max-interventions 4
+  --max-interventions 4 --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" \
+  --answer-max-new-tokens 32 --scratchpad-max-new-tokens 256 --teacher-thinking
 
 uv run --frozen python -m text_feedback_dpo.cli build-preferences \
   --trajectories "$TRAJECTORIES" --output "$PREFERENCES"
@@ -85,7 +89,7 @@ uv run --frozen python -m text_feedback_dpo.cli generate \
   --data "$EVAL_DATA" --output "$PREDICTIONS" \
   --model "$DPO_OUT/final" \
   --attention-implementation "$ATTENTION_IMPLEMENTATION" --batch-size "$GENERATION_BATCH_SIZE" \
-  --max-new-tokens 512 --temperature 0.0 --top-p 1.0 \
+  --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" --max-new-tokens 32 --temperature 0.0 --top-p 1.0 \
   --policy-hash "${POLICY_HASH}:dpo-final"
 
 uv run --frozen python -m text_feedback_dpo.cli evaluate \

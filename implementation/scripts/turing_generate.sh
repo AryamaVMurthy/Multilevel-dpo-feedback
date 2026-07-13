@@ -18,14 +18,17 @@ MODEL_REVISION="${MODEL_REVISION:-}"
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
+[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || { echo "ERROR: PROJECT_DIR must be the implementation root containing pyproject.toml and src/text_feedback_dpo" >&2; exit 2; }
 export PATH="$HOME/.local/bin:$PATH"
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}"
+export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs
 ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}"
 GENERATION_BATCH_SIZE="${GENERATION_BATCH_SIZE:-16}"
+STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"
 echo "<runtime component=generation attention_implementation=\"$ATTENTION_IMPLEMENTATION\" fallback_reason=\"${ATTENTION_FALLBACK_REASON:-none}\"/>"
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
@@ -43,5 +46,6 @@ if [[ -n "$MODEL_REVISION" ]]; then
 fi
 uv run --frozen python -m text_feedback_dpo.cli generate "${GEN_ARGS[@]}" \
   --attention-implementation "$ATTENTION_IMPLEMENTATION" --batch-size "$GENERATION_BATCH_SIZE" \
-  --max-new-tokens 512 --temperature 0.0 --top-p 1.0 \
+  --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens 256 \
+  --max-new-tokens 32 --temperature 0.0 --top-p 1.0 \
   --policy-hash "${POLICY_HASH:?POLICY_HASH must be supplied with --export}"

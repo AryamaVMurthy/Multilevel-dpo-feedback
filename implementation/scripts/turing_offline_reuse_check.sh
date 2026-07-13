@@ -16,10 +16,12 @@ set -euo pipefail
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
 : "${POLICY_HASH:?POLICY_HASH must be supplied with --export}"
 : "${STUDENT_MODEL:?STUDENT_MODEL must be supplied with --export}"
+: "${STUDENT_REVISION:?STUDENT_REVISION must be supplied with --export}"
 : "${TEACHER_MODEL:?TEACHER_MODEL must be supplied with --export}"
 : "${TEACHER_REVISION:?TEACHER_REVISION must be supplied with --export}"
-: "${TEACHER_FALLBACK_MODEL:?TEACHER_FALLBACK_MODEL must be supplied with --export}"
-: "${TEACHER_FALLBACK_REVISION:?TEACHER_FALLBACK_REVISION must be supplied with --export}"
+: "${DATASET_REVISION:?DATASET_REVISION must be supplied with --export}"
+: "${PROMPT_VERSION:?PROMPT_VERSION must be supplied with --export}"
+: "${SEED:?SEED must be supplied with --export}"
 
 cd "$PROJECT_DIR"
 export PATH="$HOME/.local/bin:$PATH"
@@ -35,15 +37,15 @@ rm -f "$OUTPUT"
 uv run --frozen python -m text_feedback_dpo.cli collect \
   --data "$DATA" --output "$OUTPUT" \
   --student-model "$STUDENT_MODEL" \
+  --student-revision "$STUDENT_REVISION" \
   --teacher-model "$TEACHER_MODEL" \
-  --teacher-fallback-model "$TEACHER_FALLBACK_MODEL" \
   --teacher-revision "$TEACHER_REVISION" \
-  --teacher-fallback-revision "$TEACHER_FALLBACK_REVISION" \
+  --dataset-revision "$DATASET_REVISION" --prompt-version "$PROMPT_VERSION" --seed "$SEED" \
   --teacher-quantization 4bit \
   --attention-implementation "${ATTENTION_IMPLEMENTATION:-sdpa}" \
   --student-device cuda:1 --teacher-device cuda:0 \
   --trajectory-cache "$CACHE" --policy-hash "$POLICY_HASH" \
-  --max-interventions 4 --generation-batch-size 1
+  --max-interventions 4 --generation-batch-size 1 --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" --teacher-thinking
 
 cmp -s "$CACHE" "$OUTPUT" || {
   echo "ERROR: offline trajectory replay differs from the cache" >&2

@@ -24,9 +24,11 @@ set -euo pipefail
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
+[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || { echo "ERROR: invalid PROJECT_DIR" >&2; exit 2; }
 export PATH="$HOME/.local/bin:$PATH"
 export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}"
+export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" "$OUTPUT_ROOT" logs
@@ -77,7 +79,7 @@ for method in sft grpo dapo; do
     uv run --frozen python -m text_feedback_dpo.cli generate \
       --data "$DATA" --output "$OUTPUT_ROOT/$method-$split-predictions.jsonl" \
       --model "$MODEL" --attention-implementation "$ATTENTION_IMPLEMENTATION" \
-      --batch-size "$GENERATION_BATCH_SIZE" --max-new-tokens 512 --temperature 0.0 --top-p 1.0 \
+      --batch-size "$GENERATION_BATCH_SIZE" --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" --max-new-tokens 32 --temperature 0.0 --top-p 1.0 \
       --policy-hash "${POLICY_HASH:?POLICY_HASH must be supplied with --export}:$method:$split"
     uv run --frozen python -m text_feedback_dpo.cli evaluate \
       --data "$DATA" --predictions "$OUTPUT_ROOT/$method-$split-predictions.jsonl" \

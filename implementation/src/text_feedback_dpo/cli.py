@@ -46,6 +46,45 @@ def cmd_prepare(args: argparse.Namespace) -> None:
     write_json(args.output.parent / "manifest.json", manifest)
 
 
+def cmd_probe_model(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.runtime import (
+        extract_qwen_final_content,
+        generate_batch,
+        generate_student_batch,
+        load_student,
+        load_teacher,
+        load_tokenizer,
+        render_teacher_prompts,
+    )
+
+    tokenizer = load_tokenizer(args.model, revision=args.model_revision)
+    if args.role == "student":
+        model = load_student(args.model, revision=args.model_revision, attention_implementation=args.attention_implementation)
+        prompt = "Evidence:\nAda Lovelace wrote the first algorithm.\n\nQuestion: Who wrote the first algorithm?\n\nAnswer:"
+        result = generate_student_batch(
+            model, tokenizer, [prompt], mode="direct", scratchpad_max_new_tokens=256,
+            answer_max_new_tokens=32, temperature=0.0, top_p=1.0,
+        )[0]
+        write_json(args.output, {"role": "student", "model": args.model, "response": result.response, "truncated": result.truncated})
+        return
+    from text_feedback_dpo.feedback import parse_feedback
+    from text_feedback_dpo.prompts import build_teacher_prompt
+
+    model = load_teacher(
+        args.model, revision=args.model_revision, quantization=args.teacher_quantization,
+        attention_implementation=args.attention_implementation,
+    )
+    prompt = build_teacher_prompt(
+        {"question": "Who wrote the first algorithm?", "packed_evidence": "Ada Lovelace wrote the first algorithm.", "gold_answer": "Ada Lovelace"},
+        "Grace Hopper",
+        [],
+    )
+    rendered = render_teacher_prompts(tokenizer, [prompt], enable_thinking=True)
+    final = extract_qwen_final_content(generate_batch(model, tokenizer, rendered, max_new_tokens=96, temperature=0.0, top_p=1.0)[0])
+    feedback = parse_feedback(final, gold_answer="Ada Lovelace")
+    write_json(args.output, {"role": "teacher", "model": args.model, "quantization": args.teacher_quantization, "hint": feedback.hint, "native_thinking": True})
+
+
 def cmd_build_sft(args: argparse.Namespace) -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -290,6 +329,14 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--max-evidence-tokens", required=True, type=int)
     prepare.add_argument("--limit", type=int)
     prepare.set_defaults(func=cmd_prepare)
+    probe = sub.add_parser("probe-model")
+    probe.add_argument("--role", choices=("student", "teacher"), required=True)
+    probe.add_argument("--model", required=True)
+    probe.add_argument("--model-revision", required=True)
+    probe.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
+    probe.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
+    probe.add_argument("--output", required=True, type=Path)
+    probe.set_defaults(func=cmd_probe_model)
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--data", required=True, type=Path)
     evaluate.add_argument("--predictions", required=True, type=Path)
