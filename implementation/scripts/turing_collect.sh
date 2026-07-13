@@ -78,6 +78,7 @@ PY
 : "${MAX_INTERVENTIONS:?MAX_INTERVENTIONS must be supplied}"
 : "${SIBLING_COUNT:?SIBLING_COUNT must be supplied}"
 : "${SIBLING_SEEDS:?SIBLING_SEEDS must be a space-separated deterministic list}"
+[[ "$POLICY_HASH" =~ ^[0-9a-f]{64}$ ]] || fail "POLICY_HASH must be a lowercase SHA-256; got '$POLICY_HASH'" policy_hash_invalid
 
 : "${SLURM_NNODES:?SLURM_NNODES is required inside the allocation}"
 if [[ "$SLURM_NNODES" != "1" ]]; then fail "collection requires one node; got $SLURM_NNODES" "multi_node_collection_forbidden"; fi

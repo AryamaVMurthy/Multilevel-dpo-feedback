@@ -8,6 +8,7 @@ from unittest.mock import patch
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.cli import build_parser
 from text_feedback_dpo.collection import collect_dataset_batchwise
+from text_feedback_dpo.offline import student_policy_identity
 from text_feedback_dpo.preferences import build_query_preference_rows, build_response_preference_rows
 from text_feedback_dpo.runtime import GeneratedText
 from text_feedback_dpo.trajectories import TrajectoryError, validate_active_artifact
@@ -287,12 +288,17 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             second = copy.deepcopy(example())
             second["id"] = "q2"
             data.write_text(json.dumps(example()) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+            policy_hash = student_policy_identity(
+                student_model="Qwen/Qwen3-4B-Base",
+                student_revision="student-rev",
+                policy_version="sft-v1",
+            )["sha256"]
             args = build_parser().parse_args([
                 "collect", "--data", str(data), "--output", str(output),
                 "--student-model", "Qwen/Qwen3-4B-Base", "--student-revision", "student-rev",
                 "--teacher-model", "Qwen/Qwen3-32B", "--teacher-revision", "teacher-rev",
                 "--dataset-revision", "data-rev", "--prompt-version", "fixed-retrieval-cited-v1",
-                "--policy-version", "sft-v1", "--policy-hash", "a" * 64, "--seed", "7",
+                "--policy-version", "sft-v1", "--policy-hash", policy_hash, "--seed", "7",
                 "--sibling-count", "2", "--sibling-seeds", "101", "102",
                 "--teacher-quantization", "4bit", "--attention-implementation", "sdpa",
                 "--student-device", "cuda:1", "--teacher-device", "cuda:0",

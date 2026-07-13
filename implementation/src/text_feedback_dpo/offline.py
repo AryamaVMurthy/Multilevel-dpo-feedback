@@ -12,6 +12,19 @@ def _require_manifest_value(key: str, value: object) -> None:
         raise ValueError(f"cache manifest field must be explicit and non-empty: {key}")
 
 
+def student_policy_identity(*, student_model: str, student_revision: str, policy_version: str) -> dict:
+    fields = {
+        "student_model": student_model,
+        "student_revision": student_revision,
+        "policy_version": policy_version,
+    }
+    for field, value in fields.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"student policy identity requires pinned non-empty {field}")
+    identity = {"identity": "student-policy-v1", **fields}
+    return {**identity, "sha256": _identity_hash(identity)}
+
+
 def build_cache_manifest(
     *,
     student_model: str,
@@ -62,6 +75,11 @@ def build_cache_manifest(
                          ("policy_version", policy_version)):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"cache manifest requires pinned non-empty {field}")
+    policy_identity = student_policy_identity(
+        student_model=student_model,
+        student_revision=student_revision,
+        policy_version=policy_version,
+    )
     hashes = {
         "dataset_hash": dataset_hash, "source_schema_hash": source_schema_hash,
         "retrieval_hash": retrieval_hash, "prompt_hash": prompt_hash,
@@ -71,6 +89,8 @@ def build_cache_manifest(
     for field, value in hashes.items():
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ValueError(f"cache manifest {field} must be a lowercase SHA-256")
+    if policy_hash != policy_identity["sha256"]:
+        raise ValueError("cache manifest policy_hash identity mismatch")
     expected_retrieval = {
         "identity": "fixed_bm25", "schema_version": 1,
         "requested_top_k": FIXED_TOP_K, "k1": FIXED_K1, "b": FIXED_B,
@@ -95,8 +115,8 @@ def build_cache_manifest(
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("cache manifest seed must be a nonnegative integer")
     manifest = {
-        "manifest_version": 4,
-        "schema_version": 4,
+        "manifest_version": 5,
+        "schema_version": 5,
         "student_model": student_model,
         "student_revision": student_revision,
         "teacher_model": teacher_model,
@@ -119,6 +139,7 @@ def build_cache_manifest(
         "evaluator_version": evaluator_version,
         "evaluator_hash": evaluator_hash,
         "policy_version": policy_version,
+        "policy_identity": policy_identity,
         "student_thinking_mode": student_thinking_mode,
         "teacher_thinking": teacher_thinking,
         "decoding": decoding,

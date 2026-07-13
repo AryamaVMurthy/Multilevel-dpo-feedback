@@ -5,7 +5,12 @@ from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from text_feedback_dpo.offline import build_cache_manifest, load_or_build_rollouts, load_or_build_trajectories
+from text_feedback_dpo.offline import (
+    build_cache_manifest,
+    load_or_build_rollouts,
+    load_or_build_trajectories,
+    student_policy_identity,
+)
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.runtime import GeneratedText
 from text_feedback_dpo.feedback import diagnose_attempt
@@ -37,7 +42,11 @@ def manifest(**overrides):
         "decoding": {"answer_max_new_tokens": 32, "temperature": 0.7, "top_p": 0.9},
         "intervention_policy": {"max_interventions": 4, "max_hint_words": 24},
         "seed": 7,
-        "policy_hash": "b" * 64,
+        "policy_hash": student_policy_identity(
+            student_model="Qwen/Qwen3-4B-Base",
+            student_revision="student-rev",
+            policy_version="policy-v1",
+        )["sha256"],
         "dataset_schema": "searchqa.search_results.v1",
         "source_schema_version": 1,
         "source_schema_hash": _hash({"identity": "searchqa.search_results.v1", "version": 1}),
@@ -52,6 +61,12 @@ def manifest(**overrides):
         "sibling_count": 2,
     }
     values.update(overrides)
+    if "policy_hash" not in overrides:
+        values["policy_hash"] = student_policy_identity(
+            student_model=values["student_model"],
+            student_revision=values["student_revision"],
+            policy_version=values["policy_version"],
+        )["sha256"]
     return build_cache_manifest(**values)
 
 
@@ -87,6 +102,32 @@ def active_trajectory():
         "response_prompt_hash": artifact["response_prompt_hash"], "evaluator_version": artifact["evaluator_version"],
     }
 class OfflineReuseTest(unittest.TestCase):
+    def test_student_policy_identity_is_canonical_and_weight_bound(self):
+        first = student_policy_identity(
+            student_model="Qwen/Qwen3-4B-Base",
+            student_revision="student-rev",
+            policy_version="raw-base-v1",
+        )
+        repeated = student_policy_identity(
+            student_model="Qwen/Qwen3-4B-Base",
+            student_revision="student-rev",
+            policy_version="raw-base-v1",
+        )
+        changed = student_policy_identity(
+            student_model="Qwen/Qwen3-4B-Base",
+            student_revision="sft-checkpoint-sha256",
+            policy_version="sft-v1",
+        )
+
+        self.assertEqual(first, repeated)
+        self.assertRegex(first["sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotEqual(first["sha256"], changed["sha256"])
+        self.assertEqual(first["identity"], "student-policy-v1")
+
+    def test_cache_manifest_rejects_policy_hash_not_bound_to_student_weights(self):
+        with self.assertRaisesRegex(ValueError, "policy_hash identity mismatch"):
+            manifest(policy_hash="b" * 64)
+
     def test_reuses_matching_cached_rollouts_without_generation(self):
         with TemporaryDirectory() as tmp:
             cache = Path(tmp) / "rollouts.jsonl"
@@ -271,7 +312,6 @@ class OfflineReuseTest(unittest.TestCase):
             {"decoding": {"answer_max_new_tokens": 31}},
             {"intervention_policy": {"max_interventions": 3}},
             {"seed": 8},
-            {"policy_hash": "d" * 64},
             {"policy_version": "policy-v2"},
             {"sibling_seeds": [103, 104]},
         ]
