@@ -24,7 +24,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertEqual(config["training"]["teacher_fallback_model"], "Qwen/Qwen3-14B")
         self.assertEqual(config["training"]["teacher_quantization"], "4bit")
         self.assertTrue(config["training"]["full_finetuning"])
-        self.assertEqual(config["teacher_generation"]["max_new_tokens"], 96)
+        self.assertEqual(config["teacher_generation"]["max_new_tokens"], 512)
 
     def test_turing_scripts_fail_fast_and_use_no_hidden_fallback(self):
         for path in Path("scripts").glob("*.sh"):
@@ -97,7 +97,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("MODEL_ROLE", text)
         self.assertIn("probe-model", text)
         self.assertIn("--teacher-quantization 4bit", text)
-        self.assertIn("--teacher-max-new-tokens 96", text)
+        self.assertIn("--teacher-max-new-tokens 512", text)
 
     def test_training_uses_configurable_multi_gpu_with_fixed_effective_batch(self):
         text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")

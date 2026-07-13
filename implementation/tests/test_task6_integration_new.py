@@ -1,6 +1,8 @@
 import copy
+import io
 import json
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -280,6 +282,9 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             def apply_chat_template(self, _messages, **_kwargs):
                 return "teacher prompt"
 
+            def encode(self, text, **_kwargs):
+                return list(range(len(text.split())))
+
         with TemporaryDirectory() as directory:
             root = Path(directory)
             data = root / "data.jsonl"
@@ -325,7 +330,9 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                     return ["probe" for _ in prompts]
                 return ['{"hint":"Focus on the associated person."}' for _ in prompts]
 
+            stderr = io.StringIO()
             with (
+                redirect_stderr(stderr),
                 patch("text_feedback_dpo.runtime.load_tokenizer", return_value=Tokenizer()),
                 patch("text_feedback_dpo.runtime.load_student", return_value=object()),
                 patch("text_feedback_dpo.runtime.load_teacher", return_value=object()),
@@ -334,6 +341,9 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 patch("text_feedback_dpo.runtime.set_generation_seed", side_effect=set_seed),
             ):
                 args.func(args)
+
+            self.assertIn('"event": "teacher_prompt_budget"', stderr.getvalue())
+            self.assertIn('"max_total_tokens": 4096', stderr.getvalue())
 
             output_rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["id"] for row in output_rows], ["q1", "q2"])

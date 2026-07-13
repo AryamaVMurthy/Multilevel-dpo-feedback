@@ -113,7 +113,7 @@ def collect_dataset_batchwise(
     student_generate_batch: Callable[..., list[object]],
     teacher_generate_batch: Callable[..., list[str]],
     max_interventions: int,
-    teacher_max_new_tokens: int = 96,
+    teacher_max_new_tokens: int = 512,
     sibling_generate_batch: Callable[..., list[object]] | None = None,
     sibling_seeds: Sequence[int] = (),
     student_seed: int,

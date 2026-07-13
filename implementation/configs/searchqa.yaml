@@ -58,6 +58,6 @@ generation:
 
 teacher_generation:
   enable_thinking: true
-  max_new_tokens: 96
+  max_new_tokens: 512
   temperature: 0.0
   top_p: 1.0

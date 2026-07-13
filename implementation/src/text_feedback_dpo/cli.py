@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
@@ -544,6 +545,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
         raise ValueError("sibling_seeds must be unique nonnegative integers")
     if args.student_batch_size <= 0 or args.teacher_batch_size <= 0:
         raise ValueError("student_batch_size and teacher_batch_size must be positive")
+    if args.teacher_max_new_tokens <= 0 or args.teacher_max_new_tokens >= 4096:
+        raise ValueError("teacher_max_new_tokens must be between 1 and 4095")
     teacher_identity = validate_teacher_identity(
         args.teacher_model,
         revision=args.teacher_revision,
@@ -649,6 +652,25 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
         def teacher_batch(prompts, **kwargs):
             rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
+            prompt_token_counts = [
+                len(teacher_tokenizer.encode(prompt, add_special_tokens=False)) for prompt in rendered
+            ]
+            max_input_tokens = 4096 - kwargs["max_new_tokens"]
+            print(json.dumps({
+                "event": "teacher_prompt_budget",
+                "prompt_count": len(rendered),
+                "prompt_token_counts": prompt_token_counts,
+                "max_prompt_tokens": max(prompt_token_counts),
+                "max_new_tokens": kwargs["max_new_tokens"],
+                "max_input_tokens": max_input_tokens,
+                "max_total_tokens": 4096,
+                "budget_ok": max(prompt_token_counts) <= max_input_tokens,
+            }, sort_keys=True), file=sys.stderr, flush=True)
+            if max(prompt_token_counts) > max_input_tokens:
+                raise ValueError(
+                    f"teacher prompt budget exceeded: max_prompt_tokens={max(prompt_token_counts)} "
+                    f"max_input_tokens={max_input_tokens} max_total_tokens=4096"
+                )
             raw = batched_generate(
                 teacher, teacher_tokenizer, rendered,
                 batch_size=args.teacher_batch_size,
@@ -812,7 +834,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--model-revision", required=True)
     probe.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
     probe.add_argument("--teacher-fallback-reason")
-    probe.add_argument("--teacher-max-new-tokens", type=int, default=96)
+    probe.add_argument("--teacher-max-new-tokens", type=int, default=512)
     probe.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
     probe.add_argument("--output", required=True, type=Path)
     probe.set_defaults(func=cmd_probe_model)
@@ -941,7 +963,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--response-max-new-tokens", type=int, default=256)
     collect.add_argument("--student-temperature", type=float, default=0.7)
     collect.add_argument("--student-top-p", type=float, default=0.9)
-    collect.add_argument("--teacher-max-new-tokens", type=int, default=96)
+    collect.add_argument("--teacher-max-new-tokens", type=int, default=512)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)
