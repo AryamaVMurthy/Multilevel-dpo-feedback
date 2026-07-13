@@ -1036,6 +1036,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 "max_input_tokens": max_input_tokens,
                 "max_total_tokens": 4096,
                 "forbidden_sequence_count": len(forbidden_token_sequences),
+                "forbidden_sequence_scope": "explicit_recovery_only",
                 "budget_ok": max(prompt_token_counts) <= max_input_tokens,
             }, sort_keys=True), file=sys.stderr, flush=True)
             if max(prompt_token_counts) > max_input_tokens:
@@ -1167,7 +1168,6 @@ entity, source wording, explanation, or any other field.
                         batch_size=args.teacher_batch_size,
                         max_new_tokens=max_new_tokens,
                         temperature=kwargs["temperature"], top_p=kwargs["top_p"],
-                        forbidden_token_sequences=forbidden_token_sequences,
                     ),
                     token_count=lambda text: len(
                         teacher_tokenizer.encode(text, add_special_tokens=False)
