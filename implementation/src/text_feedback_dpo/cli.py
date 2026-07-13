@@ -142,7 +142,7 @@ def cmd_build_preferences(args: argparse.Namespace) -> None:
 
 def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.collection import collect_dataset_batchwise
-    from text_feedback_dpo.offline import load_or_build_trajectories
+    from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.runtime import (
         extract_qwen_final_content,
         generate_batch,
@@ -154,33 +154,14 @@ def cmd_collect(args: argparse.Namespace) -> None:
     )
 
     examples = read_jsonl(args.data)
-    teacher_reason = "trajectory_cache_reused"
+    teacher_reason = "trajectory_cache_reused_or_primary_teacher_loaded"
     def generate_trajectories(pending):
-        nonlocal teacher_reason
         student_tokenizer = load_tokenizer(args.student_model, revision=args.student_revision)
         student = load_student(args.student_model, revision=args.student_revision, attention_implementation=args.attention_implementation, device=args.student_device)
-        teacher = None
-        try:
-            teacher_tokenizer = load_tokenizer(args.teacher_model, revision=args.teacher_revision)
-            teacher = load_teacher(args.teacher_model, revision=args.teacher_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
-            probe = render_teacher_prompts(teacher_tokenizer, ['Return exactly: {"hint":"Recheck."}'], enable_thinking=args.teacher_thinking)
-            generate_batch(teacher, teacher_tokenizer, probe, max_new_tokens=1, temperature=0.0, top_p=1.0)
-            teacher_reason = "primary_teacher_loaded"
-        except RuntimeError as exc:
-            if not args.teacher_fallback_model:
-                raise RuntimeError(f"teacher load failed and no explicit fallback was supplied: {exc}") from exc
-            if not args.teacher_fallback_revision:
-                raise ValueError("teacher_fallback_revision is required when teacher fallback is configured")
-            del teacher
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
-            teacher_tokenizer = load_tokenizer(args.teacher_fallback_model, revision=args.teacher_fallback_revision)
-            teacher = load_teacher(args.teacher_fallback_model, revision=args.teacher_fallback_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
-            teacher_reason = f"fallback_reason=primary_teacher_load_failed:{type(exc).__name__}"
+        teacher_tokenizer = load_tokenizer(args.teacher_model, revision=args.teacher_revision)
+        teacher = load_teacher(args.teacher_model, revision=args.teacher_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
+        probe = render_teacher_prompts(teacher_tokenizer, ['Return exactly: {"hint":"Recheck."}'], enable_thinking=args.teacher_thinking)
+        generate_batch(teacher, teacher_tokenizer, probe, max_new_tokens=1, temperature=0.0, top_p=1.0)
 
         if args.generation_batch_size <= 0:
             raise ValueError("generation_batch_size must be positive")
@@ -217,7 +198,30 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
         return collect_dataset_batchwise(examples=pending, student_generate_batch=student_batch, teacher_generate_batch=teacher_batch, max_interventions=args.max_interventions)
 
-    rows = load_or_build_trajectories(examples=examples, cache_path=args.trajectory_cache, policy_hash=args.policy_hash, generate=generate_trajectories)
+    cache_manifest = build_cache_manifest(
+        student_model=args.student_model,
+        student_revision=args.student_revision,
+        teacher_model=args.teacher_model,
+        teacher_revision=args.teacher_revision,
+        dataset_revision=args.dataset_revision,
+        prompt_version=args.prompt_version,
+        student_thinking_mode=args.student_thinking_mode,
+        teacher_thinking=args.teacher_thinking,
+        decoding={
+            "max_length": 4096,
+            "answer_max_new_tokens": args.answer_max_new_tokens,
+            "scratchpad_max_new_tokens": args.scratchpad_max_new_tokens,
+            "student_temperature": 0.7,
+            "student_top_p": 0.9,
+            "teacher_max_new_tokens": args.teacher_max_new_tokens,
+            "teacher_temperature": 0.0,
+            "teacher_top_p": 1.0,
+        },
+        intervention_policy={"max_interventions": args.max_interventions, "max_hint_words": 24},
+        seed=args.seed,
+        policy_hash=args.policy_hash,
+    )
+    rows = load_or_build_trajectories(examples=examples, cache_path=args.trajectory_cache, cache_manifest=cache_manifest, generate=generate_trajectories)
     write_jsonl(rows, args.output)
     manifest = {"student_model": args.student_model, "teacher_model": args.teacher_model, "teacher_reason": teacher_reason, "student_thinking_mode": args.student_thinking_mode, "teacher_thinking": args.teacher_thinking, "max_length": 4096, "max_interventions": args.max_interventions, "required_files": [args.output.name]}
     write_json(args.output.with_suffix(".manifest.json"), manifest)
@@ -296,10 +300,11 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--output", required=True, type=Path)
     collect.add_argument("--student-model", required=True)
     collect.add_argument("--teacher-model", required=True)
-    collect.add_argument("--teacher-fallback-model")
-    collect.add_argument("--student-revision")
+    collect.add_argument("--student-revision", required=True)
     collect.add_argument("--teacher-revision", required=True)
-    collect.add_argument("--teacher-fallback-revision")
+    collect.add_argument("--dataset-revision", required=True)
+    collect.add_argument("--prompt-version", required=True)
+    collect.add_argument("--seed", required=True, type=int)
     collect.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
     collect.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
     collect.add_argument("--student-device", required=True)

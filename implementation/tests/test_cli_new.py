@@ -21,13 +21,16 @@ class CLITest(unittest.TestCase):
         self.assertTrue(collected.teacher_thinking)
         self.assertEqual(collected.answer_max_new_tokens, 32)
         self.assertEqual(collected.teacher_max_new_tokens, 96)
+        self.assertEqual(collected.dataset_revision, "data-rev")
+        self.assertEqual(collected.prompt_version, "plain-v2")
+        self.assertEqual(collected.seed, 7)
 
     @staticmethod
     def _required_args(command):
         if command == "prepare-searchqa":
             return ["--source", "source", "--split", "train", "--tokenizer-model", "model", "--tokenizer-revision", "tok-rev", "--revision", "data-rev", "--output", "x.jsonl", "--max-evidence-tokens", "100"]
         if command == "collect":
-            return ["--data", "x.jsonl", "--output", "y.jsonl", "--student-model", "student", "--teacher-model", "teacher", "--student-revision", "student-rev", "--teacher-revision", "teacher-rev", "--teacher-fallback-revision", "fallback-rev", "--teacher-quantization", "4bit", "--attention-implementation", "sdpa", "--student-device", "cuda:1", "--teacher-device", "cuda:0", "--trajectory-cache", "cache.jsonl", "--policy-hash", "p1"]
+            return ["--data", "x.jsonl", "--output", "y.jsonl", "--student-model", "student", "--teacher-model", "teacher", "--student-revision", "student-rev", "--teacher-revision", "teacher-rev", "--dataset-revision", "data-rev", "--prompt-version", "plain-v2", "--seed", "7", "--teacher-quantization", "4bit", "--attention-implementation", "sdpa", "--student-device", "cuda:1", "--teacher-device", "cuda:0", "--trajectory-cache", "cache.jsonl", "--policy-hash", "p1"]
         if command == "build-preferences":
             return ["--trajectories", "x.jsonl", "--output", "y.jsonl"]
         if command == "build-sft-data":

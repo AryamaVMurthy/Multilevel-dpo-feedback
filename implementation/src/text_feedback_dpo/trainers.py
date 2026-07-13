@@ -29,8 +29,8 @@ def _common_args(config: dict, output_dir: Path) -> dict:
         "logging_steps": 10,
         "save_strategy": "steps",
         "save_steps": int(config.get("save_steps", 100)),
-        "save_total_limit": 1,
-        "save_only_model": True,
+        "save_total_limit": 3,
+        "save_only_model": False,
         "eval_strategy": "steps",
         "eval_steps": int(config.get("eval_steps", 100)),
         "deepspeed": str(config["deepspeed_config"]) if config.get("deepspeed_config") else None,
@@ -68,6 +68,47 @@ def _grpo_args(config: dict, output_dir: Path) -> dict:
     return common
 
 
+def _sft_args(config: dict, output_dir: Path) -> dict:
+    return {
+        **_common_args(config, output_dir),
+        "model_init_kwargs": _model_init_kwargs(config),
+        "max_length": 4096,
+        "completion_only_loss": True,
+    }
+
+
+def _dpo_args(config: dict, output_dir: Path) -> dict:
+    return {
+        **_common_args(config, output_dir),
+        "model_init_kwargs": _model_init_kwargs(config),
+        "max_length": 4096,
+        "loss_type": ["sigmoid"],
+        "precompute_ref_log_probs": True,
+        "beta": float(config.get("beta", 0.1)),
+    }
+
+
+def _rl_args(config: dict, output_dir: Path, *, method: str) -> dict:
+    if method not in {"grpo", "dapo"}:
+        raise ValueError("RL method must be grpo or dapo")
+    args = {
+        **_grpo_args(config, output_dir),
+        "model_init_kwargs": _model_init_kwargs(config),
+        "max_completion_length": 32,
+        "loss_type": method,
+    }
+    if method == "dapo":
+        args.update(epsilon_high=0.28, mask_truncated_completions=True)
+    return args
+
+
+def searchqa_rl_reward(completion: str, gold_answer: str) -> float:
+    from text_feedback_dpo.scoring import score_searchqa
+
+    score = score_searchqa(completion, gold_answer, "")
+    return 0.9 * float(score["exact_match"]) + 0.1 * float(score["f1"])
+
+
 def run_sft(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Path, config: dict) -> None:
     from trl import SFTConfig, SFTTrainer
 
@@ -75,7 +116,7 @@ def run_sft(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
     tokenizer = _tokenizer(config, model_id)
     train_dataset = _load_dataset(train_path)
     eval_dataset = _load_dataset(eval_path)
-    args = SFTConfig(**_common_args(config, output_dir), model_init_kwargs=_model_init_kwargs(config), max_length=4096, dataset_text_field="text")
+    args = SFTConfig(**_sft_args(config, output_dir))
     trainer = SFTTrainer(model=model_id, processing_class=tokenizer, peft_config=None, args=args, train_dataset=train_dataset, eval_dataset=eval_dataset)
     trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     if os.environ.get("TFDPO_CLEANUP_TRAINING_INPUTS") == "1":
@@ -91,7 +132,7 @@ def run_dpo(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
     tokenizer = _tokenizer(config, model_id)
     train_dataset = _load_dataset(train_path)
     eval_dataset = _load_dataset(eval_path)
-    args = DPOConfig(**_common_args(config, output_dir), model_init_kwargs=_model_init_kwargs(config), max_length=4096, loss_type=["sigmoid_norm"], precompute_ref_log_probs=True, beta=float(config.get("beta", 0.1)))
+    args = DPOConfig(**_dpo_args(config, output_dir))
     trainer = DPOTrainer(model=model_id, processing_class=tokenizer, peft_config=None, args=args, train_dataset=train_dataset, eval_dataset=eval_dataset)
     trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     _save_final(trainer, output_dir)
@@ -104,10 +145,9 @@ def run_grpo(*, model_id: str, train_path: Path, output_dir: Path, config: dict)
     dataset = _load_dataset(train_path)
 
     def reward_func(completions, gold_answer, **_kwargs):
-        from text_feedback_dpo.scoring import score_searchqa
-        return [float(score_searchqa(completion, gold, "")["f1"]) for completion, gold in zip(completions, gold_answer, strict=True)]
+        return [searchqa_rl_reward(completion, gold) for completion, gold in zip(completions, gold_answer, strict=True)]
 
-    args = GRPOConfig(**_grpo_args(config, output_dir), model_init_kwargs=_model_init_kwargs(config), max_completion_length=512, loss_type="grpo")
+    args = GRPOConfig(**_rl_args(config, output_dir, method="grpo"))
     trainer = GRPOTrainer(model=model_id, reward_funcs=reward_func, peft_config=None, args=args, train_dataset=dataset, processing_class=_tokenizer(config, model_id))
     trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     _save_final(trainer, output_dir)
@@ -122,17 +162,9 @@ def run_dapo(*, model_id: str, train_path: Path, output_dir: Path, config: dict)
     dataset = _load_dataset(train_path)
 
     def reward_func(completions, gold_answer, **_kwargs):
-        from text_feedback_dpo.scoring import score_searchqa
-        return [float(score_searchqa(completion, gold, "")["f1"]) for completion, gold in zip(completions, gold_answer, strict=True)]
+        return [searchqa_rl_reward(completion, gold) for completion, gold in zip(completions, gold_answer, strict=True)]
 
-    args = GRPOConfig(
-        **_grpo_args(config, output_dir),
-        model_init_kwargs=_model_init_kwargs(config),
-        max_completion_length=512,
-        loss_type="dapo",
-        epsilon_high=0.28,
-        mask_truncated_completions=True,
-    )
+    args = GRPOConfig(**_rl_args(config, output_dir, method="dapo"))
     trainer = GRPOTrainer(model=model_id, reward_funcs=reward_func, peft_config=None, args=args, train_dataset=dataset, processing_class=_tokenizer(config, model_id))
     trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     _save_final(trainer, output_dir)
