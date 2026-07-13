@@ -10,6 +10,18 @@ class CLITest(unittest.TestCase):
             parsed = parser.parse_args([command] + self._required_args(command))
             self.assertEqual(parsed.command, command)
 
+    def test_generation_and_collection_expose_explicit_thinking_controls(self):
+        parser = build_parser()
+        generated = parser.parse_args(["generate"] + self._required_args("generate"))
+        self.assertEqual(generated.student_thinking_mode, "direct")
+        self.assertEqual(generated.scratchpad_max_new_tokens, 256)
+        self.assertEqual(generated.max_new_tokens, 32)
+        collected = parser.parse_args(["collect"] + self._required_args("collect"))
+        self.assertEqual(collected.student_thinking_mode, "direct")
+        self.assertTrue(collected.teacher_thinking)
+        self.assertEqual(collected.answer_max_new_tokens, 32)
+        self.assertEqual(collected.teacher_max_new_tokens, 96)
+
     @staticmethod
     def _required_args(command):
         if command == "prepare-searchqa":

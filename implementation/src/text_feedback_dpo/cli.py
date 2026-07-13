@@ -99,7 +99,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
 def cmd_generate(args: argparse.Namespace) -> None:
     from text_feedback_dpo.prompts import build_student_prompt
-    from text_feedback_dpo.runtime import generate_batch, load_student, load_tokenizer
+    from text_feedback_dpo.runtime import generate_student_batch, load_student, load_tokenizer
 
     if args.batch_size <= 0:
         raise ValueError("batch_size must be positive")
@@ -111,9 +111,16 @@ def cmd_generate(args: argparse.Namespace) -> None:
         for start in range(0, len(rows), args.batch_size):
             batch = rows[start : start + args.batch_size]
             prompts = [row.get("prompt") or build_student_prompt(row, []) for row in batch]
-            responses = generate_batch(model, tokenizer, prompts, max_new_tokens=args.max_new_tokens, temperature=args.temperature, top_p=args.top_p)
-            for row, response in zip(batch, responses, strict=True):
-                handle.write(json.dumps({"id": row["id"], "response": response, "policy_hash": args.policy_hash}, ensure_ascii=False) + "\n")
+            generations = generate_student_batch(
+                model, tokenizer, prompts, mode=args.student_thinking_mode,
+                scratchpad_max_new_tokens=args.scratchpad_max_new_tokens,
+                answer_max_new_tokens=args.max_new_tokens, temperature=args.temperature, top_p=args.top_p,
+            )
+            for row, generation in zip(batch, generations, strict=True):
+                output = {"id": row["id"], "response": generation.response, "thinking_mode": generation.mode, "policy_hash": args.policy_hash}
+                if generation.scratchpad is not None:
+                    output["private_scratchpad"] = generation.scratchpad
+                handle.write(json.dumps(output, ensure_ascii=False) + "\n")
             handle.flush()
 
 
@@ -136,7 +143,15 @@ def cmd_build_preferences(args: argparse.Namespace) -> None:
 def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.collection import collect_dataset_batchwise
     from text_feedback_dpo.offline import load_or_build_trajectories
-    from text_feedback_dpo.runtime import generate_batch, load_student, load_teacher, load_tokenizer
+    from text_feedback_dpo.runtime import (
+        extract_qwen_final_content,
+        generate_batch,
+        generate_student_batch,
+        load_student,
+        load_teacher,
+        load_tokenizer,
+        render_teacher_prompts,
+    )
 
     examples = read_jsonl(args.data)
     teacher_reason = "trajectory_cache_reused"
@@ -148,7 +163,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
         try:
             teacher_tokenizer = load_tokenizer(args.teacher_model, revision=args.teacher_revision)
             teacher = load_teacher(args.teacher_model, revision=args.teacher_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
-            generate_batch(teacher, teacher_tokenizer, ["<teacher_probe><instruction>Return a minimal XML feedback object.</instruction></teacher_probe>"], max_new_tokens=4, temperature=0.0, top_p=1.0)
+            probe = render_teacher_prompts(teacher_tokenizer, ['Return exactly: {"hint":"Recheck."}'], enable_thinking=args.teacher_thinking)
+            generate_batch(teacher, teacher_tokenizer, probe, max_new_tokens=1, temperature=0.0, top_p=1.0)
             teacher_reason = "primary_teacher_loaded"
         except RuntimeError as exc:
             if not args.teacher_fallback_model:
@@ -176,16 +192,34 @@ def cmd_collect(args: argparse.Namespace) -> None:
             return outputs
 
         def student_batch(prompts, **kwargs):
-            return batched_generate(student, student_tokenizer, prompts, **kwargs)
+            generations = []
+            for start in range(0, len(prompts), args.generation_batch_size):
+                generations.extend(generate_student_batch(
+                    student,
+                    student_tokenizer,
+                    prompts[start : start + args.generation_batch_size],
+                    mode=args.student_thinking_mode,
+                    scratchpad_max_new_tokens=args.scratchpad_max_new_tokens,
+                    answer_max_new_tokens=args.answer_max_new_tokens,
+                    temperature=kwargs["temperature"],
+                    top_p=kwargs["top_p"],
+                ))
+            return [generation.response for generation in generations]
 
         def teacher_batch(prompts, **kwargs):
-            return batched_generate(teacher, teacher_tokenizer, prompts, **kwargs)
+            rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
+            raw = batched_generate(
+                teacher, teacher_tokenizer, rendered,
+                max_new_tokens=args.teacher_max_new_tokens,
+                temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+            )
+            return [extract_qwen_final_content(text) for text in raw]
 
         return collect_dataset_batchwise(examples=pending, student_generate_batch=student_batch, teacher_generate_batch=teacher_batch, max_interventions=args.max_interventions)
 
     rows = load_or_build_trajectories(examples=examples, cache_path=args.trajectory_cache, policy_hash=args.policy_hash, generate=generate_trajectories)
     write_jsonl(rows, args.output)
-    manifest = {"student_model": args.student_model, "teacher_model": args.teacher_model, "teacher_reason": teacher_reason, "max_length": 4096, "max_interventions": args.max_interventions, "required_files": [args.output.name]}
+    manifest = {"student_model": args.student_model, "teacher_model": args.teacher_model, "teacher_reason": teacher_reason, "student_thinking_mode": args.student_thinking_mode, "teacher_thinking": args.teacher_thinking, "max_length": 4096, "max_interventions": args.max_interventions, "required_files": [args.output.name]}
     write_json(args.output.with_suffix(".manifest.json"), manifest)
     write_json(args.output.parent / "manifest.json", manifest)
 
@@ -227,7 +261,9 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--model-revision")
     generate.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
     generate.add_argument("--batch-size", type=int, default=4)
-    generate.add_argument("--max-new-tokens", type=int, default=512)
+    generate.add_argument("--student-thinking-mode", choices=("direct", "two_pass"), default="direct")
+    generate.add_argument("--scratchpad-max-new-tokens", type=int, default=256)
+    generate.add_argument("--max-new-tokens", type=int, default=32)
     generate.add_argument("--temperature", type=float, default=0.0)
     generate.add_argument("--top-p", type=float, default=1.0)
     generate.add_argument("--policy-hash", default="unversioned-generate")
@@ -270,6 +306,11 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--teacher-device", required=True)
     collect.add_argument("--max-interventions", type=int, default=4)
     collect.add_argument("--generation-batch-size", type=int, default=8)
+    collect.add_argument("--student-thinking-mode", choices=("direct", "two_pass"), default="direct")
+    collect.add_argument("--scratchpad-max-new-tokens", type=int, default=256)
+    collect.add_argument("--answer-max-new-tokens", type=int, default=32)
+    collect.add_argument("--teacher-max-new-tokens", type=int, default=96)
+    collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)
     collect.set_defaults(func=cmd_collect)
