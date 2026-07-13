@@ -239,22 +239,22 @@ def cmd_collect(args: argparse.Namespace) -> None:
         probe = render_teacher_prompts(teacher_tokenizer, ['Return exactly: {"hint":"Recheck."}'], enable_thinking=args.teacher_thinking)
         generate_batch(teacher, teacher_tokenizer, probe, max_new_tokens=1, temperature=0.0, top_p=1.0)
 
-        if args.generation_batch_size <= 0:
-            raise ValueError("generation_batch_size must be positive")
+        if args.student_batch_size <= 0 or args.teacher_batch_size <= 0:
+            raise ValueError("student_batch_size and teacher_batch_size must be positive")
 
-        def batched_generate(model, tokenizer, prompts, **kwargs):
+        def batched_generate(model, tokenizer, prompts, *, batch_size, **kwargs):
             outputs = []
-            for start in range(0, len(prompts), args.generation_batch_size):
-                outputs.extend(generate_batch(model, tokenizer, prompts[start : start + args.generation_batch_size], **kwargs))
+            for start in range(0, len(prompts), batch_size):
+                outputs.extend(generate_batch(model, tokenizer, prompts[start : start + batch_size], **kwargs))
             return outputs
 
         def student_batch(prompts, **kwargs):
             generations = []
-            for start in range(0, len(prompts), args.generation_batch_size):
+            for start in range(0, len(prompts), args.student_batch_size):
                 generations.extend(generate_student_batch(
                     student,
                     student_tokenizer,
-                    prompts[start : start + args.generation_batch_size],
+                    prompts[start : start + args.student_batch_size],
                     mode=args.student_thinking_mode,
                     scratchpad_max_new_tokens=args.scratchpad_max_new_tokens,
                     answer_max_new_tokens=args.answer_max_new_tokens,
@@ -267,6 +267,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
             raw = batched_generate(
                 teacher, teacher_tokenizer, rendered,
+                batch_size=args.teacher_batch_size,
                 max_new_tokens=args.teacher_max_new_tokens,
                 temperature=kwargs["temperature"], top_p=kwargs["top_p"],
             )
@@ -292,6 +293,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
             "teacher_max_new_tokens": args.teacher_max_new_tokens,
             "teacher_temperature": 0.0,
             "teacher_top_p": 1.0,
+            "student_batch_size": args.student_batch_size,
+            "teacher_batch_size": args.teacher_batch_size,
         },
         intervention_policy={"max_interventions": args.max_interventions, "max_hint_words": 24},
         seed=args.seed,
@@ -408,7 +411,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--student-device", required=True)
     collect.add_argument("--teacher-device", required=True)
     collect.add_argument("--max-interventions", type=int, default=4)
-    collect.add_argument("--generation-batch-size", type=int, default=8)
+    collect.add_argument("--student-batch-size", type=int, default=32)
+    collect.add_argument("--teacher-batch-size", type=int, default=8)
     collect.add_argument("--student-thinking-mode", choices=("direct", "two_pass"), default="direct")
     collect.add_argument("--scratchpad-max-new-tokens", type=int, default=256)
     collect.add_argument("--answer-max-new-tokens", type=int, default=32)

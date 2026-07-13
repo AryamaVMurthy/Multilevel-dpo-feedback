@@ -45,7 +45,7 @@ uv run --frozen python -m text_feedback_dpo.cli collect \
   --attention-implementation "${ATTENTION_IMPLEMENTATION:-sdpa}" \
   --student-device cuda:1 --teacher-device cuda:0 \
   --trajectory-cache "$CACHE" --policy-hash "$POLICY_HASH" \
-  --max-interventions 4 --generation-batch-size 1 --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" --teacher-thinking
+  --max-interventions 4 --student-batch-size 1 --teacher-batch-size 1 --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" --teacher-thinking
 
 cmp -s "$CACHE" "$OUTPUT" || {
   echo "ERROR: offline trajectory replay differs from the cache" >&2

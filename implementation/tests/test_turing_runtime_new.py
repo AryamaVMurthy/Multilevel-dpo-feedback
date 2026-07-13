@@ -30,6 +30,9 @@ class TuringRuntimeTest(unittest.TestCase):
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):
             self.assertIn(value, text)
         self.assertNotIn("TEACHER_FALLBACK", text)
+        self.assertIn("STUDENT_BATCH_SIZE", text)
+        self.assertIn("TEACHER_BATCH_SIZE", text)
+        self.assertNotIn("GENERATION_BATCH_SIZE", text)
 
     def test_gpu_scripts_use_conservative_uv_and_verify_source_root(self):
         for name in ("turing_generate.sh", "turing_collect.sh", "turing_train.sh", "turing_preflight.sh"):

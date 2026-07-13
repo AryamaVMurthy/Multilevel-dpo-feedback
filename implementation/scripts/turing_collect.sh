@@ -32,7 +32,8 @@ export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs
 ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}"
-GENERATION_BATCH_SIZE="${GENERATION_BATCH_SIZE:-8}"
+STUDENT_BATCH_SIZE="${STUDENT_BATCH_SIZE:-32}"
+TEACHER_BATCH_SIZE="${TEACHER_BATCH_SIZE:-8}"
 STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"
 SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
 echo "<runtime component=collection attention_implementation=\"$ATTENTION_IMPLEMENTATION\" fallback_reason=\"${ATTENTION_FALLBACK_REASON:-none}\"/>"
@@ -60,7 +61,7 @@ COLLECT_ARGS=(
   --trajectory-cache "${TRAJECTORY_CACHE:?TRAJECTORY_CACHE must be supplied with --export}"
   --policy-hash "${POLICY_HASH:?POLICY_HASH must be supplied with --export}"
   --max-interventions 4
-  --generation-batch-size "$GENERATION_BATCH_SIZE"
+  --student-batch-size "$STUDENT_BATCH_SIZE" --teacher-batch-size "$TEACHER_BATCH_SIZE"
   --student-thinking-mode "$STUDENT_THINKING_MODE"
   --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --answer-max-new-tokens 32
   --teacher-max-new-tokens 96 --teacher-thinking
