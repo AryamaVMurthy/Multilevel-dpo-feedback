@@ -997,6 +997,25 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 return False
             return True
 
+        teacher_validation_failures = {}
+
+        def _teacher_feedback_validation_kind(text, gold_answer, index):
+            try:
+                parse_feedback(text, gold_answer=gold_answer)
+            except FeedbackFormatError as exc:
+                message = str(exc)
+                if "gold answer token" in message:
+                    kind = "gold_token_leak"
+                elif "gold answer" in message:
+                    kind = "gold_leak"
+                elif "invalid JSON" in message or "exactly one field" in message or "hint" in message:
+                    kind = "feedback_format"
+                else:
+                    kind = "feedback_contract"
+                teacher_validation_failures.setdefault(index, []).append(kind)
+                return False
+            return True
+
         def teacher_batch(prompts, **kwargs):
             gold_answers = kwargs.get("gold_answers")
             if not isinstance(gold_answers, list) or len(gold_answers) != len(prompts):
@@ -1132,35 +1151,45 @@ entity, source wording, explanation, or any other field.
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                 )
 
-            final_outputs, output_report = bounded_teacher_outputs(
-                rendered,
-                prompt_token_counts=prompt_token_counts,
-                primary_max_new_tokens=args.teacher_max_new_tokens,
-                retry_max_new_tokens=args.teacher_retry_max_new_tokens,
-                generate=lambda active_prompts, max_new_tokens: batched_generate(
-                    teacher, teacher_tokenizer, active_prompts,
-                    batch_size=args.teacher_batch_size,
-                    max_new_tokens=max_new_tokens,
-                    temperature=kwargs["temperature"], top_p=kwargs["top_p"],
-                ),
-                token_count=lambda text: len(
-                    teacher_tokenizer.encode(text, add_special_tokens=False)
-                ),
-                validate_outputs=[
-                    lambda text, gold_answer=gold_answer: _teacher_feedback_is_valid(text, gold_answer)
-                    for gold_answer in gold_answers
-                ],
-                fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
-                fallback_reason=(
-                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_context_redacted_generic_hint"
-                    if args.teacher_thinking else None
-                ),
-                fallback_retry_generate=explicit_nonthinking_fallback_retry if args.teacher_thinking else None,
-                fallback_retry_reason=(
-                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_second_attempt"
-                    if args.teacher_thinking else None
-                ),
-            )
+            try:
+                final_outputs, output_report = bounded_teacher_outputs(
+                    rendered,
+                    prompt_token_counts=prompt_token_counts,
+                    primary_max_new_tokens=args.teacher_max_new_tokens,
+                    retry_max_new_tokens=args.teacher_retry_max_new_tokens,
+                    generate=lambda active_prompts, max_new_tokens: batched_generate(
+                        teacher, teacher_tokenizer, active_prompts,
+                        batch_size=args.teacher_batch_size,
+                        max_new_tokens=max_new_tokens,
+                        temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                    ),
+                    token_count=lambda text: len(
+                        teacher_tokenizer.encode(text, add_special_tokens=False)
+                    ),
+                    validate_outputs=[
+                        lambda text, gold_answer=gold_answer, index=index: _teacher_feedback_validation_kind(
+                            text, gold_answer, index
+                        )
+                        for index, gold_answer in enumerate(gold_answers)
+                    ],
+                    fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
+                    fallback_reason=(
+                        "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_context_redacted_generic_hint"
+                        if args.teacher_thinking else None
+                    ),
+                    fallback_retry_generate=explicit_nonthinking_fallback_retry if args.teacher_thinking else None,
+                    fallback_retry_reason=(
+                        "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_second_attempt"
+                        if args.teacher_thinking else None
+                    ),
+                )
+            except RuntimeErrorExplicit:
+                print(json.dumps({
+                    "event": "teacher_validation_diagnostics",
+                    "failures_by_original_index": teacher_validation_failures,
+                    "fallback_reason": "teacher_contract_failure_diagnostics",
+                }, sort_keys=True), file=sys.stderr, flush=True)
+                raise
             print(json.dumps({
                 "event": "teacher_output_contract",
                 "output_count": len(final_outputs),
