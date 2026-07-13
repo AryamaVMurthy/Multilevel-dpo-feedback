@@ -1,9 +1,5 @@
 #!/bin/bash
-# Measured probes; PROBE_RUNNER must write the documented JSON measurement contract.
-# Required result keys: status, output_hash, examples_per_second, tokens_per_second,
-# peak_gpu_memory_mb, gpu_utilization, fallback_reason.
-# TRL config names probed explicitly: use_liger_kernel, precompute_ref_log_probs,
-# padding_free, and packing. Liger is never enabled for primary DPO.
+# Real measured optimization probes; never mutates primary launch settings.
 #SBATCH -p u22
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -18,97 +14,55 @@ set -euo pipefail
 COMPONENT=turing_optimization_probe
 log_event() { local event="$1"; shift; printf 'event=%s timestamp=%s component=%s %s\n' "$event" "$(date -u +%FT%TZ)" "$COMPONENT" "$*"; }
 fail() { log_event failure reason="$1" fallback_reason="${2:-none}" >&2; exit 2; }
+allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is required}"; if [[ "$raw" =~ ^[0-9]+$ ]]; then printf '%s\n' "$raw"; elif [[ "$raw" =~ ^gpu:([0-9]+)$ ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; else fail "unsupported SLURM_GPUS_ON_NODE format: $raw" gpu_count_parse_unsupported; fi; }
 
 : "${TURING_ACCOUNT:?TURING_ACCOUNT must be supplied with --export}"
 : "${PROJECT_DIR:?PROJECT_DIR must be supplied with --export}"
 : "${OUTPUT_ROOT:?OUTPUT_ROOT must be supplied with --export}"
-: "${PROBE_RUNNER:?PROBE_RUNNER must be an executable runner}"
 : "${CONFIG:?CONFIG must be supplied with --export}"
 : "${MODEL:?MODEL must be supplied with --export}"
+: "${MODEL_REVISION:?MODEL_REVISION must be supplied with --export}"
 : "${DATA:?DATA must be supplied with --export}"
+: "${DATASET_SOURCE:?DATASET_SOURCE must be supplied with --export}"
+: "${DATASET_REVISION:?DATASET_REVISION must be supplied with --export}"
 : "${PROMPT_HASH:?PROMPT_HASH must be supplied with --export}"
 : "${RETRIEVAL_HASH:?RETRIEVAL_HASH must be supplied with --export}"
 : "${SOURCE_SCHEMA_HASH:?SOURCE_SCHEMA_HASH must be supplied with --export}"
-[[ -x "$PROBE_RUNNER" ]] || fail "PROBE_RUNNER is not executable: $PROBE_RUNNER" "probe_runner_missing"
+: "${QUERY_MAX_NEW_TOKENS:?QUERY_MAX_NEW_TOKENS must be supplied with --export}"
+: "${RESPONSE_MAX_NEW_TOKENS:?RESPONSE_MAX_NEW_TOKENS must be supplied with --export}"
+: "${STUDENT_THINKING_MODE:?STUDENT_THINKING_MODE must be supplied with --export}"
+: "${SCRATCHPAD_MAX_NEW_TOKENS:?SCRATCHPAD_MAX_NEW_TOKENS must be supplied with --export}"
+: "${QUERY_TEMPERATURE:?QUERY_TEMPERATURE must be supplied with --export}"
+: "${RESPONSE_TEMPERATURE:?RESPONSE_TEMPERATURE must be supplied with --export}"
+: "${TOP_P:?TOP_P must be supplied with --export}"
+: "${TOP_K:?TOP_K must be supplied with --export}"
+: "${BM25_K1:?BM25_K1 must be supplied with --export}"
+: "${BM25_B:?BM25_B must be supplied with --export}"
+: "${SLURM_NNODES:?SLURM_NNODES is required}"
+[[ "$SLURM_NNODES" == "1" ]] || fail "optimization probe requires exactly one node; got $SLURM_NNODES" multi_node_probe_forbidden
+: "${SLURM_NTASKS:?SLURM_NTASKS is required}"
+[[ "$SLURM_NTASKS" == "1" ]] || fail "optimization probe requires exactly one task; got $SLURM_NTASKS" multi_task_probe_forbidden
+ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
+[[ "$ALLOCATED_GPU_COUNT" == "1" ]] || fail "optimization probe requires exactly one allocated GPU; got $ALLOCATED_GPU_COUNT" probe_gpu_count
+
+DEFAULT_PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
+if [[ -n "${PROBE_RUNNER:-}" && "$PROBE_RUNNER" != "$DEFAULT_PROBE_RUNNER" && "${ALLOW_PROBE_RUNNER_OVERRIDE:-false}" != "true" ]]; then
+  fail "PROBE_RUNNER override requires ALLOW_PROBE_RUNNER_OVERRIDE=true" probe_runner_override_not_authorized
+fi
+PROBE_RUNNER="${PROBE_RUNNER:-$DEFAULT_PROBE_RUNNER}"
+[[ -x "$PROBE_RUNNER" ]] || fail "PROBE_RUNNER is not executable: $PROBE_RUNNER" probe_runner_missing
+
+module load u22/cuda/12.4
 cd "$PROJECT_DIR"
+[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "invalid PROJECT_DIR" invalid_project_root
 mkdir -p "$OUTPUT_ROOT" logs
-ATTENTION_FALLBACK_REASON="${ATTENTION_FALLBACK_REASON:-none}"
-GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-probe-${SLURM_JOB_ID}.csv}"
+
 REPORT="$OUTPUT_ROOT/optimization-probe.jsonl"
-BASELINE_RESULT="$OUTPUT_ROOT/baseline.json"
-PACKAGE_VERSIONS_FILE="$OUTPUT_ROOT/package-versions.json"
-PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
-import importlib.metadata
-from importlib.metadata import PackageNotFoundError
-names = ("torch", "transformers", "trl", "deepspeed", "bitsandbytes", "flash-attn", "liger-kernel")
-versions = []
-for name in names:
-    try:
-        versions.append(f"{name}={importlib.metadata.version(name)}")
-    except PackageNotFoundError:
-        versions.append(f"{name}=missing")
-print(";".join(versions))
-PY
-)"
-PACKAGE_VERSIONS="$PACKAGE_VERSIONS" PACKAGE_VERSIONS_FILE="$PACKAGE_VERSIONS_FILE" uv run --frozen python - <<'PY'
-import json, os
-versions = dict(item.split("=", 1) for item in os.environ["PACKAGE_VERSIONS"].split(";"))
-with open(os.environ["PACKAGE_VERSIONS_FILE"], "w", encoding="utf-8") as handle:
-    json.dump({"package_versions": versions}, handle, sort_keys=True, indent=2)
-    handle.write("\n")
-PY
-: > "$REPORT"
-nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu --format=csv -l 1 > "$GPU_TELEMETRY" &
-GPU_MONITOR_PID=$!
-cleanup() { if kill -0 "$GPU_MONITOR_PID" 2>/dev/null; then kill "$GPU_MONITOR_PID"; fi; }
-trap cleanup EXIT
-
-run_probe() {
-  local name="$1" result="$2"; shift 2
-  rm -f "$result"
-  log_event probe_start probe_name="$name" result="$result"
-  if ! env PROBE_NAME="$name" PROBE_RESULT="$result" CONFIG="$CONFIG" MODEL="$MODEL" DATA="$DATA" PROMPT_HASH="$PROMPT_HASH" RETRIEVAL_HASH="$RETRIEVAL_HASH" SOURCE_SCHEMA_HASH="$SOURCE_SCHEMA_HASH" PACKAGE_VERSIONS="$PACKAGE_VERSIONS" PACKAGE_VERSIONS_FILE="$PACKAGE_VERSIONS_FILE" "$@" "$PROBE_RUNNER"; then
-    printf '{"probe_name":"%s","status":"rejected","accepted":false,"fallback_reason":"runner_exit_status","package_versions_file":"%s"}\n' "$name" "$PACKAGE_VERSIONS_FILE" >> "$REPORT"
-    log_event probe_rejected probe_name="$name" fallback_reason=runner_exit_status
-    return 1
-  fi
-  [[ -s "$result" ]] || { printf '{"probe_name":"%s","status":"rejected","accepted":false,"fallback_reason":"missing_result","package_versions_file":"%s"}\n' "$name" "$PACKAGE_VERSIONS_FILE" >> "$REPORT"; log_event probe_rejected probe_name="$name" fallback_reason=missing_result; return 1; }
-  return 0
-}
-
-record_decision() {
-  local name="$1" result="$2"
-  BASELINE_RESULT="$BASELINE_RESULT" CANDIDATE_RESULT="$result" PROBE_NAME="$name" REPORT="$REPORT" PACKAGE_VERSIONS="$PACKAGE_VERSIONS" PACKAGE_VERSIONS_FILE="$PACKAGE_VERSIONS_FILE" uv run --frozen python - <<'PY'
-import json, os
-from pathlib import Path
-name = os.environ["PROBE_NAME"]
-try:
-    base = json.loads(Path(os.environ["BASELINE_RESULT"]).read_text())
-    candidate = json.loads(Path(os.environ["CANDIDATE_RESULT"]).read_text())
-    required = ("status", "output_hash", "examples_per_second", "tokens_per_second", "peak_gpu_memory_mb", "gpu_utilization", "fallback_reason")
-    missing = [key for key in required if key not in candidate]
-    if missing: raise ValueError("missing_measurements:" + ",".join(missing))
-    if candidate["status"] != "ok": raise ValueError("runner_status:" + str(candidate["status"]))
-    if candidate["output_hash"] != base["output_hash"]: raise ValueError("output_hash_mismatch")
-    baseline_rate = float(base["tokens_per_second"]); candidate_rate = float(candidate["tokens_per_second"])
-    if candidate_rate <= baseline_rate: raise ValueError(f"throughput_not_improved:{candidate_rate}<={baseline_rate}")
-    decision = {"probe_name": name, "status": "accepted", "accepted": True, "fallback_reason": candidate["fallback_reason"], "output_hash": candidate["output_hash"], "baseline_output_hash": base["output_hash"], "examples_per_second": candidate["examples_per_second"], "tokens_per_second": candidate_rate, "baseline_tokens_per_second": baseline_rate, "peak_gpu_memory_mb": candidate["peak_gpu_memory_mb"], "gpu_utilization": candidate["gpu_utilization"], "package_versions": os.environ["PACKAGE_VERSIONS"].split(";"), "package_versions_file": os.environ["PACKAGE_VERSIONS_FILE"]}
-except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-    decision = {"probe_name": name, "status": "rejected", "accepted": False, "fallback_reason": str(exc), "package_versions": os.environ["PACKAGE_VERSIONS"].split(";"), "package_versions_file": os.environ["PACKAGE_VERSIONS_FILE"]}
-print(json.dumps(decision, sort_keys=True))
-with Path(os.environ["REPORT"]).open("a") as handle: handle.write(json.dumps(decision, sort_keys=True) + "\n")
-PY
-}
-
-if ! run_probe baseline "$BASELINE_RESULT"; then fail "baseline probe failed" "baseline_probe_failed"; fi
-BASELINE_RESULT="$BASELINE_RESULT" uv run --frozen python - <<'PY'
-import json, os
-data = json.load(open(os.environ["BASELINE_RESULT"]))
-required = ("status", "output_hash", "examples_per_second", "tokens_per_second", "peak_gpu_memory_mb", "gpu_utilization", "fallback_reason")
-missing = [key for key in required if key not in data]
-if missing or data.get("status") != "ok": raise SystemExit(f"invalid baseline measurements: {missing}")
-PY
-
+BASELINE_RESULT="$OUTPUT_ROOT/baseline-sdpa.json"
+DECISION="$OUTPUT_ROOT/optimization-decision.json"
+PROBE_SAMPLE_SIZE="${PROBE_SAMPLE_SIZE:-16}"
+PROBE_WARMUP_REPEATS="${PROBE_WARMUP_REPEATS:-2}"
+PROBE_MEASURED_REPEATS="${PROBE_MEASURED_REPEATS:-5}"
 GENERATION_BATCH_SIZES="${GENERATION_BATCH_SIZES:-1 2 4 8 16}"
 TRAIN_MICROBATCHES="${TRAIN_MICROBATCHES:-1 2 4}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1 2 4 8}"
@@ -118,23 +72,62 @@ COMPILE="${COMPILE:-false true}"
 PACKING="${PACKING:-false true}"
 PADDING_FREE="${PADDING_FREE:-false true}"
 LIGER="${LIGER:-false true}"
-LIGER_PRECOMPUTE_REF_LOG_PROBS="${LIGER_PRECOMPUTE_REF_LOG_PROBS:-true}"
-for attention in sdpa flash_attention_2; do name="attention-$attention"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "ATTENTION_IMPLEMENTATION=$attention"; then record_decision "$name" "$result"; fi; done
-for value in $GENERATION_BATCH_SIZES; do name="generation-batch-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "GENERATION_BATCH_SIZE=$value"; then record_decision "$name" "$result"; fi; done
-for value in $TRAIN_MICROBATCHES; do name="train-microbatch-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "TRAIN_MICROBATCH=$value"; then record_decision "$name" "$result"; fi; done
-for value in $GRADIENT_ACCUMULATION_STEPS; do name="grad-accum-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "GRADIENT_ACCUMULATION_STEPS=$value"; then record_decision "$name" "$result"; fi; done
-for value in $DATALOADER_WORKERS; do name="workers-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "DATALOADER_WORKERS=$value"; then record_decision "$name" "$result"; fi; done
-for value in $STATIC_CACHE; do name="static-cache-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "STATIC_CACHE=$value"; then record_decision "$name" "$result"; fi; done
-for value in $COMPILE; do name="compile-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "COMPILE=$value"; then record_decision "$name" "$result"; fi; done
-for value in $PACKING; do name="packing-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "PACKING=$value"; then record_decision "$name" "$result"; fi; done
-for value in $PADDING_FREE; do name="padding-free-$value"; result="$OUTPUT_ROOT/$name.json"; if run_probe "$name" "$result" "PADDING_FREE=$value" "ATTENTION_IMPLEMENTATION=flash_attention_2"; then record_decision "$name" "$result"; fi; done
+: > "$REPORT"
+CANDIDATES=()
+
+COMMON_ARGS=(
+  --commit-hash "$(git rev-parse HEAD)" --config "$CONFIG" --data "$DATA" --model "$MODEL" --model-revision "$MODEL_REVISION"
+  --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION"
+  --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+  --sample-size "$PROBE_SAMPLE_SIZE" --warmup-repeats "$PROBE_WARMUP_REPEATS" --measured-repeats "$PROBE_MEASURED_REPEATS"
+)
+run_probe() {
+  local name="$1" result="$2"; shift 2
+  log_event probe_start probe_name="$name" fallback_reason=none
+  "$PROBE_RUNNER" benchmark --probe-name "$name" --result "$result" "${COMMON_ARGS[@]}" "$@"
+  if "$PROBE_RUNNER" compare --baseline "$BASELINE_RESULT" --candidate "$result" >> "$REPORT"; then
+    log_event probe_accepted probe_name="$name" fallback_reason=none
+  else
+    log_event probe_rejected probe_name="$name" fallback_reason=parity_compatibility_or_throughput_gate
+  fi
+  CANDIDATES+=(--candidate "$result")
+}
+
+# The measured SDPA baseline is always first and is the only implicit safe decision.
+log_event probe_start probe_name=baseline-sdpa fallback_reason=none
+"$PROBE_RUNNER" benchmark --probe-name baseline-sdpa --result "$BASELINE_RESULT" "${COMMON_ARGS[@]}" --attention-implementation sdpa --generation-batch-size 4
+printf '{"probe_name":"baseline-sdpa","status":"baseline","accepted":true,"fallback_reason":"none"}\n' >> "$REPORT"
+
+FA2_RESULT="$OUTPUT_ROOT/attention-flash_attention_2.json"
+run_probe attention-flash_attention_2 "$FA2_RESULT" --attention-implementation flash_attention_2 --generation-batch-size 4
+FA2_PARITY=false
+if "$PROBE_RUNNER" compare --baseline "$BASELINE_RESULT" --candidate "$FA2_RESULT" >/dev/null; then FA2_PARITY=true; fi
+
+for value in $GENERATION_BATCH_SIZES; do run_probe "generation-batch-$value" "$OUTPUT_ROOT/generation-batch-$value.json" --generation-batch-size "$value"; done
+for value in $STATIC_CACHE; do args=(); [[ "$value" == true ]] && args+=(--static-cache); run_probe "static-cache-$value" "$OUTPUT_ROOT/static-cache-$value.json" "${args[@]}"; done
+for value in $COMPILE; do args=(); [[ "$value" == true ]] && args+=(--compile); run_probe "compile-$value" "$OUTPUT_ROOT/compile-$value.json" "${args[@]}"; done
+for value in $TRAIN_MICROBATCHES; do run_probe "train-microbatch-$value" "$OUTPUT_ROOT/train-microbatch-$value.json" --probe-kind training --train-microbatch "$value"; done
+for value in $GRADIENT_ACCUMULATION_STEPS; do run_probe "grad-accum-$value" "$OUTPUT_ROOT/grad-accum-$value.json" --probe-kind training --gradient-accumulation-steps "$value"; done
+for value in $DATALOADER_WORKERS; do run_probe "workers-$value" "$OUTPUT_ROOT/workers-$value.json" --probe-kind training --dataloader-workers "$value"; done
+
+if [[ "$FA2_PARITY" == true ]]; then
+  for value in $PACKING; do args=(--probe-kind training --attention-implementation flash_attention_2); [[ "$value" == true ]] && args+=(--packing); run_probe "packing-$value" "$OUTPUT_ROOT/packing-$value.json" "${args[@]}"; done
+  for value in $PADDING_FREE; do args=(--probe-kind training --attention-implementation flash_attention_2); [[ "$value" == true ]] && args+=(--padding-free); run_probe "padding-free-$value" "$OUTPUT_ROOT/padding-free-$value.json" "${args[@]}"; done
+else
+  printf '{"probe_name":"packing-padding-free","status":"rejected","accepted":false,"fallback_reason":"flash_attention_2_compatibility_or_parity_failed"}\n' >> "$REPORT"
+fi
+
 for value in $LIGER; do
-  name="liger-$value"; result="$OUTPUT_ROOT/$name.json"
-  if [[ "$value" == "true" && "$LIGER_PRECOMPUTE_REF_LOG_PROBS" == "true" ]]; then
-    printf '{"probe_name":"%s","status":"rejected","accepted":false,"fallback_reason":"use_liger_kernel_incompatible_with_precompute_ref_log_probs","package_versions_file":"%s"}\n' "$name" "$PACKAGE_VERSIONS_FILE" >> "$REPORT"
-    log_event probe_rejected probe_name="$name" fallback_reason=use_liger_kernel_incompatible_with_precompute_ref_log_probs
-  elif run_probe "$name" "$result" "USE_LIGER_KERNEL=$value" "PRECOMPUTE_REF_LOG_PROBS=$LIGER_PRECOMPUTE_REF_LOG_PROBS"; then
-    record_decision "$name" "$result"
+  if [[ "$value" == true ]]; then
+    result="$OUTPUT_ROOT/liger-true.json"
+    run_probe liger-true "$result" --probe-kind training --use-liger-kernel
   fi
 done
-log_event probe_complete report="$REPORT" fallback_reason="$ATTENTION_FALLBACK_REASON"
+
+"$PROBE_RUNNER" freeze-decision --baseline "$BASELINE_RESULT" "${CANDIDATES[@]}" --output "$DECISION" \
+  --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" \
+  --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
+  --query-temperature "$QUERY_TEMPERATURE" --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" \
+  --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
+DECISION_SHA256="$(sha256sum "$DECISION" | awk '{print $1}')"
+log_event probe_complete report="$REPORT" decision="$DECISION" decision_sha256="$DECISION_SHA256" fallback_reason=none

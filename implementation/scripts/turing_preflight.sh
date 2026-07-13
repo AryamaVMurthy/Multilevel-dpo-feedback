@@ -38,6 +38,10 @@ PY
 : "${SOURCE_SCHEMA_HASH:?SOURCE_SCHEMA_HASH must be supplied with --export}"
 : "${DATASET_HASH:?DATASET_HASH must be supplied with --export}"
 
+: "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == "1" ]] || fail "preflight requires one node; got $SLURM_NNODES" "multi_node_preflight"
+: "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == "1" ]] || fail "preflight requires one task; got $SLURM_NTASKS" "multi_task_preflight"
+ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"; [[ "$ALLOCATED_GPU_COUNT" == "1" ]] || fail "preflight requires exactly one GPU; got $ALLOCATED_GPU_COUNT" "preflight_gpu_count"
+
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
 [[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "PROJECT_DIR must contain pyproject.toml and src/text_feedback_dpo" "invalid_project_root"
@@ -45,11 +49,7 @@ export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:
 export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
 export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
-: "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == "1" ]] || fail "preflight requires one node; got $SLURM_NNODES" "multi_node_preflight"
-: "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == "1" ]] || fail "preflight requires one task; got $SLURM_NTASKS" "multi_task_preflight"
-ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"; [[ "$ALLOCATED_GPU_COUNT" == "1" ]] || fail "preflight requires exactly one GPU; got $ALLOCATED_GPU_COUNT" "preflight_gpu_count"
-
-ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}" ATTENTION_FALLBACK_REASON="${ATTENTION_FALLBACK_REASON:-none}" RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "$CONFIG")" MODEL_HASH="$(hash_value "$MODEL_ID@$MODEL_REVISION")" MANIFEST_STARTED_AT="$(date -u +%FT%TZ)" PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
+ATTENTION_IMPLEMENTATION=sdpa ATTENTION_FALLBACK_REASON=preflight_sdpa_baseline RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "$CONFIG")" MODEL_HASH="$(hash_value "$MODEL_ID@$MODEL_REVISION")" MANIFEST_STARTED_AT="$(date -u +%FT%TZ)" PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
 import importlib.metadata
 print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transformers", "trl", "deepspeed", "bitsandbytes")))
 PY

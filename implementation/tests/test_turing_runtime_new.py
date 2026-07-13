@@ -44,7 +44,11 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("RESPONSE_MAX_NEW_TOKENS", text)
         self.assertIn('--context-budget 4096', text)
         self.assertIn("STUDENT_THINKING_MODE", text)
-        self.assertIn('SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"', text)
+        self.assertIn('${STUDENT_THINKING_MODE:?', text)
+        self.assertNotIn('STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"', text)
+        for setting in ("SCRATCHPAD_MAX_NEW_TOKENS", "QUERY_TEMPERATURE", "RESPONSE_TEMPERATURE", "TOP_P"):
+            self.assertIn(f'${{{setting}:?', text)
+        self.assertIn("SCRATCHPAD_MAX_NEW_TOKENS", text)
         self.assertNotIn("--max-new-tokens 512", text)
 
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
@@ -78,7 +82,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("two_pass", text)
         self.assertIn("preflight-quality", text)
         self.assertIn("select-thinking-mode", text)
-        self.assertIn('SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"', text)
+        self.assertIn("SCRATCHPAD_MAX_NEW_TOKENS", text)
 
     def test_model_preflight_actually_runs_role_specific_probe(self):
         text = Path("scripts/turing_preflight.sh").read_text(encoding="utf-8")
@@ -149,13 +153,28 @@ class TuringRuntimeTest(unittest.TestCase):
 
     def test_training_preserves_full_finetune_and_smoke_gates(self):
         text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
-        self.assertIn("CHECKPOINT_SMOKE_COMMAND", text)
-        self.assertIn("RESUME_SMOKE_COMMAND", text)
+        self.assertNotIn("CHECKPOINT_SMOKE_COMMAND", text)
+        self.assertNotIn("RESUME_SMOKE_COMMAND", text)
+        self.assertIn("validate-checkpoints", text)
+        self.assertIn("CHECKPOINT_SMOKE_MANIFEST", text)
+        self.assertIn("CHECKPOINT_SMOKE_MANIFEST_SHA256", text)
         self.assertIn("bf16", text.lower())
         self.assertIn("TF32", text)
         self.assertIn("zero3", text.lower())
         self.assertIn("fused", text.lower())
         self.assertIn("non-reentrant", text.lower())
+
+    def test_generation_and_training_consume_a_hashed_frozen_optimization_decision(self):
+        for name in ("turing_generate.sh", "turing_train.sh", "turing_comparisons.sh"):
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertIn("OPTIMIZATION_DECISION", text, name)
+            self.assertIn("OPTIMIZATION_DECISION_SHA256", text, name)
+            self.assertIn("validate-decision", text, name)
+            self.assertNotIn('ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-', text, name)
+        comparisons = Path("scripts/turing_comparisons.sh").read_text(encoding="utf-8")
+        self.assertNotIn("CHECKPOINT_SMOKE_COMMAND", comparisons)
+        self.assertNotIn("RESUME_SMOKE_COMMAND", comparisons)
+        self.assertIn("validate-checkpoints", comparisons)
 
     def test_no_unsafe_hard_coded_two_process_training_remains(self):
         for name in ("turing_train.sh", "turing_primary_round.sh", "turing_comparisons.sh"):

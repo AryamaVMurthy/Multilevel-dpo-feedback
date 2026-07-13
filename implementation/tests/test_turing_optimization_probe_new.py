@@ -4,8 +4,15 @@ from pathlib import Path
 
 
 class TuringOptimizationProbeTest(unittest.TestCase):
+    @staticmethod
+    def probe_source() -> str:
+        return "\n".join(
+            Path("scripts", name).read_text(encoding="utf-8")
+            for name in ("turing_optimization_probe.sh", "turing_probe_runner.py")
+        )
+
     def test_probe_covers_required_dimensions_and_measurements(self):
-        text = Path("scripts/turing_optimization_probe.sh").read_text(encoding="utf-8")
+        text = self.probe_source()
         for dimension in (
             "sdpa",
             "flash_attention_2",
@@ -29,21 +36,22 @@ class TuringOptimizationProbeTest(unittest.TestCase):
             self.assertIn(measurement, text)
 
     def test_probe_rejects_mismatched_hash_or_non_improving_throughput_and_never_exports_settings(self):
-        text = Path("scripts/turing_optimization_probe.sh").read_text(encoding="utf-8")
-        self.assertRegex(text, re.compile(r"output_hash.*baseline_output_hash|baseline_output_hash.*output_hash", re.DOTALL))
+        text = self.probe_source()
+        self.assertRegex(text, re.compile(r"candidate.*output_hash.*baseline.*output_hash", re.DOTALL))
         self.assertIn("rejected", text)
         self.assertIn("throughput", text)
         self.assertNotIn("export ATTENTION_IMPLEMENTATION=", text)
         self.assertNotIn("export GENERATION_BATCH_SIZE=", text)
 
-    def test_probe_requires_an_explicit_runner_contract(self):
+    def test_probe_defaults_to_committed_runner_and_override_is_explicit(self):
         text = Path("scripts/turing_optimization_probe.sh").read_text(encoding="utf-8")
-        self.assertIn('PROBE_RUNNER:?PROBE_RUNNER', text)
-        self.assertIn("PROBE_RESULT", text)
+        self.assertIn("scripts/turing_probe_runner.py", text)
+        self.assertIn("ALLOW_PROBE_RUNNER_OVERRIDE", text)
+        self.assertIn("optimization-decision.json", text)
         self.assertIn("set -euo pipefail", text)
 
     def test_probe_includes_liger_rejection_and_flash_padding_free_packing(self):
-        text = Path("scripts/turing_optimization_probe.sh").read_text(encoding="utf-8")
+        text = self.probe_source()
         self.assertIn("liger", text.lower())
         self.assertIn("use_liger_kernel", text)
         self.assertIn("precompute_ref_log_probs", text)
@@ -52,8 +60,8 @@ class TuringOptimizationProbeTest(unittest.TestCase):
         self.assertIn("packing", text.lower())
 
     def test_probe_artifacts_record_installed_package_versions(self):
-        text = Path("scripts/turing_optimization_probe.sh").read_text(encoding="utf-8")
-        self.assertIn("PACKAGE_VERSIONS", text)
+        text = self.probe_source()
+        self.assertIn("package_versions", text)
         self.assertIn("package_versions", text)
         self.assertIn("torch", text)
         self.assertIn("transformers", text)

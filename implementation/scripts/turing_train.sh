@@ -80,6 +80,9 @@ manifest = {
     "timings": {"started_at": os.environ["MANIFEST_STARTED_AT"], "ended_at": os.environ["MANIFEST_ENDED_AT"]},
     "artifact_paths": values("ARTIFACT_PATHS"),
     "fallback_reason": os.environ.get("ATTENTION_FALLBACK_REASON", "none"),
+    "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
+    "checkpoint_gate": {"path": os.environ["CHECKPOINT_SMOKE_MANIFEST"], "sha256": os.environ["CHECKPOINT_SMOKE_MANIFEST_SHA256"]},
+    "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
     "training_contract": {
         "bf16": True,
         "tf32": True,
@@ -107,8 +110,14 @@ PY
 : "${EPOCHS:?EPOCHS must be supplied with --export}"
 : "${SAVE_STEPS:?SAVE_STEPS must be supplied with --export}"
 : "${EVAL_STEPS:?EVAL_STEPS must be supplied with --export}"
-: "${CHECKPOINT_SMOKE_COMMAND:?CHECKPOINT_SMOKE_COMMAND must be supplied; refusing to launch without a save gate}"
-: "${RESUME_SMOKE_COMMAND:?RESUME_SMOKE_COMMAND must be supplied; refusing to launch without a resume gate}"
+: "${CHECKPOINT_SMOKE_MANIFEST:?CHECKPOINT_SMOKE_MANIFEST must be produced by turing_checkpoint_smoke.sh}"
+: "${CHECKPOINT_SMOKE_MANIFEST_SHA256:?CHECKPOINT_SMOKE_MANIFEST_SHA256 must be supplied}"
+: "${START_MODEL:?START_MODEL must explicitly pin the full-training start model}"
+: "${START_REVISION:?START_REVISION must explicitly pin the full-training start revision}"
+: "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied}"
+: "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied}"
+: "${DATASET_SOURCE:?DATASET_SOURCE must be supplied}"
+: "${DATASET_REVISION:?DATASET_REVISION must be supplied}"
 : "${PROMPT_HASH:?PROMPT_HASH must be supplied with --export}"
 : "${RETRIEVAL_HASH:?RETRIEVAL_HASH must be supplied with --export}"
 : "${SOURCE_SCHEMA_HASH:?SOURCE_SCHEMA_HASH must be supplied with --export}"
@@ -149,13 +158,18 @@ export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$OUTPUT"
 
-ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}"
-ATTENTION_FALLBACK_REASON="${ATTENTION_FALLBACK_REASON:-none}"
-export ATTENTION_IMPLEMENTATION ATTENTION_FALLBACK_REASON
-COMMIT_HASH="$(git rev-parse HEAD)"
+PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
+[[ -x "$PROBE_RUNNER" ]] || fail "repository probe runner is not executable: $PROBE_RUNNER" probe_runner_missing
 CONFIG_HASH="$(hash_path "$CONFIG")"
-MODEL_HASH="${MODEL_HASH:-$(hash_value "${START_MODEL:-config-student}|${START_REVISION:-none}")}"
-DATASET_HASH="${DATASET_HASH:-$(hash_path "$TRAIN")}"
+DATASET_HASH="$(hash_path "$TRAIN")"
+COMMIT_HASH="$(git rev-parse HEAD)"
+IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
+  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose training --output-format training-tsv \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" \
+    --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+) || fail "frozen optimization decision validation failed" optimization_decision_invalid
+export ATTENTION_IMPLEMENTATION ATTENTION_FALLBACK_REASON
+MODEL_HASH="$(hash_value "$START_MODEL|$START_REVISION")"
 RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT/run-manifest.json}"
 PROMPT_HASH="$PROMPT_HASH"
 RETRIEVAL_HASH="$RETRIEVAL_HASH"
@@ -167,9 +181,9 @@ print(";".join(f"{name}={importlib.metadata.version(name)}" for name in names))
 PY
 )"
 GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}"
-ARTIFACT_PATHS="$OUTPUT|$CONFIG|$TRAIN|${EVAL:-none}"
+ARTIFACT_PATHS="$OUTPUT|$CONFIG|$TRAIN|${EVAL:-none}|$OPTIMIZATION_DECISION|$CHECKPOINT_SMOKE_MANIFEST"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST
+export COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 CHECKPOINT_SMOKE_MANIFEST CHECKPOINT_SMOKE_MANIFEST_SHA256 DATASET_SOURCE DATASET_REVISION
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" train_gpus="$TRAIN_GPUS" allocated_gpus="$ALLOCATED_GPU_COUNT" max_length=4096
 
 if [[ "${CLEANUP_TRAIN_INPUTS:-false}" == "true" ]]; then
@@ -188,13 +202,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log_event checkpoint_smoke_started
-bash -c "$CHECKPOINT_SMOKE_COMMAND"
-log_event checkpoint_smoke_passed
-bash -c "$RESUME_SMOKE_COMMAND"
-log_event resume_smoke_passed
+log_event checkpoint_gate_started smoke_manifest="$CHECKPOINT_SMOKE_MANIFEST" fallback_reason=none
+"$PROBE_RUNNER" validate-checkpoints --smoke-manifest "$CHECKPOINT_SMOKE_MANIFEST" --expected-sha256 "$CHECKPOINT_SMOKE_MANIFEST_SHA256" \
+  --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" \
+  --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" \
+  --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --method "$METHOD"
+log_event checkpoint_resume_gate_passed artifact="$CHECKPOINT_SMOKE_MANIFEST" checkpoint_gate_sha256="$CHECKPOINT_SMOKE_MANIFEST_SHA256" fallback_reason=none
 
 GRADIENT_ACCUMULATION_STEPS="$((EFFECTIVE_BATCH_SIZE / ALLOCATED_GPU_COUNT))"
+[[ "$DECISION_MICROBATCH" == "1" ]] || fail "Task 7 trainer has no per-device microbatch CLI; selected=$DECISION_MICROBATCH" task7_microbatch_cli_missing
+[[ "$DECISION_DATALOADER_WORKERS" == "0" ]] || fail "Task 7 trainer has no dataloader-worker CLI; selected=$DECISION_DATALOADER_WORKERS" task7_dataloader_workers_cli_missing
+[[ "$DECISION_GRADIENT_ACCUMULATION_STEPS" == "$GRADIENT_ACCUMULATION_STEPS" ]] || fail "frozen gradient accumulation=$DECISION_GRADIENT_ACCUMULATION_STEPS differs from required=$GRADIENT_ACCUMULATION_STEPS" optimization_decision_batch_mismatch
 ARGS=(
   --config "$CONFIG" --train "$TRAIN" --output "$OUTPUT"
   --deepspeed-config configs/deepspeed_zero3.json
@@ -205,12 +223,7 @@ ARGS=(
 if [[ "$METHOD" == sft || "$METHOD" == dpo ]]; then
   ARGS+=(--eval "$EVAL")
 fi
-if [[ -n "${START_MODEL:-}" ]]; then
-  ARGS+=(--model "$START_MODEL")
-  if [[ -n "${START_REVISION:-}" ]]; then
-    ARGS+=(--model-revision "$START_REVISION")
-  fi
-fi
+ARGS+=(--model "$START_MODEL" --model-revision "$START_REVISION")
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
   ARGS+=(--resume-from-checkpoint "$RESUME_FROM_CHECKPOINT")
 fi
