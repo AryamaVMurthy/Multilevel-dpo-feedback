@@ -10,6 +10,21 @@
 
 ---
 
+## Evidence-driven execution decision (2026-07-13)
+
+The raw-base audit changes the order of operations. SFT is now the required primary bootstrap stage, not an optional cleanup step: direct generation produced 0/32 fully correct responses, only 1/32 parse-valid responses, and 13/32 empty responses, while the two-pass prompt made generation worse. The 32B teacher smoke remains necessary to validate the intervention mechanism, but it no longer blocks independent no-hint bootstrap collection.
+
+Execution proceeds on two lanes until they join:
+
+1. Teacher lane: finish the 32-row 1,024-token native-thinking smoke, canonically audit every trajectory, and determine whether 1,024 is sufficient without disabling thinking or weakening JSON validation.
+2. Student lane: immediately collect a 128-example, eight-seed no-hint pilot from train, audit exact query/response yield, then scale to 2,048 examples only if output integrity and throughput pass.
+3. Join: build student-only query and response SFT targets independently. Run full-parameter SFT before large teacher collection if the gates are met; if response coverage is below 256 unique examples in the 2,048-row pool, run the explicit versioned prompt/scaffold experiment and regenerate rather than inventing targets.
+4. Promotion: no checkpoint advances based on loss alone. Each stable checkpoint must pass fixed-canary and rotating-sample generation inspection, strict answer/format/citation metrics, no leakage, and resume verification.
+
+Current implementation state: Tasks 1 and 3 are complete locally; Task 2 is running on Turing as job `13782`, with the canonical audit implementation complete locally; Tasks 4 and 5 are next code gates. No optimizer step has run.
+
+---
+
 ### Task 1: Freeze the audited design and status
 
 **Files:**
@@ -105,14 +120,15 @@
 - Home summaries: `outputs/bootstrap-v1/`
 
 **Steps:**
-1. Deterministically select 2,048 train examples and record IDs/hash without using official validation or test.
-2. Freeze eight seeds and shard the pool across available one-GPU jobs.
-3. Run a real batch-size probe for 4/8/16; promote a batch only when cardinality, per-example seed identity, strict metrics, memory, and throughput pass.
-4. Launch all bootstrap shards with Slurm dependencies and exact merge parity.
-5. Monitor raw outputs and GPU telemetry during every shard; stop on systemic empty-output, prompt leakage, or cache mismatch.
-6. Merge and build SFT data with gates `query_unique_examples >= 512` and `response_unique_examples >= 256`.
-7. Generate and manually inspect the bootstrap response report.
-8. If the response gate fails, stop and execute Task 7; otherwise skip Task 7 with an explicit `fallback_reason=prompt_experiment_not_required`.
+1. Deterministically select a 128-example train-only pilot and record IDs/hash; run eight fixed seeds on one GPU using the commit-bound bootstrap launcher.
+2. Inspect every candidate for empty query/response, prompt leakage, truncation, retrieval recall, parse validity, answer accuracy, citation support, and canonical hash integrity. Stop if artifacts or provenance fail.
+3. Run a real batch-size probe for 4/8/16 on the same pilot; promote a batch only when cardinality, per-example seed identity, strict metrics, memory, and throughput pass.
+4. Deterministically select 2,048 train examples and freeze eight seeds without using official validation or test.
+5. Shard the pool across available one-GPU jobs; each process loads one 4B model and generates multiple rollouts in parallel batches. Launch with exact commit/data/policy identities and merge parity.
+6. Monitor raw outputs and GPU telemetry during every shard; stop on systemic empty-output, prompt leakage, truncation spikes, or manifest mismatch.
+7. Merge and build SFT data with gates `query_unique_examples >= 512` and `response_unique_examples >= 256`. Report both success count and unique-example coverage so repeated seeds cannot inflate eligibility.
+8. Generate JSON/CSV/HTML response audits and manually inspect at least all successes, all failure categories, 32 deterministic canaries, and 32 seeded random candidates.
+9. If the response gate fails, stop and execute Task 7; otherwise record `prompt_experiment_not_required` as a decision outcome, not a runtime fallback.
 
 ### Task 7: Run a controlled prompt/scaffold experiment if required
 
@@ -143,11 +159,12 @@
 **Steps:**
 1. Write failing tests for task-balanced sampling, full-parameter mode, completion-only loss, checkpoint manifests, and generation-monitor promotion gates.
 2. Implement deterministic task balancing and explicit optimizer/checkpoint identities.
-3. Run 32 query plus 32 response rows until overfit; require finite decreasing loss and >=95% format/citation success on the overfit set.
+3. Run 32 query plus 32 response rows until overfit; require finite decreasing loss, >=95% exact target reproduction on the overfit set, and >=95% parse/citation success under fresh generation.
 4. Verify checkpoint save, optimizer state, RNG state, resume, and identical next-step loss within tolerance.
 5. Run one-variable learning-rate pilots on deterministic 1% bootstrap data.
-6. Monitor fixed and rotating responses at every stable checkpoint.
-7. Promote only a checkpoint improving answer and structural metrics; commit `feat: gate full SearchQA SFT training`.
+6. Monitor fixed and rotating responses at every stable checkpoint. Persist raw query, retrieved evidence, raw answer, parsed answer, citations, error category, and checkpoint hash, then compare against raw base and the previous checkpoint.
+7. Stop immediately on repetitive output, empty-output growth, prompt leakage, answer-copy artifacts, fabricated source IDs, non-finite loss, or a structural-metric regression beyond the frozen tolerance.
+8. Promote only a checkpoint improving answer and structural metrics; commit `feat: gate full SearchQA SFT training`.
 
 ### Task 9: Correct and run 4-vs-8 GPU scaling probes
 

@@ -1,9 +1,56 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+import hashlib
+import heapq
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from text_feedback_dpo.trajectories import _structured_hash, validate_active_artifact
+
+
+class _ReverseSelectionKey:
+    __slots__ = ("value",)
+
+    def __init__(self, value: tuple[int, str]) -> None:
+        self.value = value
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, _ReverseSelectionKey):
+            return NotImplemented
+        return self.value > other.value
+
+
+def select_bootstrap_pool(
+    examples: Iterable[Mapping[str, object]],
+    *,
+    count: int,
+    seed: int,
+) -> list[dict[str, object]]:
+    """Select the lowest stable ID hashes while retaining only ``count`` large rows."""
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise ValueError("bootstrap pool count must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("bootstrap pool seed must be a nonnegative integer")
+    heap: list[tuple[_ReverseSelectionKey, dict[str, object]]] = []
+    seen: set[str] = set()
+    total = 0
+    for row in examples:
+        if not isinstance(row, Mapping):
+            raise ValueError(f"bootstrap pool row {total} must be a mapping")
+        example_id = row.get("id")
+        if not isinstance(example_id, str) or not example_id or example_id in seen:
+            raise ValueError(f"bootstrap pool has invalid or duplicate id at row {total}: {example_id!r}")
+        seen.add(example_id)
+        total += 1
+        score = int.from_bytes(hashlib.sha256(f"{seed}|{example_id}".encode()).digest(), "big")
+        entry = (_ReverseSelectionKey((score, example_id)), dict(row))
+        if len(heap) < count:
+            heapq.heappush(heap, entry)
+        elif entry[0].value < heap[0][0].value:
+            heapq.heapreplace(heap, entry)
+    if total < count:
+        raise ValueError(f"requested {count} bootstrap examples but input contains only {total}")
+    return [row for _key, row in sorted(heap, key=lambda item: item[0].value)]
 
 
 def _validate_inputs(examples: Sequence[Mapping[str, object]], seeds: Sequence[int]) -> list[str]:

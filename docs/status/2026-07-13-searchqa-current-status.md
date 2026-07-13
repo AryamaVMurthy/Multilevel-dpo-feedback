@@ -2,15 +2,15 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `909d9f319d4ec1d2ef0ae968fafd774b6e8e6da3`
+**Last observed remote commit:** `1b9fb767291498ced2080b903e62d3d18cd126e1`
 
-**Verified teacher-budget fix commit:** `d9e909e` (pending deployment at this snapshot)
+**Current local implementation commit:** `c52962c7d858e8e54b21527df56fe8d0319eebe5`
 
 ## Executive status
 
 The fixed-retrieval SearchQA pipeline, strict cited-response evaluator, batched generation path, minimal-hint trajectory code, student-only SFT/DPO data gates, Turing launch contracts, and hardware probes exist and pass the local test suite. The pinned Qwen3-4B-Base student and Qwen3-32B 4-bit teacher both fit their assigned A100-40GB GPUs.
 
-The raw student is not ready for training-data collection at scale. On the audited 32-row validation preflight, neither direct nor private two-pass generation passed the structural gate, and no rollout was a fully correct, supported, protocol-valid response. No SFT, DPO, GRPO, or DAPO optimizer step has run.
+The raw student is not ready for preference-data collection at scale. On the audited 32-row validation preflight, neither direct nor private two-pass generation passed the structural gate, and no rollout was a fully correct, supported, protocol-valid response. The verified no-hint bootstrap collector and trajectory-audit tooling now exist locally and pass the full test suite, but have not yet been deployed because the commit-bound teacher smoke is still active on the older remote checkout. No SFT, DPO, GRPO, or DAPO optimizer step has run.
 
 ## Dataset state
 
@@ -120,8 +120,19 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - Job `13776` confirmed the unbounded prompt was gone, then exposed a separate valid base-model state before teacher inference: an empty/invalid student query produced zero retrieved records, and the compact-record validator rejected the empty list. Empty retrieval is now explicitly accepted only when deterministic diagnostics identify `query/retrieval` as the repair region. No fake source is inserted; non-query repair regions still reject empty retrieval.
 - Job `13778` reached real 32B teacher generation with native thinking and no OOM, using about 27.4 GiB on the teacher GPU and about 9.9 GiB on the resident student GPU. A 96-token teacher cap ended inside an unterminated Qwen thinking block, so the strict final JSON extractor correctly rejected it. The cap was then restored to the fit-verified 512 tokens, and collection began logging every rendered teacher prompt token count plus its 4,096-token budget decision before inference.
 - Job `13780` proved all 32 rendered prompts fit with the 512-token reserve (395–1,685 prompt tokens; maximum allowed input 3,584), but at least one output still exhausted 512 tokens before closing native thinking. The next controlled cap is 1,024 tokens. Collection now logs every teacher output token count and all malformed-thinking indices without logging private reasoning text; a malformed block remains a hard failure with `fallback_reason=teacher_thinking_budget_exhausted`.
+- Job `13782` is the active 1,024-token controlled smoke at remote commit `1b9fb76`. It allocated two A100-40GB GPUs, loaded the Qwen3-32B NF4 teacher on GPU 0 and Qwen3-4B-Base student on GPU 1, and reported all 32 first-round teacher prompts within budget: 395–1,685 input tokens against a 3,072-token input allowance. At the latest observation (20:51 IST), the job remained in native teacher generation with no OOM, parser failure, or fallback and had not yet emitted `teacher_output_contract`.
+- Local commit `3bb0267` adds a canonical trajectory auditor producing JSON, JSONL, CSV, and HTML with exact question/gold/query/retrieval/response/hint/retry/sibling/eligibility evidence. Runtime latency and per-row teacher token counts remain explicit unavailable fields when older logs do not contain correlatable telemetry; they are never estimated.
+- Local commit `c52962c` adds batched multi-seed no-hint bootstrap collection and a one-GPU Turing launcher. The model is loaded once, each seed is generated across the active example batch, every artifact is canonically revalidated, and duplicate/tampered/incomplete output fails explicitly.
 - Because the audited base set has zero fully correct continuations, the existing SFT builder would currently produce zero rows for this sample.
 - No optimizer step has run for SFT, DPO, GRPO, or DAPO.
+
+## Verification state
+
+- Local tests: 289 passed, 14 upstream deprecation warnings, 171 subtests passed.
+- Ruff: passed.
+- Python compile checks: passed.
+- All Slurm shell launchers: `bash -n` passed.
+- Git whitespace checks: passed.
 
 ## Planning conclusions from the logs
 

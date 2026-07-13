@@ -3,7 +3,11 @@ import unittest
 from pathlib import Path
 
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
-from text_feedback_dpo.bootstrap import collect_bootstrap_rollouts, validate_bootstrap_rows
+from text_feedback_dpo.bootstrap import (
+    collect_bootstrap_rollouts,
+    select_bootstrap_pool,
+    validate_bootstrap_rows,
+)
 from text_feedback_dpo.cli import build_parser
 from text_feedback_dpo.runtime import GeneratedText
 
@@ -33,6 +37,15 @@ def _artifact(example: dict, *, policy_hash="policy-v1") -> dict:
 
 
 class BootstrapRolloutsTest(unittest.TestCase):
+    def test_pool_selection_is_exact_deterministic_and_input_order_independent(self):
+        examples = [_example(f"q{index}") for index in range(20)]
+        selected = select_bootstrap_pool(examples, count=7, seed=20260713)
+        reversed_selected = select_bootstrap_pool(reversed(examples), count=7, seed=20260713)
+        self.assertEqual([row["id"] for row in selected], [row["id"] for row in reversed_selected])
+        self.assertEqual(len(selected), 7)
+        with self.assertRaisesRegex(ValueError, "requested 21.*only 20"):
+            select_bootstrap_pool(examples, count=21, seed=20260713)
+
     def test_turing_launcher_is_single_gpu_commit_and_hash_bound(self):
         script = (Path(__file__).parents[1] / "scripts" / "turing_bootstrap_rollouts.sh").read_text()
         self.assertIn("#SBATCH --gres=gpu:1", script)
