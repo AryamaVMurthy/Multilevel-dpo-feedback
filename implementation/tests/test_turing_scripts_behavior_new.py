@@ -748,6 +748,18 @@ def test_prompt_preflight_and_collection_contracts_are_explicit():
     assert "uuid" in collection
 
 
+def test_generation_baseline_refresh_is_a_tracked_fail_fast_slurm_entrypoint():
+    script_path = SCRIPTS / "turing_generation_baseline.sh"
+    assert script_path.exists()
+    script = script_path.read_text(encoding="utf-8")
+    assert "set -euo pipefail" in script
+    assert " benchmark " in script
+    assert " freeze-decision " in script
+    assert "--purpose generation" in script
+    assert "--commit-hash \"$(git rev-parse HEAD)\"" in script
+    assert "fallback_reason" in script
+
+
 def test_collection_rejects_non_sha_policy_hash_before_allocation_checks(tmp_path: Path):
     required = {
         "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "DATA": str(tmp_path / "data.jsonl"),
