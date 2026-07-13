@@ -72,6 +72,8 @@ def build_cited_response_prompt(
         "Answer: <nonempty concise answer>",
         "Reasoning: <nonempty concise reasoning with bracket citations such as [S001]>",
         "Sources: S001, S003",
+        "Answer must contain at most 16 normalized words.",
+        "Reasoning must contain at most 96 words.",
         "Use concise reasoning, cite every reasoning claim, and list each citation once in first-appearance order.",
         "Do not use XML, JSON, code fences, or URLs. Never reproduce URLs or source titles in your response.",
         "",
@@ -82,7 +84,7 @@ def build_cited_response_prompt(
     sections.extend(["", f"Question: {_question(example)}"])
     if hints:
         sections.extend(["", "Hints:", *(f"- {str(hint).strip()}" for hint in hints)])
-    sections.extend(["", "Answer:"])
+    sections.extend(["", "Response:"])
     return "\n".join(sections)
 
 

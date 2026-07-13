@@ -7,6 +7,7 @@ from text_feedback_dpo.prompts import (
     build_student_prompt,
 )
 from text_feedback_dpo.responses import (
+    CitedResponse,
     CitedResponseFormatError,
     parse_cited_response,
     render_cited_response,
@@ -47,6 +48,23 @@ class CitedResponseParserTest(unittest.TestCase):
         ]
         for output in bad_outputs:
             with self.subTest(output=output), self.assertRaises(CitedResponseFormatError):
+                parse_cited_response(output, SOURCES)
+
+    def test_rejects_residual_brackets_after_valid_citations_are_removed(self):
+        outputs = [
+            "Answer: Ada [unexpected]\nReasoning: claim [S001]\nSources: S001",
+            "Answer: Ada\nReasoning: claim [S001] and [unexpected]\nSources: S001",
+            "Answer: Ada\nReasoning: claim [S001]\nSources: S001 [unexpected]",
+        ]
+        for output in outputs:
+            with self.subTest(output=output), self.assertRaisesRegex(CitedResponseFormatError, "bracket|markup"):
+                parse_cited_response(output, SOURCES)
+
+    def test_rejects_scheme_mailto_www_and_bare_domain_urls(self):
+        urls = ("foo://bar", "mailto:person@example.com", "www.example.com", "example.com", "docs.example.co.uk/path")
+        for url in urls:
+            output = f"Answer: Ada\nReasoning: claim [S001] see {url}\nSources: S001"
+            with self.subTest(url=url), self.assertRaisesRegex(CitedResponseFormatError, "URL"):
                 parse_cited_response(output, SOURCES)
 
     def test_rejects_length_limits_and_missing_citations(self):
@@ -97,6 +115,16 @@ class CitedResponseRenderingTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             render_cited_response(parsed, missing_url)
 
+    def test_renderer_revalidates_manually_constructed_cited_response(self):
+        invalid_responses = (
+            CitedResponse("", "Source says Ada [S001].", ("S001",)),
+            CitedResponse("Ada", "Source says Ada.", ("S001",)),
+            CitedResponse("Ada", "Source says Ada [S001].", ("S003",)),
+        )
+        for response in invalid_responses:
+            with self.subTest(response=response), self.assertRaises(CitedResponseFormatError):
+                render_cited_response(response, SOURCES)
+
 
 class CitedResponseScoringTest(unittest.TestCase):
     def test_scores_answer_and_citation_support_metrics(self):
@@ -111,11 +139,13 @@ class CitedResponseScoringTest(unittest.TestCase):
         self.assertIsNone(result["error_code"])
         self.assertEqual(result["exact_match"], 1.0)
         self.assertEqual(result["f1"], 1.0)
+        self.assertTrue(result["answer_correct"])
         self.assertEqual(result["citation_count"], 2)
         self.assertEqual(result["citation_precision"], 0.5)
         self.assertEqual(result["citation_recall"], 1.0)
         self.assertEqual(result["cited_answer_support"], 1.0)
         self.assertEqual(result["unsupported_source_rate"], 0.5)
+        self.assertTrue(result["correct"])
         self.assertEqual(result["answer_words"], 2)
         self.assertEqual(result["reasoning_words"], 11)
 
@@ -129,7 +159,21 @@ class CitedResponseScoringTest(unittest.TestCase):
         self.assertEqual(result["error_code"], "missing_citation")
         self.assertEqual(result["exact_match"], 1.0)
         self.assertEqual(result["f1"], 1.0)
+        self.assertTrue(result["answer_correct"])
+        self.assertFalse(result["correct"])
         self.assertEqual(result["citation_count"], 0)
+
+    def test_correct_requires_parse_valid_exact_answer_and_cited_support(self):
+        unsupported = score_cited_response(
+            "Answer: Ada Lovelace\nReasoning: History supports the context [S003].\nSources: S003",
+            "Ada Lovelace",
+            SOURCES,
+        )
+        self.assertTrue(unsupported["parse_valid"])
+        self.assertTrue(unsupported["answer_correct"])
+        self.assertEqual(unsupported["exact_match"], 1.0)
+        self.assertFalse(unsupported["cited_answer_support"])
+        self.assertFalse(unsupported["correct"])
 
     def test_malformed_label_order_does_not_extract_an_answer_for_em(self):
         result = score_cited_response(
@@ -174,6 +218,8 @@ class CitedPromptTest(unittest.TestCase):
         self.assertIn("Ada Lovelace wrote the first algorithm.", prompt)
         self.assertIn("Never reproduce URLs", prompt)
         self.assertIn("exactly three nonblank lines", prompt)
+        self.assertIn("at most 16 normalized words", prompt)
+        self.assertIn("at most 96 words", prompt)
         self.assertIn("Answer:", prompt)
         self.assertIn("Reasoning:", prompt)
         self.assertIn("Sources:", prompt)
@@ -181,6 +227,17 @@ class CitedPromptTest(unittest.TestCase):
         self.assertNotIn("gold_answer", prompt)
         self.assertNotIn("<response>", prompt)
         self.assertNotIn("{\"answer\"", prompt)
+
+    def test_cited_response_prompt_ends_with_response_and_accepts_full_label_completion(self):
+        prompt = build_cited_response_prompt(
+            {"question": "Who wrote the first algorithm?"},
+            SOURCES,
+            [],
+        )
+        self.assertTrue(prompt.endswith("Response:"))
+        completion = "Answer: Ada Lovelace\nReasoning: The source names Ada Lovelace [S001].\nSources: S001"
+        parsed = parse_cited_response(completion, SOURCES)
+        self.assertEqual(parsed.answer, "Ada Lovelace")
 
 
 if __name__ == "__main__":

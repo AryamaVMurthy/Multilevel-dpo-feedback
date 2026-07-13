@@ -81,7 +81,8 @@ def score_cited_response(text: str, gold_answer: str, retrieved_sources: list[di
     result = {
         "parse_valid": False,
         "error_code": None,
-        "correct": bool(answer_normalized and answer_normalized == normalized_gold),
+        "answer_correct": bool(answer_normalized and answer_normalized == normalized_gold),
+        "correct": False,
         "exact_match": float(answer_normalized == normalized_gold),
         "f1": _f1(answer, gold_answer),
         "citation_count": 0,
@@ -115,4 +116,5 @@ def score_cited_response(text: str, gold_answer: str, retrieved_sources: list[di
             "answer": parsed.answer,
         }
     )
+    result["correct"] = bool(result["answer_correct"] and result["cited_answer_support"])
     return result

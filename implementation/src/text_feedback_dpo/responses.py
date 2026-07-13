@@ -10,7 +10,14 @@ from text_feedback_dpo.scoring import normalize_answer
 
 _SOURCE_ID_PATTERN = re.compile(r"S\d{3}\Z")
 _CITATION_PATTERN = re.compile(r"\[(S\d{3})\]")
-_URL_PATTERN = re.compile(r"(?i)(?:https?://|www\.)\S+")
+_URL_PATTERN = re.compile(
+    r"(?ix)(?:"
+    r"\b[a-z][a-z0-9+.-]*://\S*|"
+    r"\bmailto:\S+|"
+    r"\bwww\.\S+|"
+    r"(?<![\w@])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?"
+    r")"
+)
 _XML_PATTERN = re.compile(r"<[^>]*>")
 
 
@@ -98,6 +105,9 @@ def parse_cited_response(text: str, retrieved_sources: Sequence[Mapping[str, Any
         raise _format_error("empty_answer", "Answer must be nonempty")
     if not reasoning:
         raise _format_error("empty_reasoning", "Reasoning must be nonempty")
+    reasoning_without_citations = _CITATION_PATTERN.sub("", reasoning)
+    if any(bracket in answer + reasoning_without_citations + source_text for bracket in ("[", "]")):
+        raise _format_error("markup_forbidden", "student response must not contain unsupported bracket markup")
 
     answer_words = normalize_answer(answer).split()
     if not answer_words:
@@ -134,8 +144,25 @@ def render_cited_response(
 ) -> str:
     """Render model citations using canonical retrieved title and URL metadata."""
     source_records = validate_retrieved_sources(retrieved_sources)
-    parsed = parse_cited_response(response, source_records) if isinstance(response, str) else response
-    if not isinstance(parsed, CitedResponse):
+    if isinstance(response, str):
+        parsed = parse_cited_response(response, source_records)
+    elif isinstance(response, CitedResponse):
+        if (
+            not isinstance(response.answer, str)
+            or not isinstance(response.reasoning, str)
+            or not isinstance(response.source_ids, tuple)
+            or not all(isinstance(source_id, str) for source_id in response.source_ids)
+        ):
+            raise CitedResponseFormatError("invalid_response_object", "CitedResponse fields have invalid types")
+        serialized = "\n".join(
+            (
+                f"Answer: {response.answer}",
+                f"Reasoning: {response.reasoning}",
+                f"Sources: {', '.join(response.source_ids)}",
+            )
+        )
+        parsed = parse_cited_response(serialized, source_records)
+    else:
         raise TypeError("response must be a CitedResponse or strict response text")
     by_id = {source["source_id"]: source for source in source_records}
     rendered_sources = []
