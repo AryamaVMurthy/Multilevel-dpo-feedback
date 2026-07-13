@@ -78,7 +78,9 @@ class Task7TrainingTest(unittest.TestCase):
         evaluation = [{"id": "q::rl::response", "task": "response", "prompt": "response", "gold_answer": "Ada", "sources": [], "canonical_ranked_search_results": []}]
         with patch("text_feedback_dpo.trainers._tokenizer", return_value=Tokenizer()), patch(
             "text_feedback_dpo.trainers._load_dataset", side_effect=[train, evaluation]
-        ), patch("trl.GRPOTrainer") as trainer_class:
+        ), patch("text_feedback_dpo.trainers.require_bf16_hardware"), patch(
+            "trl.GRPOTrainer"
+        ) as trainer_class:
             run_grpo(
                 model_id="Qwen/Qwen3-4B-Base", train_path=Path("train.jsonl"), eval_path=Path("eval.jsonl"),
                 output_dir=Path("out"), config={"max_steps": 1, "model_revision": "rev"},
@@ -87,6 +89,94 @@ class Task7TrainingTest(unittest.TestCase):
         self.assertIs(kwargs["peft_config"], None)
         self.assertIs(kwargs["eval_dataset"], evaluation)
         self.assertEqual(len(kwargs["reward_funcs"]), len(REWARD_COMPONENT_WEIGHTS))
+
+    def test_all_trainer_constructors_receive_final_bf16_model_init_kwargs_and_no_peft(self):
+        import torch
+
+        from text_feedback_dpo.trainers import run_dapo, run_dpo, run_grpo, run_sft
+
+        captured = []
+
+        class Trainer:
+            def __init__(self, **kwargs):
+                captured.append(kwargs)
+
+            def train(self, **kwargs):
+                self.train_kwargs = kwargs
+
+            def save_model(self, path):
+                self.saved_path = path
+
+        sft_rows = [{"id": "s1", "prompt": "P", "completion": " C"}]
+        dpo_rows = [{"id": "d1", "prompt": "P", "chosen": " C", "rejected": " R"}]
+        persisted = [{**dpo_rows[0], "ref_chosen_logps": -1.0, "ref_rejected_logps": -2.0}]
+        rl_rows = [{
+            "id": "r1", "task": "query", "prompt": "P", "gold_answer": "Ada",
+            "sources": _example()["sources"], "canonical_ranked_search_results": [],
+            "stored_query": "Ada algorithm",
+        }]
+        common = {"max_steps": 1, "model_revision": "pinned-revision", "per_device_eval_batch_size": 4}
+
+        with patch("text_feedback_dpo.trainers.require_bf16_hardware"), patch(
+            "text_feedback_dpo.trainers._tokenizer", return_value=_Tokenizer()
+        ), patch("trl.SFTTrainer", Trainer), patch(
+            "text_feedback_dpo.trainers._load_dataset", side_effect=[sft_rows, sft_rows]
+        ):
+            run_sft(
+                model_id="Qwen/Qwen3-4B-Base", train_path=Path("sft-train.jsonl"),
+                eval_path=Path("sft-eval.jsonl"), output_dir=Path("sft-out"), config=common,
+            )
+
+        dpo_config = {
+            **common,
+            "precomputed_ref_log_probs_path": "train.refs.jsonl",
+            "precomputed_eval_ref_log_probs_path": "eval.refs.jsonl",
+            "reference_checkpoint_hash": "a" * 64,
+            "prompt_context_schema": {"schema": 1},
+        }
+        with patch("text_feedback_dpo.trainers.require_bf16_hardware"), patch(
+            "text_feedback_dpo.trainers._tokenizer", return_value=_Tokenizer()
+        ), patch("text_feedback_dpo.trainers._load_dataset", side_effect=[dpo_rows, dpo_rows]), patch(
+            "text_feedback_dpo.trainers.load_precomputed_reference_log_probs",
+            side_effect=[persisted, persisted],
+        ), patch("datasets.Dataset.from_list", side_effect=lambda rows: rows), patch("trl.DPOTrainer", Trainer):
+            run_dpo(
+                model_id="Qwen/Qwen3-4B-Base", train_path=Path("dpo-train.jsonl"),
+                eval_path=Path("dpo-eval.jsonl"), output_dir=Path("dpo-out"), config=dpo_config,
+            )
+
+        for method, runner in (("grpo", run_grpo), ("dapo", run_dapo)):
+            with patch("text_feedback_dpo.trainers.require_bf16_hardware"), patch(
+                "text_feedback_dpo.trainers._tokenizer", return_value=_Tokenizer()
+            ), patch("text_feedback_dpo.trainers._load_dataset", side_effect=[rl_rows, rl_rows]), patch(
+                "trl.GRPOTrainer", Trainer,
+            ):
+                runner(
+                    model_id="Qwen/Qwen3-4B-Base", train_path=Path(f"{method}-train.jsonl"),
+                    eval_path=Path(f"{method}-eval.jsonl"), output_dir=Path(f"{method}-out"),
+                    config={**common, "dapo_enabled": method == "dapo"},
+                )
+
+        self.assertEqual(len(captured), 4)
+        for constructor in captured:
+            model_kwargs = constructor["args"].model_init_kwargs
+            self.assertEqual(model_kwargs["dtype"], torch.bfloat16)
+            self.assertNotIn("torch_dtype", model_kwargs)
+            self.assertTrue(constructor["args"].bf16)
+            self.assertFalse(constructor["args"].fp16)
+            self.assertIsNone(constructor["peft_config"])
+
+    def test_bf16_runtime_gate_rejects_cpu_and_unsupported_cuda_without_fallback(self):
+        from text_feedback_dpo.trainers import require_bf16_hardware
+
+        with patch("torch.cuda.is_available", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "CUDA hardware"):
+                require_bf16_hardware()
+        with patch("torch.cuda.is_available", return_value=True), patch(
+            "torch.cuda.is_bf16_supported", return_value=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "does not support BF16"):
+                require_bf16_hardware()
 
     def test_rl_rows_include_query_and_response_tasks_with_dataset_context(self):
         candidate = _task7_candidate()

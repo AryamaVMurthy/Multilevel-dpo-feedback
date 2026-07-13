@@ -3,7 +3,7 @@ import json
 import unittest
 
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
-from text_feedback_dpo.dataset import SFTDataGateError, build_sft_rows_from_trajectories
+from text_feedback_dpo.dataset import SFTDataGateError, build_sft_rows, build_sft_row, build_sft_rows_from_trajectories
 from text_feedback_dpo.runtime import GeneratedText
 
 
@@ -58,6 +58,14 @@ class _Tokenizer:
 
 
 class Task7DatasetTest(unittest.TestCase):
+    def test_legacy_gold_answer_sft_paths_are_removed_unsafe_and_fail_fast(self):
+        row = {"id": "q1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada"}
+        for builder, value in ((build_sft_row, row), (build_sft_rows, [row])):
+            with self.subTest(builder=builder.__name__), self.assertRaisesRegex(
+                RuntimeError, "removed unsafe SFT path",
+            ):
+                builder(value)
+
     def test_builds_separate_student_query_and_visible_response_rows(self):
         rows, report = build_sft_rows_from_trajectories(
             [_trajectory()], examples={"q1": _example()}, tokenizer=_Tokenizer(),

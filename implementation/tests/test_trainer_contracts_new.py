@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import torch
+
 from text_feedback_dpo.trainers import _common_args, _dpo_args, _rl_args, _save_final, _sft_args, searchqa_rl_reward
 
 
@@ -21,6 +23,8 @@ class TrainerContractTest(unittest.TestCase):
             self.assertTrue((output / "final").is_dir())
     def test_common_training_args_enable_measured_ada_optimizations(self):
         args = _common_args({"max_steps": -1}, "out")
+        self.assertTrue(args["bf16"])
+        self.assertFalse(args["fp16"])
         self.assertTrue(args["tf32"])
         self.assertEqual(args["optim"], "adamw_torch_fused")
         self.assertNotIn("group_by_length", args)
@@ -29,6 +33,17 @@ class TrainerContractTest(unittest.TestCase):
         self.assertFalse(args["ddp_find_unused_parameters"])
         self.assertEqual(args["gradient_checkpointing_kwargs"], {"use_reentrant": False})
         self.assertTrue(args["include_num_input_tokens_seen"])
+
+    def test_every_method_initializes_the_model_with_real_torch_bfloat16(self):
+        config = {"max_steps": 1, "model_revision": "pinned-revision"}
+        for args in (
+            _sft_args(config, "out"),
+            _dpo_args(config, "out"),
+            _rl_args(config, "out", method="grpo"),
+            _rl_args(config, "out", method="dapo"),
+        ):
+            self.assertEqual(args["model_init_kwargs"]["dtype"], torch.bfloat16)
+            self.assertNotIn("torch_dtype", args["model_init_kwargs"])
 
     def test_sft_uses_prompt_completion_and_completion_only_loss(self):
         args = _sft_args({"max_steps": -1}, "out")

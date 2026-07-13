@@ -159,15 +159,19 @@ def attach_evidence(rows: list[dict], *, max_evidence_tokens: int, token_count) 
 
 
 def build_sft_rows(rows: list[dict]) -> list[dict]:
-    """Archival compatibility helper; no production CLI calls this path."""
-    return [build_sft_row(row) for row in rows]
+    del rows
+    raise RuntimeError(
+        "removed unsafe SFT path: gold-answer targets are forbidden; "
+        "use build_sft_rows_from_trajectories"
+    )
 
 
 def build_sft_row(row: dict) -> dict:
-    completion = str(row.get("gold_answer", "")).strip()
-    if not completion:
-        raise ValueError("SFT completion cannot be empty")
-    return {"id": row["id"], "prompt": build_student_prompt(row, []), "completion": f" {completion}"}
+    del row
+    raise RuntimeError(
+        "removed unsafe SFT path: gold-answer targets are forbidden; "
+        "use build_sft_rows_from_trajectories"
+    )
 
 
 def _structured_hash(value: object) -> str:

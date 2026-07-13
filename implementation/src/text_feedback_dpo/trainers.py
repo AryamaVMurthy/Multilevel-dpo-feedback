@@ -61,6 +61,7 @@ def _common_args(config: dict, output_dir: Path) -> dict:
         "num_train_epochs": float(config.get("epochs", 1.0)),
         "max_steps": max_steps,
         "bf16": True,
+        "fp16": False,
         "tf32": True,
         "gradient_checkpointing": bool(config.get("gradient_checkpointing", True)),
         "gradient_checkpointing_kwargs": {"use_reentrant": False},
@@ -87,11 +88,24 @@ def _common_args(config: dict, output_dir: Path) -> dict:
 
 
 def _model_init_kwargs(config: dict) -> dict:
+    import torch
+
     return {
         "revision": config.get("model_revision"),
-        "torch_dtype": "bfloat16",
+        "dtype": torch.bfloat16,
         "attn_implementation": config.get("attention_implementation", "sdpa"),
     }
+
+
+def require_bf16_hardware() -> None:
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError("PyTorch is required for BF16 full finetuning") from exc
+    if not torch.cuda.is_available():
+        raise RuntimeError("BF16 full finetuning requires CUDA hardware; float32 fallback is forbidden")
+    if not torch.cuda.is_bf16_supported():
+        raise RuntimeError("CUDA hardware does not support BF16; float32 fallback is forbidden")
 
 
 def _tokenizer(config: dict, model_id: str):
@@ -466,6 +480,7 @@ def run_sft(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
     from trl import SFTConfig, SFTTrainer
 
     build_method_config("sft", max_length=MAX_SEQUENCE_LENGTH, max_steps=config["max_steps"])
+    require_bf16_hardware()
     tokenizer = _tokenizer(config, model_id)
     train_dataset = _load_dataset(train_path)
     eval_dataset = _load_dataset(eval_path)
@@ -482,13 +497,14 @@ def run_dpo(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
     from trl import DPOConfig, DPOTrainer
 
     build_method_config("dpo", max_length=MAX_SEQUENCE_LENGTH, max_steps=config["max_steps"])
-    tokenizer = _tokenizer(config, model_id)
     artifact_paths = {
         "train": config.get("precomputed_ref_log_probs_path"),
         "eval": config.get("precomputed_eval_ref_log_probs_path"),
     }
     if not all(artifact_paths.values()):
         raise ValueError("DPO requires persisted reference-log-probability artifacts for both train and eval")
+    require_bf16_hardware()
+    tokenizer = _tokenizer(config, model_id)
     datasets = {}
     for name, source_path in (("train", train_path), ("eval", eval_path)):
         raw_rows = [dict(row) for row in _load_dataset(source_path)]
@@ -514,6 +530,7 @@ def _run_rl(*, method: str, model_id: str, train_path: Path, eval_path: Path, ou
 
     if method == "dapo" and not config.get("dapo_enabled"):
         raise ValueError("DAPO requires explicit dapo_enabled=true after the primary DPO result is frozen")
+    require_bf16_hardware()
     tokenizer = _tokenizer(config, model_id)
     args_dict = _rl_args(config, output_dir, method=method)
     train_dataset = _load_rl_dataset(train_path, tokenizer, args_dict["max_completion_length"])
