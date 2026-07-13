@@ -862,6 +862,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.runtime import (
         RuntimeErrorExplicit,
         bounded_teacher_outputs,
+        build_forbidden_token_sequences,
         generate_batch,
         generate_batch_records,
         generate_student_batch,
@@ -1020,6 +1021,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             gold_answers = kwargs.get("gold_answers")
             if not isinstance(gold_answers, list) or len(gold_answers) != len(prompts):
                 raise ValueError("teacher gold-answer validator parity mismatch")
+            forbidden_token_sequences = build_forbidden_token_sequences(teacher_tokenizer, gold_answers)
             rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
             prompt_token_counts = [
                 len(teacher_tokenizer.encode(prompt, add_special_tokens=False)) for prompt in rendered
@@ -1033,6 +1035,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 "max_new_tokens": kwargs["max_new_tokens"],
                 "max_input_tokens": max_input_tokens,
                 "max_total_tokens": 4096,
+                "forbidden_sequence_count": len(forbidden_token_sequences),
                 "budget_ok": max(prompt_token_counts) <= max_input_tokens,
             }, sort_keys=True), file=sys.stderr, flush=True)
             if max(prompt_token_counts) > max_input_tokens:
@@ -1120,6 +1123,7 @@ entity, source wording, explanation, or any other field.
                     batch_size=args.teacher_batch_size,
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                    forbidden_token_sequences=forbidden_token_sequences,
                 )
 
             def explicit_nonthinking_fallback_retry(indices):
@@ -1149,6 +1153,7 @@ entity, source wording, explanation, or any other field.
                     batch_size=args.teacher_batch_size,
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                    forbidden_token_sequences=forbidden_token_sequences,
                 )
 
             try:
@@ -1162,6 +1167,7 @@ entity, source wording, explanation, or any other field.
                         batch_size=args.teacher_batch_size,
                         max_new_tokens=max_new_tokens,
                         temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                        forbidden_token_sequences=forbidden_token_sequences,
                     ),
                     token_count=lambda text: len(
                         teacher_tokenizer.encode(text, add_special_tokens=False)

@@ -330,6 +330,66 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(model.kwargs["min_new_tokens"], 2)
         self.assertEqual(records[0].text, "10 11")
 
+    def test_generation_forwards_explicit_forbidden_token_sequences(self):
+        from text_feedback_dpo.runtime import generate_batch_records
+
+        class Encoded(dict):
+            def __init__(self):
+                input_ids = type("Ids", (), {"shape": (1, 1)})()
+                super().__init__(input_ids=input_ids, attention_mask=[[1]])
+                self.input_ids = input_ids
+
+            def to(self, _device):
+                return self
+
+        class Tokenizer:
+            pad_token_id = 0
+            eos_token_id = 2
+
+            def __call__(self, _prompts, **_kwargs):
+                return Encoded()
+
+            @staticmethod
+            def decode(ids, **_kwargs):
+                return " ".join(str(item) for item in ids)
+
+        class Model:
+            device = "cpu"
+
+            def generate(self, **kwargs):
+                self.kwargs = kwargs
+                return [[99, 10, 2]]
+
+        model = Model()
+        generate_batch_records(
+            model,
+            Tokenizer(),
+            ["prompt"],
+            max_new_tokens=32,
+            temperature=0.0,
+            top_p=1.0,
+            forbidden_token_sequences=[[101], [202, 203]],
+        )
+        self.assertEqual(model.kwargs["bad_words_ids"], [[101], [202, 203]])
+
+    def test_teacher_forbidden_sequences_cover_answer_and_normalized_tokens(self):
+        from text_feedback_dpo.runtime import build_forbidden_token_sequences
+
+        class Tokenizer:
+            def encode(self, text, *, add_special_tokens):
+                self.assertions = (add_special_tokens,)
+                return {
+                    "Ada": [11], " Ada": [12], "ada": [13], " ada": [14],
+                    "Lovelace": [21, 22], " Lovelace": [23, 24],
+                    "lovelace": [25, 26], " lovelace": [27, 28],
+                }.get(text, [])
+
+        sequences = build_forbidden_token_sequences(Tokenizer(), ["Ada Lovelace"])
+        self.assertIn([11], sequences)
+        self.assertIn([12], sequences)
+        self.assertIn([21, 22], sequences)
+        self.assertIn([23, 24], sequences)
+
     def test_generation_rejects_minimum_above_maximum(self):
         from text_feedback_dpo.runtime import generate_batch_records
 

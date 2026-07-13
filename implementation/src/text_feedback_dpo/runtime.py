@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import random
+import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -28,6 +30,53 @@ class StudentGeneration:
 class GeneratedText:
     text: str
     truncated: bool
+
+
+def build_forbidden_token_sequences(tokenizer, answers: list[str]) -> list[list[int]]:
+    """Build deterministic tokenizer sequences for answer-leak prevention.
+
+    The list includes each answer and each meaningful normalized answer token,
+    with and without a leading space, because subword tokenizers encode those
+    contexts differently.  It is used as an explicit generation constraint;
+    post-hoc leakage validation remains mandatory.
+    """
+    if not isinstance(answers, list) or not answers or any(
+        not isinstance(answer, str) or not answer.strip() for answer in answers
+    ):
+        raise ValueError("answers must be a nonempty list of nonempty strings")
+    variants: list[str] = []
+    seen_variants: set[str] = set()
+    for answer in answers:
+        normalized_answer = unicodedata.normalize("NFKC", answer)
+        normalized = normalized_answer.casefold()
+        candidates = [answer, normalized_answer, normalized]
+        candidates.extend(re.findall(r"[\w]+", normalized_answer, flags=re.UNICODE))
+        candidates.extend(re.findall(r"[\w]+", normalized, flags=re.UNICODE))
+        for candidate in candidates:
+            for variant in (candidate, f" {candidate}"):
+                if variant and variant not in seen_variants:
+                    seen_variants.add(variant)
+                    variants.append(variant)
+    sequences: list[list[int]] = []
+    seen_sequences: set[tuple[int, ...]] = set()
+    for variant in variants:
+        try:
+            encoded = tokenizer.encode(variant, add_special_tokens=False)
+        except Exception as exc:
+            raise RuntimeErrorExplicit(
+                "teacher answer-leak guard failed to tokenize a forbidden sequence"
+            ) from exc
+        if not isinstance(encoded, list) or not encoded or any(
+            isinstance(token, bool) or not isinstance(token, int) or token < 0 for token in encoded
+        ):
+            continue
+        key = tuple(encoded)
+        if key not in seen_sequences:
+            seen_sequences.add(key)
+            sequences.append(encoded)
+    if not sequences:
+        raise RuntimeErrorExplicit("teacher answer-leak guard produced no token sequences")
+    return sequences
 
 
 def bounded_teacher_outputs(
@@ -406,6 +455,7 @@ def generate_batch_records(
     min_new_tokens: int = 0,
     temperature: float,
     top_p: float,
+    forbidden_token_sequences: list[list[int]] | None = None,
     context_budget: int = TOTAL_CONTEXT_TOKENS,
 ) -> list[GeneratedText]:
     if not prompts:
@@ -416,6 +466,14 @@ def generate_batch_records(
         raise ValueError("max_new_tokens must be between 1 and 4096")
     if min_new_tokens < 0 or min_new_tokens > max_new_tokens:
         raise ValueError("min_new_tokens must be between 0 and max_new_tokens")
+    if forbidden_token_sequences is not None:
+        if any(
+            not isinstance(sequence, list)
+            or not sequence
+            or any(isinstance(token, bool) or not isinstance(token, int) or token < 0 for token in sequence)
+            for sequence in forbidden_token_sequences
+        ):
+            raise ValueError("forbidden_token_sequences must contain nonempty nonnegative integer lists")
     max_input_tokens = TOTAL_CONTEXT_TOKENS - max_new_tokens
     if max_input_tokens <= 0:
         raise ValueError("max_new_tokens leaves no room for an input within the 4096-token limit")
@@ -446,17 +504,29 @@ def generate_batch_records(
     }
     if temperature > 0:
         kwargs.update(temperature=temperature, top_p=top_p)
+    if forbidden_token_sequences:
+        kwargs["bad_words_ids"] = forbidden_token_sequences
     output_ids = model.generate(**encoded, **kwargs)
     input_length = encoded.input_ids.shape[1]
     return decode_generated_records(tokenizer, output_ids, input_length=input_length, max_new_tokens=max_new_tokens)
 
 
-def generate_batch(model, tokenizer, prompts: list[str], *, max_new_tokens: int, temperature: float, top_p: float) -> list[str]:
+def generate_batch(
+    model,
+    tokenizer,
+    prompts: list[str],
+    *,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    forbidden_token_sequences: list[list[int]] | None = None,
+) -> list[str]:
     return [
         record.text
         for record in generate_batch_records(
             model, tokenizer, prompts, max_new_tokens=max_new_tokens,
             temperature=temperature, top_p=top_p,
+            forbidden_token_sequences=forbidden_token_sequences,
         )
     ]
 
