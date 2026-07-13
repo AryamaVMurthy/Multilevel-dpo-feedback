@@ -23,6 +23,7 @@ class TuringRuntimeTest(unittest.TestCase):
         text = Path("scripts/turing_generate.sh").read_text(encoding="utf-8")
         self.assertIn("--max-new-tokens 32", text)
         self.assertIn("STUDENT_THINKING_MODE", text)
+        self.assertIn('SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"', text)
         self.assertNotIn("--max-new-tokens 512", text)
 
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):

@@ -29,6 +29,7 @@ mkdir -p "$HF_HOME" logs
 ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}"
 GENERATION_BATCH_SIZE="${GENERATION_BATCH_SIZE:-16}"
 STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"
+SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
 echo "<runtime component=generation attention_implementation=\"$ATTENTION_IMPLEMENTATION\" fallback_reason=\"${ATTENTION_FALLBACK_REASON:-none}\"/>"
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
@@ -46,6 +47,6 @@ if [[ -n "$MODEL_REVISION" ]]; then
 fi
 uv run --frozen python -m text_feedback_dpo.cli generate "${GEN_ARGS[@]}" \
   --attention-implementation "$ATTENTION_IMPLEMENTATION" --batch-size "$GENERATION_BATCH_SIZE" \
-  --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens 256 \
+  --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
   --max-new-tokens 32 --temperature 0.0 --top-p 1.0 \
   --policy-hash "${POLICY_HASH:?POLICY_HASH must be supplied with --export}"
