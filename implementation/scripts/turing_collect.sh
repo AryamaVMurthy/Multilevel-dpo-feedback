@@ -34,6 +34,7 @@ mkdir -p "$HF_HOME" logs
 ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}"
 GENERATION_BATCH_SIZE="${GENERATION_BATCH_SIZE:-8}"
 STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"
+SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
 echo "<runtime component=collection attention_implementation=\"$ATTENTION_IMPLEMENTATION\" fallback_reason=\"${ATTENTION_FALLBACK_REASON:-none}\"/>"
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu \
@@ -61,7 +62,7 @@ COLLECT_ARGS=(
   --max-interventions 4
   --generation-batch-size "$GENERATION_BATCH_SIZE"
   --student-thinking-mode "$STUDENT_THINKING_MODE"
-  --scratchpad-max-new-tokens 256 --answer-max-new-tokens 32
+  --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --answer-max-new-tokens 32
   --teacher-max-new-tokens 96 --teacher-thinking
 )
 uv run --frozen python -m text_feedback_dpo.cli collect "${COLLECT_ARGS[@]}"

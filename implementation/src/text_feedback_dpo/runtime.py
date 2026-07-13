@@ -182,7 +182,7 @@ def generate_student_batch(
     if scratchpad_max_new_tokens <= 0:
         raise ValueError("scratchpad_max_new_tokens must be positive in two_pass mode")
     scratchpad_prompts = [
-        f"{prompt}\n\nPrivate scratchpad: reason from the evidence before answering. This text will not be scored."
+        f"{prompt}\n\nPrivate scratchpad: reason from the evidence before answering. Use plain prose without XML, JSON, tags, or code fences. This text will not be scored."
         for prompt in prompts
     ]
     scratchpad_records = generate(
@@ -193,7 +193,7 @@ def generate_student_batch(
         raise RuntimeErrorExplicit("student scratchpad batch cardinality mismatch")
     scratchpads = [record.text for record in scratchpad_records]
     answer_prompts = [
-        f"{prompt}\n\nPrivate scratchpad (do not repeat it):\n{scratchpad}\n\nReturn only the short answer with no explanation.\nAnswer:"
+        f"{prompt}\n\nPrivate scratchpad (do not repeat or imitate its formatting):\n{scratchpad}\n\nReturn only the short answer in plain text with no explanation. Do not use XML, JSON, tags, code fences, or labels.\nAnswer:"
         for prompt, scratchpad in zip(prompts, scratchpads, strict=True)
     ]
     response_records = generate(

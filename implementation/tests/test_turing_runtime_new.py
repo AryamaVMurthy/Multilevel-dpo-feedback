@@ -51,6 +51,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("two_pass", text)
         self.assertIn("preflight-quality", text)
         self.assertIn("select-thinking-mode", text)
+        self.assertIn('SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"', text)
 
     def test_model_preflight_actually_runs_role_specific_probe(self):
         text = Path("scripts/turing_preflight.sh").read_text(encoding="utf-8")

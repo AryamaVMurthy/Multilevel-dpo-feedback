@@ -25,13 +25,14 @@ export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1
 export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
 export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" "$OUTPUT_ROOT" logs
+SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
 nvidia-smi
 
 for mode in direct two_pass; do
   uv run --frozen python -m text_feedback_dpo.cli generate \
     --data "$DATA" --output "$OUTPUT_ROOT/$mode-predictions.jsonl" \
     --model "$MODEL" --model-revision "$MODEL_REVISION" --attention-implementation sdpa \
-    --student-thinking-mode "$mode" --scratchpad-max-new-tokens 256 --max-new-tokens 32 \
+    --student-thinking-mode "$mode" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --max-new-tokens 32 \
     --batch-size 8 --temperature 0.0 --top-p 1.0 --policy-hash "$POLICY_HASH:$mode"
   uv run --frozen python -m text_feedback_dpo.cli preflight-quality \
     --data "$DATA" --predictions "$OUTPUT_ROOT/$mode-predictions.jsonl" \

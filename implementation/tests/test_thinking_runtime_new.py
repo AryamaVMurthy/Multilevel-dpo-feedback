@@ -80,6 +80,7 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(calls[0][1]["max_new_tokens"], 128)
         self.assertEqual(calls[1][1]["max_new_tokens"], 32)
         self.assertIn("The evidence points", calls[1][0][0])
+        self.assertIn("Do not use XML", calls[1][0][0])
         self.assertEqual(results[0].response, "Ada Lovelace")
         self.assertEqual(results[0].scratchpad, "The evidence points to the algorithm's author.")
         self.assertNotIn("evidence points", results[0].response)

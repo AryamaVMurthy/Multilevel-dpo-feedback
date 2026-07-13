@@ -12,7 +12,8 @@ def build_student_prompt(example: dict, hints: list[str]) -> str:
         raise ValueError("student prompt requires non-empty evidence")
     sections = [
         "Use the evidence to answer the question.",
-        "Think through the evidence carefully, then return only the short answer with no explanation.",
+        "Think through the evidence carefully, then return only the short answer in plain text only with no explanation.",
+        "Do not use XML, JSON, tags, code fences, labels, or evidence quotations.",
         "",
         "Evidence:",
         evidence,
