@@ -1,11 +1,13 @@
 import hashlib
 import json
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import numpy as np
 import torch
 
 
@@ -36,6 +38,16 @@ def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False) -> d
             "nvidia_smi_peak_memory_mb": 1100.0,
             "power_peak_watts": 200.0,
             "temperature_peak_c": 70.0,
+        },
+        "gpu_hardware": {
+            "count": 1,
+            "devices": [{
+                "index": 0,
+                "name": "nvidia rtx 6000 ada generation",
+                "uuid": "GPU-11111111-2222-3333-4444-555555555555",
+                "total_memory_bytes": 51527024640,
+                "compute_capability": "8.9",
+            }],
         },
         "package_versions": {
             "torch": "2.13.0+cu126",
@@ -99,9 +111,14 @@ def write_realistic_checkpoint(path: Path, step: int) -> None:
         encoding="utf-8",
     )
     torch.save({"model.embed_tokens.weight": torch.ones(4, 4)}, path / "pytorch_model.bin")
-    torch.save({"state": {0: {"step": torch.tensor(step), "exp_avg": torch.ones(4)}}}, path / "optimizer.pt")
+    torch.save({
+        "state": {0: {"step": torch.tensor(step), "exp_avg": torch.ones(4), "exp_avg_sq": torch.ones(4)}},
+        "param_groups": [{"params": [0], "lr": 1e-6, "step": step}],
+    }, path / "optimizer.pt")
     torch.save({"last_epoch": step, "_step_count": step + 1}, path / "scheduler.pt")
-    torch.save({"cpu": torch.arange(16, dtype=torch.uint8)}, path / "rng_state.pth")
+    torch.save({
+        "python": random.getstate(), "numpy": np.random.get_state(), "cpu": torch.arange(16, dtype=torch.uint8),
+    }, path / "rng_state.pth")
 
 
 def write_identity_decision(path: Path, identities: dict[str, str]) -> str:
@@ -124,6 +141,7 @@ def write_smoke_manifest(tmp_path: Path, name: str, identities: dict[str, str], 
          "--config-sha256", identities["config_sha256"], "--model", identities["model"],
          "--model-revision", identities["model_revision"], "--dataset-source", identities["dataset_source"],
          "--dataset-revision", identities["dataset_revision"], "--dataset-sha256", identities["dataset_sha256"],
+         "--eval-dataset-sha256", identities.get("eval_dataset_sha256", "not-applicable"),
          "--prompt-sha256", identities["prompt_sha256"], "--retrieval-sha256", identities["retrieval_sha256"],
          "--source-schema-sha256", identities["source_schema_sha256"], "--optimization-decision-sha256", decision_sha,
          "--method", method],
@@ -353,6 +371,11 @@ def test_freeze_excludes_faster_candidate_that_launch_validator_rejects(tmp_path
         ("config", {}),
         ("identities", {}),
         ("output_token_ids", [[9, 9]]),
+        ("gpu_hardware", {}),
+        ("gpu_utilization", {
+            "sample_count": 1, "utilization_mean_percent": 0.0, "utilization_peak_percent": 1.0,
+            "nvidia_smi_peak_memory_mb": 1.0, "power_peak_watts": 1.0, "temperature_peak_c": 1.0,
+        }),
     ],
 )
 def test_freeze_rejects_incomplete_or_fake_baseline_probe_artifacts(tmp_path: Path, field: str, value):
@@ -366,7 +389,7 @@ def test_freeze_rejects_incomplete_or_fake_baseline_probe_artifacts(tmp_path: Pa
     assert json.loads(result.stderr)["fallback_reason"] == "baseline_probe_invalid"
 
 
-@pytest.mark.parametrize("mismatch", ("identities", "package_versions", "config_sha256"))
+@pytest.mark.parametrize("mismatch", ("identities", "package_versions", "config_sha256", "gpu_hardware"))
 def test_freeze_never_accepts_candidate_with_baseline_parity_mismatch(tmp_path: Path, mismatch: str):
     baseline = valid_probe_result()
     candidate = valid_probe_result(throughput=20.0)
@@ -375,7 +398,10 @@ def test_freeze_never_accepts_candidate_with_baseline_parity_mismatch(tmp_path: 
     elif mismatch == "package_versions":
         candidate["package_versions"]["torch"] = "other-version"
     else:
-        candidate["identities"]["config_sha256"] = "other-config"
+        if mismatch == "config_sha256":
+            candidate["identities"]["config_sha256"] = "other-config"
+        else:
+            candidate["gpu_hardware"]["devices"][0]["uuid"] = "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     result = freeze_probe(tmp_path, baseline, candidate)
     assert result.returncode == 0, result.stderr
     decision = json.loads((tmp_path / "decision.json").read_text(encoding="utf-8"))
@@ -485,6 +511,10 @@ def test_smoke_manifest_requires_checkpoint_lineage_and_matching_identity(tmp_pa
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert create.returncode == 0, create.stderr
+    created_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    assert created_manifest["package_versions"]["torch"]
+    assert len(created_manifest["training_metrics_lineage_sha256"]) == 64
+    assert len(created_manifest["initial_checkpoint"]["training_metrics_sha256"]) == 64
     digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
     valid = subprocess.run(
         [sys.executable, str(PROBE_RUNNER), "validate-checkpoints", "--smoke-manifest", str(manifest),
@@ -499,6 +529,54 @@ def test_smoke_manifest_requires_checkpoint_lineage_and_matching_identity(tmp_pa
     )
     assert invalid.returncode == 2
     assert json.loads(invalid.stderr)["fallback_reason"] == "smoke_identity_mismatch"
+
+
+def test_smoke_validation_rejects_package_identity_tampering(tmp_path: Path):
+    identities = {
+        "commit_hash": "commit", "config_sha256": "config", "model": "model", "model_revision": "revision",
+        "dataset_source": "source", "dataset_revision": "dataset-revision", "dataset_sha256": "dataset",
+        "prompt_sha256": "prompt", "retrieval_sha256": "retrieval", "source_schema_sha256": "schema",
+    }
+    manifest, _ = write_smoke_manifest(tmp_path, "package", identities, "decision", "dpo")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["package_versions"]["torch"] = "forged"
+    manifest.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(PROBE_RUNNER), "validate-checkpoints", "--smoke-manifest", str(manifest),
+         "--expected-sha256", hashlib.sha256(manifest.read_bytes()).hexdigest(), "--commit-hash", "commit",
+         "--config-sha256", "config", "--model", "model", "--model-revision", "revision",
+         "--dataset-source", "source", "--dataset-revision", "dataset-revision", "--dataset-sha256", "dataset",
+         "--eval-dataset-sha256", "not-applicable",
+         "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
+         "--optimization-decision-sha256", "decision", "--method", "dpo"],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] == "smoke_package_identity_mismatch"
+
+
+def test_checkpoint_gate_rejects_large_padded_arbitrary_mappings(tmp_path: Path):
+    for root, step in ((tmp_path / "checkpoint-1", 1), (tmp_path / "checkpoint-2", 2)):
+        root.mkdir()
+        (root / "trainer_state.json").write_text(
+            json.dumps({"global_step": step, "max_steps": step + 1, "log_history": [{"step": step, "loss": 1.0}]}),
+            encoding="utf-8",
+        )
+        torch.save({"model.embed_tokens.weight": "x" * 8192}, root / "pytorch_model.bin")
+        torch.save({"state": {0: {"padding": "x" * 8192}}, "param_groups": [{"params": [0]}]}, root / "optimizer.pt")
+        torch.save({"padding": "x" * 8192}, root / "scheduler.pt")
+        torch.save({"padding": "x" * 8192}, root / "rng_state.pth")
+    result = subprocess.run(
+        [sys.executable, str(PROBE_RUNNER), "create-smoke-manifest", "--initial-checkpoint", str(tmp_path / "checkpoint-1"),
+         "--resumed-checkpoint", str(tmp_path / "checkpoint-2"), "--output", str(tmp_path / "smoke.json"),
+         "--commit-hash", "commit", "--config-sha256", "config", "--model", "model", "--model-revision", "revision",
+         "--dataset-source", "source", "--dataset-revision", "dataset-revision", "--dataset-sha256", "dataset",
+         "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
+         "--optimization-decision-sha256", "decision", "--method", "dpo"],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] == "checkpoint_model_semantics_invalid"
 
 
 def test_checkpoint_gate_rejects_tiny_named_placeholders(tmp_path: Path):
@@ -560,6 +638,8 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
     sft_eval.write_text('{"id":"eval"}\n', encoding="utf-8")
     rl_data = tmp_path / "rl.jsonl"
     rl_data.write_text('{"id":"rl"}\n', encoding="utf-8")
+    rl_eval = tmp_path / "rl-eval.jsonl"
+    rl_eval.write_text('{"id":"rl-eval"}\n', encoding="utf-8")
     val_data = tmp_path / "val.jsonl"
     val_data.write_text('{"id":"val"}\n', encoding="utf-8")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -568,16 +648,18 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
               "retrieval_sha256": "retrieval", "source_schema_sha256": "schema"}
     output_root = tmp_path / "output"
     specs = {
-        "SFT_TRAIN": ("base", "base-revision", sft_train, "sft"),
-        "GRPO_TRAIN": ("rl-start", "rl-revision", rl_data, "grpo"),
-        "DAPO_TRAIN": ("rl-start", "rl-revision", rl_data, "dapo"),
-        "SFT_GENERATION": (str(output_root / "sft/final"), "sft-output-revision", val_data, None),
-        "GRPO_GENERATION": (str(output_root / "grpo/final"), "grpo-output-revision", val_data, None),
-        "DAPO_GENERATION": (str(output_root / "dapo/final"), "dapo-output-revision", val_data, None),
+        "SFT_TRAIN": ("base", "base-revision", sft_train, sft_eval, "sft"),
+        "GRPO_TRAIN": ("rl-start", "rl-revision", rl_data, rl_eval, "grpo"),
+        "DAPO_TRAIN": ("rl-start", "rl-revision", rl_data, rl_eval, "dapo"),
+        "SFT_GENERATION": (str(output_root / "sft/final"), "sft-output-revision", val_data, None, None),
+        "GRPO_GENERATION": (str(output_root / "grpo/final"), "grpo-output-revision", val_data, None, None),
+        "DAPO_GENERATION": (str(output_root / "dapo/final"), "dapo-output-revision", val_data, None, None),
     }
     env: dict[str, str] = {}
-    for name, (model, revision, data, method) in specs.items():
+    for name, (model, revision, data, eval_data, method) in specs.items():
         identities = {**common, "model": model, "model_revision": revision, "dataset_sha256": hashlib.sha256(data.read_bytes()).hexdigest()}
+        if eval_data is not None:
+            identities["eval_dataset_sha256"] = hashlib.sha256(eval_data.read_bytes()).hexdigest()
         decision = tmp_path / f"{name.lower()}-decision.json"
         decision_sha = write_identity_decision(decision, identities)
         env[f"{name}_DECISION"] = str(decision)
@@ -591,7 +673,7 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
     (fake_bin / "module").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     (fake_bin / "nvidia-smi").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     (fake_bin / "uv").write_text(
-        "#!/bin/bash\ncase \" $* \" in *\" --help \"*) echo '--dataloader-workers --per-device-train-batch-size'; exit 0;; "
+        "#!/bin/bash\ncase \" $* \" in *\" --help \"*) echo '--eval --dataloader-workers --per-device-train-batch-size'; exit 0;; "
         "*\" torch.distributed.run \"*) echo mocked-training-launch >&2; exit 91;; esac\n"
         f"if [[ \"${{1:-}}\" == run && \"${{2:-}}\" == --frozen && \"${{3:-}}\" == python && \"${{4:-}}\" == \"{PROBE_RUNNER}\" ]]; then exec \"{sys.executable}\" \"${{@:4}}\"; fi\n"
         "echo 'torch=x;transformers=x;trl=x;deepspeed=x;bitsandbytes=x'\n",
@@ -603,7 +685,7 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
         "HOME": str(tmp_path / "home"), "PATH": f"{fake_bin}:{os.environ['PATH']}", "HF_CACHE_ROOT": str(tmp_path / "hf"), "TURING_ACCOUNT": "account",
         "PROJECT_DIR": str(ROOT), "CONFIG": str(config), "BASE_MODEL": "base", "BASE_REVISION": "base-revision",
         "RL_START_MODEL": "rl-start", "RL_START_REVISION": "rl-revision", "SFT_TRAIN": str(sft_train),
-        "SFT_EVAL": str(sft_eval), "RL_DATA": str(rl_data), "VAL_DATA": str(val_data), "OUTPUT_ROOT": str(output_root),
+        "SFT_EVAL": str(sft_eval), "RL_DATA": str(rl_data), "RL_EVAL": str(rl_eval), "VAL_DATA": str(val_data), "OUTPUT_ROOT": str(output_root),
         "TRAIN_GPUS": "4", "DATASET_SOURCE": "source", "DATASET_REVISION": "dataset-revision", "PROMPT_HASH": "prompt",
         "RETRIEVAL_HASH": "retrieval", "SOURCE_SCHEMA_HASH": "schema", "POLICY_HASH": "policy", "LEARNING_RATE": "1e-6",
         "EPOCHS": "1", "SAVE_STEPS": "100", "EVAL_STEPS": "100", "SFT_OUTPUT_REVISION": "sft-output-revision",
@@ -616,3 +698,12 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
     assert result.returncode == 91, result.stderr
     assert "event=launch_contract_validated" in result.stdout
     assert "mocked-training-launch" in result.stderr
+
+
+def test_build_preferences_fails_without_explicit_canonical_data(tmp_path: Path):
+    result = run_script("turing_build_preferences.sh", {
+        "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "TRAJECTORIES": str(tmp_path / "trajectories.jsonl"),
+        "OUTPUT": str(tmp_path / "preferences.jsonl"),
+    })
+    assert result.returncode != 0
+    assert "PREFERENCE_DATA" in result.stderr

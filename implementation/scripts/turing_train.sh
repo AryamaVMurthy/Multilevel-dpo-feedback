@@ -103,6 +103,7 @@ PY
 : "${METHOD:?METHOD must be sft, dpo, grpo, or dapo}"
 : "${CONFIG:?CONFIG must be supplied with --export}"
 : "${TRAIN:?TRAIN must be supplied with --export}"
+: "${EVAL:?EVAL must be the explicit evaluation dataset for all methods}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
 : "${TRAIN_GPUS:?TRAIN_GPUS must be supplied with --export}"
 : "${EFFECTIVE_BATCH_SIZE:?EFFECTIVE_BATCH_SIZE must be supplied with --export}"
@@ -142,8 +143,7 @@ if (( EFFECTIVE_BATCH_SIZE % ALLOCATED_GPU_COUNT != 0 )); then
 fi
 
 case "$METHOD" in
-  sft|dpo) : "${EVAL:?EVAL must be supplied for $METHOD}" ;;
-  grpo|dapo) : ;;
+  sft|dpo|grpo|dapo) : ;;
   *) fail "unsupported METHOD=$METHOD" "method_validation" ;;
 esac
 
@@ -163,11 +163,13 @@ PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 CONFIG_HASH="$(hash_path "$CONFIG")"
 DATASET_HASH="$(hash_path "$TRAIN")"
+EVAL_DATASET_HASH="$(hash_path "$EVAL")"
 COMMIT_HASH="$(git rev-parse HEAD)"
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
   run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose training --output-format training-tsv \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" \
-    --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+    --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
+    --eval-dataset-sha256 "$EVAL_DATASET_HASH"
 ) || fail "frozen optimization decision validation failed" optimization_decision_invalid
 export ATTENTION_IMPLEMENTATION ATTENTION_FALLBACK_REASON
 MODEL_HASH="$(hash_value "$START_MODEL|$START_REVISION")"
@@ -207,17 +209,19 @@ log_event checkpoint_gate_started smoke_manifest="$CHECKPOINT_SMOKE_MANIFEST" fa
 run_probe_runner validate-checkpoints --smoke-manifest "$CHECKPOINT_SMOKE_MANIFEST" --expected-sha256 "$CHECKPOINT_SMOKE_MANIFEST_SHA256" \
   --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" \
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" \
+  --eval-dataset-sha256 "$EVAL_DATASET_HASH" \
   --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --method "$METHOD"
 log_event checkpoint_resume_gate_passed artifact="$CHECKPOINT_SMOKE_MANIFEST" checkpoint_gate_sha256="$CHECKPOINT_SMOKE_MANIFEST_SHA256" fallback_reason=none
 
 GRADIENT_ACCUMULATION_STEPS="$((EFFECTIVE_BATCH_SIZE / ALLOCATED_GPU_COUNT))"
 [[ "$DECISION_GRADIENT_ACCUMULATION_STEPS" == "$GRADIENT_ACCUMULATION_STEPS" ]] || fail "frozen gradient accumulation=$DECISION_GRADIENT_ACCUMULATION_STEPS differs from required=$GRADIENT_ACCUMULATION_STEPS" optimization_decision_batch_mismatch
 TRAIN_HELP="$(uv run --frozen python -m text_feedback_dpo.cli "train-$METHOD" --help)" || fail "cannot inspect Task 7 train-$METHOD CLI" task7_train_cli_help_failed
-for required_flag in --dataloader-workers --per-device-train-batch-size; do
+for required_flag in --eval --dataloader-workers --per-device-train-batch-size; do
   [[ "$TRAIN_HELP" == *"$required_flag"* ]] || fail "Task 7 train-$METHOD CLI does not expose $required_flag; cannot launch frozen worker settings" task7_training_worker_cli_missing
 done
 ARGS=(
   --config "$CONFIG" --train "$TRAIN" --output "$OUTPUT"
+  --eval "$EVAL"
   --deepspeed-config configs/deepspeed_zero3.json
   --save-steps "$SAVE_STEPS" --eval-steps "$EVAL_STEPS"
   --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"
@@ -225,9 +229,6 @@ ARGS=(
   --dataloader-workers "$DECISION_DATALOADER_WORKERS"
   --learning-rate "$LEARNING_RATE" --epochs "$EPOCHS"
 )
-if [[ "$METHOD" == sft || "$METHOD" == dpo ]]; then
-  ARGS+=(--eval "$EVAL")
-fi
 ARGS+=(--model "$START_MODEL" --model-revision "$START_REVISION")
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
   ARGS+=(--resume-from-checkpoint "$RESUME_FROM_CHECKPOINT")

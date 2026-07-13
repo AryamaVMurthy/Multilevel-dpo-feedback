@@ -13,6 +13,7 @@ set -euo pipefail
 : "${PROJECT_DIR:?PROJECT_DIR must be supplied with --export}"
 : "${TRAJECTORIES:?TRAJECTORIES must be supplied with --export}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
+: "${PREFERENCE_DATA:?PREFERENCE_DATA must be the explicit canonical dataset path}"
 
 cd "$PROJECT_DIR"
 export PATH="$HOME/.local/bin:$PATH"
@@ -22,4 +23,4 @@ export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs
 uv run --frozen python -m text_feedback_dpo.cli build-preferences \
-  --trajectories "$TRAJECTORIES" --output "$OUTPUT"
+  --trajectories "$TRAJECTORIES" --data "$PREFERENCE_DATA" --output "$OUTPUT"

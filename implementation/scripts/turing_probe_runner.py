@@ -8,6 +8,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -67,6 +68,51 @@ def package_versions() -> dict[str, str]:
     return versions
 
 
+def normalize_gpu_name(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def gpu_hardware_identity(torch: Any) -> dict[str, Any]:
+    count = torch.cuda.device_count()
+    if count <= 0:
+        reject("gpu_hardware_identity_missing", "CUDA reports no measured GPU devices")
+    visible = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
+    if visible and len(visible) != count:
+        reject("gpu_hardware_identity_mismatch", f"CUDA_VISIBLE_DEVICES has {len(visible)} entries but torch sees {count}")
+    identifiers = visible or [str(index) for index in range(count)]
+    devices: list[dict[str, Any]] = []
+    for index, identifier in enumerate(identifiers):
+        try:
+            output = subprocess.run(
+                ["nvidia-smi", f"--id={identifier}", "--query-gpu=name,uuid", "--format=csv,noheader,nounits"],
+                check=True, capture_output=True, text=True, timeout=10,
+            ).stdout.strip().splitlines()
+        except (OSError, subprocess.SubprocessError) as exc:
+            reject("gpu_hardware_identity_unavailable", f"cannot query GPU UUID for CUDA device {identifier}: {exc}")
+        if len(output) != 1:
+            reject("gpu_hardware_identity_unavailable", f"expected one nvidia-smi row for CUDA device {identifier}, got {len(output)}")
+        fields = [item.strip() for item in output[0].split(",")]
+        if len(fields) != 2 or not fields[1].startswith("GPU-"):
+            reject("gpu_hardware_identity_invalid", f"malformed nvidia-smi hardware identity for CUDA device {identifier}")
+        properties = torch.cuda.get_device_properties(index)
+        name = normalize_gpu_name(str(properties.name))
+        if normalize_gpu_name(fields[0]) != name:
+            reject("gpu_hardware_identity_mismatch", f"torch GPU name {name!r} differs from nvidia-smi {normalize_gpu_name(fields[0])!r}")
+        total_memory = int(properties.total_memory)
+        major = int(properties.major)
+        minor = int(properties.minor)
+        if total_memory <= 0 or major < 1 or minor < 0:
+            reject("gpu_hardware_identity_invalid", f"invalid CUDA properties for device {index}")
+        devices.append({
+            "index": index,
+            "name": name,
+            "uuid": fields[1],
+            "total_memory_bytes": total_memory,
+            "compute_capability": f"{major}.{minor}",
+        })
+    return {"count": count, "devices": devices}
+
+
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -113,6 +159,7 @@ def verify_identity(decision: dict[str, Any], args: argparse.Namespace) -> None:
         "prompt_sha256": args.prompt_sha256,
         "retrieval_sha256": args.retrieval_sha256,
         "source_schema_sha256": args.source_schema_sha256,
+        "eval_dataset_sha256": args.eval_dataset_sha256,
     }
     for key, value in expected.items():
         if value is not None and identities.get(key) != value:
@@ -220,18 +267,130 @@ def checkpoint_step(path: Path) -> tuple[int, Path]:
     return step, state_path
 
 
-def load_torch_state(path: Path, kind: str) -> object:
+def load_torch_state(path: Path, kind: str) -> dict[str, Any]:
     if path.stat().st_size < 64:
         reject("checkpoint_state_too_small", f"{kind} state is too small to be substantive: {path}")
     try:
         import torch
+        if kind == "RNG":
+            import numpy as np
 
-        value = torch.load(path, map_location="cpu", weights_only=True)
+            safe_types = [np._core.multiarray._reconstruct, np.ndarray, np.dtype, type(np.dtype(np.uint32))]
+            with torch.serialization.safe_globals(safe_types):
+                value = torch.load(path, map_location="cpu", weights_only=True)
+        else:
+            value = torch.load(path, map_location="cpu", weights_only=True)
     except Exception as exc:
         reject("checkpoint_state_invalid", f"cannot parse {kind} state {path}: {type(exc).__name__}: {exc}")
     if not isinstance(value, dict) or not value:
         reject("checkpoint_state_invalid", f"{kind} state must be a nonempty mapping: {path}")
     return value
+
+
+def nested_items(value: object, prefix: str = "") -> list[tuple[str, object]]:
+    items: list[tuple[str, object]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            items.extend(nested_items(child, child_prefix))
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            items.extend(nested_items(child, f"{prefix}[{index}]"))
+    else:
+        items.append((prefix, value))
+    return items
+
+
+def validate_model_mapping(value: dict[str, Any], path: Path) -> None:
+    import torch
+
+    tensors = [(key, item) for key, item in nested_items(value) if torch.is_tensor(item)]
+    parameters = [(key, item) for key, item in tensors if re.search(r"(?:^|\.)(?:weight|bias)$", key)]
+    if not parameters or not any(item.numel() >= 4 and item.element_size() * item.numel() >= 4 for _, item in parameters):
+        reject("checkpoint_model_semantics_invalid", f"model state has no expected nontrivial tensor parameter payload: {path}")
+
+
+def find_optimizer_mapping(value: object) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if isinstance(value.get("state"), dict) and isinstance(value.get("param_groups"), list):
+            return value
+        for child in value.values():
+            found = find_optimizer_mapping(child)
+            if found is not None:
+                return found
+    return None
+
+
+def validate_optimizer_mapping(value: dict[str, Any], path: Path) -> None:
+    import torch
+
+    optimizer = find_optimizer_mapping(value)
+    if optimizer is None or not optimizer["state"] or not optimizer["param_groups"]:
+        reject("checkpoint_optimizer_semantics_invalid", f"optimizer lacks nonempty state/param_groups: {path}")
+    if any(not isinstance(group, dict) or not isinstance(group.get("params"), list) or not group["params"] for group in optimizer["param_groups"]):
+        reject("checkpoint_optimizer_semantics_invalid", f"optimizer param_groups are malformed: {path}")
+    leaves = nested_items(optimizer["state"])
+    tensors = [item for _, item in leaves if torch.is_tensor(item) and item.numel() > 0]
+    numerics = [item for _, item in leaves if isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)]
+    scalar_tensors = [item for item in tensors if item.numel() == 1]
+    payload_tensors = [item for item in tensors if item.numel() > 1]
+    if not payload_tensors or not (numerics or scalar_tensors):
+        reject("checkpoint_optimizer_semantics_invalid", f"optimizer state lacks numeric progress and tensor moments: {path}")
+
+
+def find_scheduler_mapping(value: object) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if "last_epoch" in value and "_step_count" in value:
+            return value
+        for child in value.values():
+            found = find_scheduler_mapping(child)
+            if found is not None:
+                return found
+    return None
+
+
+def validate_scheduler_mapping(value: dict[str, Any], path: Path) -> None:
+    scheduler = find_scheduler_mapping(value)
+    if scheduler is None:
+        reject("checkpoint_scheduler_semantics_invalid", f"scheduler lacks last_epoch/_step_count: {path}")
+    progress = (scheduler["last_epoch"], scheduler["_step_count"])
+    if any(isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) or item < 0 for item in progress):
+        reject("checkpoint_scheduler_semantics_invalid", f"scheduler progress is invalid: {path}")
+
+
+def validate_rng_mapping(value: dict[str, Any], path: Path) -> None:
+    import torch
+
+    expected = [(key, item) for key, item in nested_items(value) if re.search(r"(?:^|\.)(?:cpu|cuda|numpy|python)(?:$|\.)", key)]
+    if not expected or not any(torch.is_tensor(item) and item.numel() >= 4 for _, item in expected):
+        reject("checkpoint_rng_semantics_invalid", f"RNG state lacks an expected nontrivial tensor state: {path}")
+
+
+def validate_trainer_state(state: object, step: int, path: Path) -> str:
+    if not isinstance(state, dict):
+        reject("trainer_state_invalid", f"trainer state must be a mapping: {path}")
+    max_steps = state.get("max_steps")
+    history = state.get("log_history")
+    if not isinstance(max_steps, int) or max_steps < step or not isinstance(history, list) or not history:
+        reject("trainer_state_invalid", f"trainer state lacks coherent max_steps/log_history lineage: {path}")
+    history_steps: list[int] = []
+    has_metric = False
+    for row in history:
+        if not isinstance(row, dict) or not isinstance(row.get("step"), int) or row["step"] <= 0 or row["step"] > step:
+            reject("trainer_state_invalid", f"trainer log_history has an incoherent step: {path}")
+        history_steps.append(row["step"])
+        for key, value in row.items():
+            if key not in {"step", "epoch"} and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                has_metric = True
+    if history_steps != sorted(history_steps) or not has_metric:
+        reject("trainer_state_invalid", f"trainer log_history lacks ordered substantive metrics: {path}")
+    metrics_identity = {
+        "global_step": step,
+        "max_steps": max_steps,
+        "epoch": state.get("epoch"),
+        "log_history": history,
+    }
+    return sha256_json(metrics_identity)
 
 
 def inspect_model_state(path: Path, files: list[Path]) -> list[str]:
@@ -258,13 +417,14 @@ def inspect_model_state(path: Path, files: list[Path]) -> list[str]:
         if model_file.stat().st_size < 64:
             reject("checkpoint_state_too_small", f"model state is too small to be substantive: {model_file}")
         if model_file.suffix in {".bin", ".pt"}:
-            load_torch_state(model_file, "model")
+            validate_model_mapping(load_torch_state(model_file, "model"), model_file)
         elif model_file.suffix == ".safetensors":
             try:
                 from safetensors import safe_open
 
                 with safe_open(model_file, framework="pt", device="cpu") as handle:
-                    if not list(handle.keys()):
+                    keys = list(handle.keys())
+                    if not keys or not any(re.search(r"(?:^|\.)(?:weight|bias)$", key) and handle.get_tensor(key).numel() >= 4 for key in keys):
                         reject("checkpoint_state_invalid", f"safetensors model contains no tensors: {model_file}")
             except GateError:
                 raise
@@ -287,21 +447,21 @@ def inspect_checkpoint(path: Path) -> dict[str, Any]:
     if not rng_files:
         reject("checkpoint_rng_state_missing", f"checkpoint has no RNG state: {path}")
     for item in optimizer_files:
-        load_torch_state(item, "optimizer")
-    load_torch_state(scheduler, "scheduler")
+        validate_optimizer_mapping(load_torch_state(item, "optimizer"), item)
+    validate_scheduler_mapping(load_torch_state(scheduler, "scheduler"), scheduler)
     for item in rng_files:
-        load_torch_state(item, "RNG")
+        validate_rng_mapping(load_torch_state(item, "RNG"), item)
     if state_path.stat().st_size < 64:
         reject("trainer_state_invalid", f"trainer state is too small to establish substantive lineage: {state_path}")
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    if not isinstance(state.get("max_steps"), int) or state["max_steps"] < step or not isinstance(state.get("log_history"), list) or not state["log_history"]:
-        reject("trainer_state_invalid", f"trainer state lacks max_steps/log_history lineage: {state_path}")
+    training_metrics_sha256 = validate_trainer_state(state, step, state_path)
     return {
         "path": str(path.resolve()),
         "step": step,
         "tree_sha256": sha256_tree(path),
         "trainer_state_sha256": sha256_file(state_path),
         "model_files": model_files,
+        "training_metrics_sha256": training_metrics_sha256,
     }
 
 
@@ -314,6 +474,7 @@ def smoke_identities(args: argparse.Namespace) -> dict[str, str]:
         "dataset_source": args.dataset_source,
         "dataset_revision": args.dataset_revision,
         "dataset_sha256": args.dataset_sha256,
+        "eval_dataset_sha256": args.eval_dataset_sha256,
         "prompt_sha256": args.prompt_sha256,
         "retrieval_sha256": args.retrieval_sha256,
         "source_schema_sha256": args.source_schema_sha256,
@@ -334,10 +495,12 @@ def cmd_create_smoke_manifest(args: argparse.Namespace) -> None:
         "status": "passed",
         "fallback_reason": "none",
         "identities": smoke_identities(args),
+        "package_versions": package_versions(),
         "initial_checkpoint": initial,
         "resumed_checkpoint": resumed,
         "resume_from_checkpoint": initial["path"],
         "step_delta": resumed_step - initial_step,
+        "training_metrics_lineage_sha256": sha256_json([initial["training_metrics_sha256"], resumed["training_metrics_sha256"]]),
     }
     write_json(args.output, payload)
     print(json.dumps(payload, sort_keys=True))
@@ -358,12 +521,17 @@ def cmd_validate_checkpoints(args: argparse.Namespace) -> None:
     expected_identities = smoke_identities(args)
     if manifest.get("identities") != expected_identities:
         reject("smoke_identity_mismatch", "smoke manifest identities do not match the full launch")
+    if manifest.get("package_versions") != package_versions():
+        reject("smoke_package_identity_mismatch", "smoke manifest package versions differ from the validation environment")
     initial = inspect_checkpoint(Path(manifest["initial_checkpoint"]["path"]))
     resumed = inspect_checkpoint(Path(manifest["resumed_checkpoint"]["path"]))
     if initial != manifest["initial_checkpoint"] or resumed != manifest["resumed_checkpoint"]:
         reject("smoke_checkpoint_hash_mismatch", "checkpoint contents changed after smoke manifest creation")
     if manifest.get("resume_from_checkpoint") != initial["path"] or resumed["step"] <= initial["step"]:
         reject("smoke_lineage_invalid", "smoke resume lineage or step continuity is invalid")
+    expected_metrics_lineage = sha256_json([initial["training_metrics_sha256"], resumed["training_metrics_sha256"]])
+    if manifest.get("training_metrics_lineage_sha256") != expected_metrics_lineage:
+        reject("smoke_metrics_lineage_mismatch", "smoke training metrics lineage identity is invalid")
     print(json.dumps({"status": "validated", "smoke_manifest_sha256": actual_hash, "fallback_reason": "none"}, sort_keys=True))
 
 
@@ -482,6 +650,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
         if not torch.cuda.is_available():
             reject("cuda_unavailable", "measured Turing probes refuse CPU fallback")
+        base_result["gpu_hardware"] = gpu_hardware_identity(torch)
         prompts = read_probe_prompts(args.data, args.sample_size)
         tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.model_revision)
         if tokenizer.pad_token_id is None:
@@ -590,6 +759,29 @@ TELEMETRY_FIELDS = (
 )
 
 
+def gpu_hardware_error(value: object) -> str | None:
+    if not isinstance(value, dict) or not isinstance(value.get("count"), int) or value["count"] <= 0:
+        return "probe_gpu_hardware_invalid"
+    devices = value.get("devices")
+    if not isinstance(devices, list) or len(devices) != value["count"]:
+        return "probe_gpu_hardware_invalid"
+    uuids: set[str] = set()
+    for index, device in enumerate(devices):
+        if not isinstance(device, dict) or device.get("index") != index:
+            return "probe_gpu_hardware_invalid"
+        if not isinstance(device.get("name"), str) or not device["name"] or normalize_gpu_name(device["name"]) != device["name"]:
+            return "probe_gpu_hardware_invalid"
+        uuid = device.get("uuid")
+        if not isinstance(uuid, str) or not uuid.startswith("GPU-") or uuid in uuids:
+            return "probe_gpu_hardware_invalid"
+        uuids.add(uuid)
+        if not isinstance(device.get("total_memory_bytes"), int) or device["total_memory_bytes"] <= 0:
+            return "probe_gpu_hardware_invalid"
+        if not isinstance(device.get("compute_capability"), str) or re.fullmatch(r"[1-9][0-9]*\.[0-9]+", device["compute_capability"]) is None:
+            return "probe_gpu_hardware_invalid"
+    return None
+
+
 def probe_artifact_error(result: object) -> str | None:
     if not isinstance(result, dict):
         return "probe_not_object"
@@ -626,8 +818,11 @@ def probe_artifact_error(result: object) -> str | None:
             return "probe_gpu_telemetry_invalid"
         if key == "sample_count" and (not isinstance(value, int) or value <= 0):
             return "probe_gpu_telemetry_invalid"
-        if key != "sample_count" and value < 0:
+        if key != "sample_count" and value <= 0:
             return "probe_gpu_telemetry_invalid"
+    hardware_error = gpu_hardware_error(result.get("gpu_hardware"))
+    if hardware_error:
+        return hardware_error
     packages = result.get("package_versions")
     if not isinstance(packages, dict) or set(REQUIRED_PACKAGES) - packages.keys() or any(
         not isinstance(value, str) or not value for value in packages.values()
@@ -664,6 +859,8 @@ def accepted_candidate(baseline: dict[str, Any], candidate: dict[str, Any]) -> t
         return False, "identity_parity_mismatch"
     if candidate["package_versions"] != baseline["package_versions"]:
         return False, "package_parity_mismatch"
+    if candidate["gpu_hardware"] != baseline["gpu_hardware"]:
+        return False, "gpu_hardware_parity_mismatch"
     if candidate.get("output_hash") != baseline.get("output_hash"):
         return False, "output_hash_mismatch"
     if candidate.get("decoded_output_hash") != baseline.get("decoded_output_hash"):
@@ -756,6 +953,7 @@ def cmd_freeze_decision(args: argparse.Namespace) -> None:
         },
         "identities": baseline["identities"],
         "package_versions": baseline["package_versions"],
+        "gpu_hardware": baseline["gpu_hardware"],
         "baseline_result": str(args.baseline.resolve()),
         "baseline_result_sha256": sha256_file(args.baseline),
         "selected_result": str(selected_path.resolve()),
@@ -778,6 +976,7 @@ def add_identity_args(parser: argparse.ArgumentParser, *, required: bool) -> Non
     parser.add_argument("--prompt-sha256", required=required)
     parser.add_argument("--retrieval-sha256", required=required)
     parser.add_argument("--source-schema-sha256", required=required)
+    parser.add_argument("--eval-dataset-sha256")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -817,6 +1016,7 @@ def build_parser() -> argparse.ArgumentParser:
         checkpoint_parser.add_argument("--dataset-source", required=True)
         checkpoint_parser.add_argument("--dataset-revision", required=True)
         checkpoint_parser.add_argument("--dataset-sha256", required=True)
+        checkpoint_parser.add_argument("--eval-dataset-sha256")
         checkpoint_parser.add_argument("--prompt-sha256", required=True)
         checkpoint_parser.add_argument("--retrieval-sha256", required=True)
         checkpoint_parser.add_argument("--source-schema-sha256", required=True)

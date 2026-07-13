@@ -27,6 +27,12 @@ class RoundScriptTest(unittest.TestCase):
         for value in ("CONFIG_HASH", "MODEL_HASH", "DATASET_HASH", "PROMPT_HASH", "RETRIEVAL_HASH", "SOURCE_SCHEMA_HASH", "RUN_MANIFEST"):
             self.assertIn(value, text)
 
+    def test_all_turing_build_preferences_calls_require_canonical_data(self):
+        for name in ("turing_build_preferences.sh", "turing_primary_round.sh"):
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertIn("PREFERENCE_DATA", text, name)
+            self.assertIn('--data "$PREFERENCE_DATA"', text, name)
+
 
 if __name__ == "__main__":
     unittest.main()

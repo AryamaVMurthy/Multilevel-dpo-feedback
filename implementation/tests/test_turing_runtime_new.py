@@ -196,6 +196,13 @@ class TuringRuntimeTest(unittest.TestCase):
             text = Path("scripts", name).read_text(encoding="utf-8")
             self.assertNotRegex(text, re.compile(r"--nproc_per_node(?:=|\s+)2\b"), name)
 
+    def test_comparisons_requires_distinct_rl_eval_and_hashes_its_identity(self):
+        text = Path("scripts/turing_comparisons.sh").read_text(encoding="utf-8")
+        self.assertIn("RL_EVAL", text)
+        self.assertIn('hash_file "$RL_EVAL"', text)
+        self.assertIn('--eval "$eval"', text)
+        self.assertIn("eval_dataset_sha256", text)
+
     def test_new_research_path_uses_explicit_active_search_protocol(self):
         evaluate = Path("scripts/turing_evaluate.sh").read_text(encoding="utf-8")
         prompt = Path("scripts/turing_prompt_preflight.sh").read_text(encoding="utf-8")
