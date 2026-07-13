@@ -20,6 +20,32 @@ class FakeTeacherTokenizer:
 
 
 class ThinkingRuntimeTest(unittest.TestCase):
+    def test_generation_refuses_input_truncation_with_explicit_total_budget(self):
+        from text_feedback_dpo.runtime import generate_batch_records
+
+        class Encoded:
+            input_ids = type("Ids", (), {"shape": (1, 4000)})()
+
+            def to(self, _device):
+                return self
+
+        class Tokenizer:
+            pad_token_id = 0
+            eos_token_id = 2
+
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, prompts, **kwargs):
+                self.calls.append((prompts, kwargs))
+                return Encoded()
+
+        tokenizer = Tokenizer()
+        model = type("Model", (), {"device": "cpu", "generate": lambda *_args, **_kwargs: []})()
+        with self.assertRaisesRegex(RuntimeErrorExplicit, "truncation|4096"):
+            generate_batch_records(model, tokenizer, ["long prompt"], max_new_tokens=200, temperature=0.0, top_p=1.0)
+        self.assertFalse(tokenizer.calls[0][1]["truncation"])
+
     def test_generation_records_true_length_cap_truncation(self):
         class Tokenizer:
             eos_token_id = 2
@@ -86,6 +112,22 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(results[0].response, "Ada Lovelace")
         self.assertEqual(results[0].scratchpad, "The evidence points to the algorithm's author.")
         self.assertNotIn("evidence points", results[0].response)
+
+    def test_two_pass_accepts_stage_specific_scratchpad_instruction(self):
+        calls = []
+
+        def generate(_model, _tokenizer, prompts, **_kwargs):
+            calls.append(prompts)
+            return [GeneratedText("scratch", False)] if len(calls) == 1 else [GeneratedText("visible", False)]
+
+        generate_student_batch(
+            object(), object(), ["Search query:"], mode="two_pass", scratchpad_max_new_tokens=8,
+            answer_max_new_tokens=8, temperature=0.0, top_p=1.0, generation_fn=generate,
+            scratchpad_instruction="Privately formulate retrieval terms only; do not solve the question.",
+            visible_instruction="Return one search query.",
+        )
+        self.assertIn("retrieval terms only", calls[0][0])
+        self.assertIn("Return one search query", calls[1][0])
 
     def test_direct_student_has_no_private_scratchpad(self):
         def generate(_model, _tokenizer, _prompts, **_kwargs):

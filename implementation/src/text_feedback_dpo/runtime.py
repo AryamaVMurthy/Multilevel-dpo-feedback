@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+TOTAL_CONTEXT_TOKENS = 4096
+
+
 class RuntimeErrorExplicit(RuntimeError):
     """Runtime failure that must never degrade to an implicit fallback."""
 
@@ -103,15 +106,81 @@ def decode_generated_records(tokenizer, output_ids, *, input_length: int, max_ne
     return records
 
 
-def generate_batch_records(model, tokenizer, prompts: list[str], *, max_new_tokens: int, temperature: float, top_p: float) -> list[GeneratedText]:
+def _field(value: Any, name: str) -> Any:
+    if hasattr(value, name):
+        return getattr(value, name)
+    if isinstance(value, dict):
+        return value[name]
+    return None
+
+
+def _sequence_length(value: Any) -> int | None:
+    if value is None:
+        return None
+    shape = getattr(value, "shape", None)
+    if shape is not None and len(shape) >= 2:
+        return int(shape[-1])
+    if isinstance(value, list):
+        if value and isinstance(value[0], list):
+            return len(value[0])
+        return len(value)
+    return None
+
+
+def _attention_lengths(encoded: Any) -> list[int]:
+    attention = _field(encoded, "attention_mask")
+    if attention is None:
+        length = _sequence_length(_field(encoded, "input_ids"))
+        if length is None:
+            raise RuntimeErrorExplicit("tokenizer output has no inspectable input length")
+        batch_size = getattr(_field(encoded, "input_ids"), "shape", (1,))[0]
+        return [length] * int(batch_size)
+    if hasattr(attention, "sum"):
+        summed = attention.sum(dim=1)
+        if hasattr(summed, "tolist"):
+            return [int(value) for value in summed.tolist()]
+    if isinstance(attention, list):
+        return [sum(int(token) for token in row) if isinstance(row, list) else int(row) for row in attention]
+    raise RuntimeErrorExplicit("tokenizer attention mask has no inspectable input lengths")
+
+
+def generate_batch_records(
+    model,
+    tokenizer,
+    prompts: list[str],
+    *,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    context_budget: int = TOTAL_CONTEXT_TOKENS,
+) -> list[GeneratedText]:
     if not prompts:
         return []
+    if context_budget != TOTAL_CONTEXT_TOKENS:
+        raise ValueError(f"context_budget must be exactly {TOTAL_CONTEXT_TOKENS}")
     if max_new_tokens <= 0 or max_new_tokens > 4096:
         raise ValueError("max_new_tokens must be between 1 and 4096")
-    max_input_tokens = 4096 - max_new_tokens
+    max_input_tokens = TOTAL_CONTEXT_TOKENS - max_new_tokens
     if max_input_tokens <= 0:
         raise ValueError("max_new_tokens leaves no room for an input within the 4096-token limit")
-    encoded = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=max_input_tokens).to(model.device)
+    try:
+        encoded = tokenizer(prompts, return_tensors="pt", padding=True, truncation=False)
+    except Exception as exc:
+        raise RuntimeErrorExplicit(
+            "tokenizer failed while truncation was disabled; inspect prompt length and tokenizer configuration"
+        ) from exc
+    input_lengths = _attention_lengths(encoded)
+    if len(input_lengths) != len(prompts):
+        raise RuntimeErrorExplicit(
+            f"tokenizer input cardinality mismatch: expected {len(prompts)}, got {len(input_lengths)}"
+        )
+    over_budget = [index for index, length in enumerate(input_lengths) if length > max_input_tokens]
+    if over_budget:
+        raise RuntimeErrorExplicit(
+            f"input truncation refused: prompt index {over_budget[0]} has {input_lengths[over_budget[0]]} tokens, "
+            f"but only {max_input_tokens} fit within the explicit {TOTAL_CONTEXT_TOKENS}-token total budget"
+        )
+    encoded = encoded.to(model.device)
     kwargs = {"max_new_tokens": max_new_tokens, "do_sample": temperature > 0, "pad_token_id": tokenizer.pad_token_id, "eos_token_id": tokenizer.eos_token_id}
     if temperature > 0:
         kwargs.update(temperature=temperature, top_p=top_p)
@@ -166,6 +235,8 @@ def generate_student_batch(
     temperature: float,
     top_p: float,
     generation_fn: Callable[..., list[GeneratedText]] | None = None,
+    visible_instruction: str | None = None,
+    scratchpad_instruction: str | None = None,
 ) -> list[StudentGeneration]:
     if mode not in {"direct", "two_pass"}:
         raise ValueError("student thinking mode must be direct or two_pass")
@@ -181,8 +252,9 @@ def generate_student_batch(
         ]
     if scratchpad_max_new_tokens <= 0:
         raise ValueError("scratchpad_max_new_tokens must be positive in two_pass mode")
+    private_instruction = scratchpad_instruction or "reason from the evidence before answering"
     scratchpad_prompts = [
-        f"{prompt}\n\nPrivate scratchpad: reason from the evidence before answering. Use plain prose without XML, JSON, tags, or code fences. This text will not be scored."
+        f"{prompt}\n\nPrivate scratchpad: {private_instruction} Use plain prose without XML, JSON, tags, or code fences. This text will not be scored."
         for prompt in prompts
     ]
     scratchpad_records = generate(
@@ -192,8 +264,9 @@ def generate_student_batch(
     if len(scratchpad_records) != len(prompts):
         raise RuntimeErrorExplicit("student scratchpad batch cardinality mismatch")
     scratchpads = [record.text for record in scratchpad_records]
+    instruction = visible_instruction or "Return only a noun-phrase answer in plain text with no explanation, using at most 8 words. Never restate the clue; if uncertain, give the best short guess. Do not use XML, JSON, tags, code fences, or labels.\nAnswer:"
     answer_prompts = [
-        f"{prompt}\n\nPrivate scratchpad (do not repeat or imitate its formatting):\n{scratchpad}\n\nReturn only a noun-phrase answer in plain text with no explanation, using at most 8 words. Never restate the clue; if uncertain, give the best short guess. Do not use XML, JSON, tags, code fences, or labels.\nAnswer:"
+        f"{prompt}\n\nPrivate scratchpad (do not repeat or imitate its formatting):\n{scratchpad}\n\n{instruction}"
         for prompt, scratchpad in zip(prompts, scratchpads, strict=True)
     ]
     response_records = generate(

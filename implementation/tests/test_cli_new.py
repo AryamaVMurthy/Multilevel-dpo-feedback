@@ -1,4 +1,9 @@
 import unittest
+import json
+from argparse import Namespace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from text_feedback_dpo.cli import build_parser
 
@@ -29,6 +34,108 @@ class CLITest(unittest.TestCase):
         teacher_probe = parser.parse_args(["probe-model"] + self._required_args("probe-model"))
         self.assertEqual(teacher_probe.teacher_max_new_tokens, 512)
 
+    def test_generate_searchqa_is_explicit_and_has_independent_batch_defaults(self):
+        parser = build_parser()
+        parsed = parser.parse_args(["generate-searchqa", "--data", "x.jsonl", "--output", "y.jsonl", "--model", "model", "--attention-implementation", "sdpa", "--policy-hash", "p1"])
+        self.assertEqual(parsed.command, "generate-searchqa")
+        self.assertEqual(parsed.query_batch_size, 4)
+        self.assertEqual(parsed.response_batch_size, 4)
+        self.assertEqual(parsed.query_max_new_tokens, 32)
+        self.assertEqual(parsed.response_max_new_tokens, 256)
+        self.assertEqual(parsed.top_k, 8)
+        self.assertEqual(parsed.k1, 1.2)
+        self.assertEqual(parsed.b, 0.75)
+        self.assertEqual(parsed.context_budget, 4096)
+
+    def test_evaluate_and_preflight_require_explicit_protocol(self):
+        parser = build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["evaluate", "--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json"])
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["preflight-quality", "--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json", "--samples", "s.jsonl", "--split-name", "train-dev"])
+
+    def test_active_protocol_rejects_mixed_prediction_schema_and_duplicate_ids(self):
+        from text_feedback_dpo.cli import _cmd_evaluate_active_search
+
+        example = {"id": "1", "gold_answer": "Ada"}
+        with self.assertRaisesRegex(ValueError, "ranked_search_results"):
+            _cmd_evaluate_active_search(object(), {"1": example}, [{"id": "1", "response": "Ada"}])
+
+    def test_active_evaluator_aggregates_all_model_failure_categories(self):
+        from text_feedback_dpo.cli import _cmd_evaluate_active_search
+
+        ranked = [{
+            "source_id": "S001", "original_rank": 1, "retrieval_rank": 1, "title": "Response source",
+            "url": "https://example.test/response", "snippet": "response evidence", "bm25_score": 1.0,
+            "query_hash": "q", "corpus_hash": "c", "requested_top_k": 8, "effective_top_k": 1, "source_count": 1,
+        }]
+        examples = {f"{name}": {"id": name, "gold_answer": "response"} for name in ("invalid", "query-truncated", "malformed", "response-truncated")}
+        predictions = [
+            {"id": "invalid", "raw_query": "two\nlines", "ranked_search_results": [], "raw_response": None, "truncation": {"query": False, "response": False}, "error_code": "query_invalid_format"},
+            {"id": "query-truncated", "raw_query": "query", "ranked_search_results": [], "raw_response": None, "truncation": {"query": True, "response": False}, "error_code": "query_truncated"},
+            {"id": "malformed", "raw_query": "query", "ranked_search_results": ranked, "raw_response": "bad", "truncation": {"query": False, "response": False}},
+            {"id": "response-truncated", "raw_query": "query", "ranked_search_results": ranked, "raw_response": "Answer: response\nReasoning: Source [S001].\nSources: S001", "truncation": {"query": False, "response": True}},
+        ]
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "evaluation.json"
+            _cmd_evaluate_active_search(Namespace(output=output), examples, predictions)
+            summary = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(summary["query_truncation_rate"], 0.25)
+        self.assertEqual(summary["response_truncation_rate"], 0.25)
+        self.assertEqual(summary["malformed_rate"], 1.0)
+        self.assertEqual(summary["lexical_cited_answer_support_rate"], 0.0)
+
+    def test_generate_searchqa_command_writes_scored_rendered_trajectory(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = [
+                {
+                    "source_id": f"S{index:03d}",
+                    "original_rank": index,
+                    "title": f"Ada source {index}",
+                    "url": f"https://example.test/ada/{index}",
+                    "snippet": f"Ada Lovelace source evidence number {index}.",
+                }
+                for index in range(1, 9)
+            ]
+            data = root / "data.jsonl"
+            data.write_text(json.dumps({"id": "row-1", "question": "Who?", "gold_answer": "Ada Lovelace", "sources": sources}) + "\n", encoding="utf-8")
+            output = root / "predictions.jsonl"
+            args = build_parser().parse_args([
+                "generate-searchqa", "--data", str(data), "--output", str(output), "--model", "model",
+                "--attention-implementation", "sdpa", "--policy-hash", "policy-v1",
+            ])
+
+            def fake_records(_model, _tokenizer, prompts, **_kwargs):
+                if prompts[0].endswith("Search query:"):
+                    return [{"text": "Ada Lovelace author", "truncated": False}]
+                return [{"text": "Answer: Ada Lovelace\nReasoning: Source identifies Ada Lovelace [S001].\nSources: S001", "truncated": False}]
+
+            with patch("text_feedback_dpo.runtime.load_tokenizer", return_value=object()), patch("text_feedback_dpo.runtime.load_student", return_value=object()), patch("text_feedback_dpo.runtime.generate_batch_records", side_effect=fake_records):
+                args.func(args)
+
+            row = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(row["id"], "row-1")
+            self.assertEqual(row["retrieval_metrics"]["recall@8"], 1.0)
+            self.assertEqual(row["ranked_search_results"][0]["requested_top_k"], 8)
+            self.assertEqual(row["ranked_search_results"][0]["effective_top_k"], 8)
+            self.assertEqual(row["ranked_search_results"][0]["source_count"], 8)
+            self.assertTrue(row["cited_score"]["parse_valid"])
+            self.assertIn("[S001] Ada source 1 — https://example.test/ada/1", row["rendered_visible_response"])
+            self.assertFalse(row["truncation"]["query"])
+            self.assertFalse(row["truncation"]["response"])
+
+            evaluated = root / "evaluated.json"
+            evaluate_args = build_parser().parse_args([
+                "evaluate", "--data", str(data), "--predictions", str(output), "--output", str(evaluated), "--protocol", "active-search",
+            ])
+            evaluate_args.func(evaluate_args)
+            summary = json.loads(evaluated.read_text(encoding="utf-8"))
+            self.assertEqual(summary["exact_match"], 1.0)
+            self.assertEqual(summary["retrieval_recall@8"], 1.0)
+            self.assertEqual(summary["query_truncation_rate"], 0.0)
+            self.assertEqual(summary["response_truncation_rate"], 0.0)
+
     @staticmethod
     def _required_args(command):
         if command == "prepare-searchqa":
@@ -46,9 +153,9 @@ class CLITest(unittest.TestCase):
         if command == "build-sft-data":
             return ["--data", "x.jsonl", "--output", "y.jsonl"]
         if command == "evaluate":
-            return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json"]
+            return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json", "--protocol", "archival"]
         if command == "preflight-quality":
-            return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json", "--samples", "samples.jsonl", "--split-name", "train-dev"]
+            return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json", "--samples", "samples.jsonl", "--split-name", "train-dev", "--protocol", "archival"]
         if command == "select-thinking-mode":
             return ["--direct", "direct.json", "--two-pass", "two.json", "--output", "choice.json"]
         if command == "generate":

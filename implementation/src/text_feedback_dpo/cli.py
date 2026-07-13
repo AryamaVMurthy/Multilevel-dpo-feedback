@@ -29,6 +29,20 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def _require_unique_ids(rows: list[dict], *, label: str) -> list[dict]:
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        example_id = row.get("id", row.get("example_id"))
+        if not isinstance(example_id, str) or not example_id.strip() or example_id in seen:
+            raise ValueError(f"{label} rows require unique non-empty ids; invalid or duplicate id at row {index}: {example_id!r}")
+        seen.add(example_id)
+    return rows
+
+
+def read_unique_jsonl(path: Path, *, label: str) -> list[dict]:
+    return _require_unique_ids(read_jsonl(path), label=label)
+
+
 def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
@@ -132,8 +146,16 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
-    examples = {row["id"]: row for row in read_jsonl(args.data)}
-    predictions = read_jsonl(args.predictions)
+    example_rows = read_unique_jsonl(args.data, label="example")
+    examples = {row["id"]: row for row in example_rows}
+    predictions = read_unique_jsonl(args.predictions, label="prediction")
+    if set(examples) != {row.get("id", row.get("example_id")) for row in predictions}:
+        raise ValueError("prediction/example ID parity mismatch")
+    if args.protocol == "active-search":
+        _cmd_evaluate_active_search(args, examples, predictions)
+        return
+    if any("ranked_search_results" in prediction or "raw_query" in prediction for prediction in predictions):
+        raise ValueError("archival evaluation received active-search fields; choose --protocol active-search explicitly")
     results = []
     for prediction in predictions:
         example_id = prediction.get("id", prediction.get("example_id"))
@@ -149,28 +171,151 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     write_json(args.output, {"examples": len(results), "exact_match": exact, "f1": f1, "correct": sum(row["correct"] for row in results)})
 
 
+def _empty_cited_score(error_code: str, *, truncated: bool) -> dict:
+    return {
+        "parse_valid": False,
+        "error_code": error_code,
+        "exact_match": 0.0,
+        "f1": 0.0,
+        "answer_correct": False,
+        "correct": False,
+        "valid_citation_rate": 0.0,
+        "citation_coverage": 0.0,
+        "citation_precision": 0.0,
+        "citation_recall": 0.0,
+        "lexical_cited_answer_support": 0.0,
+        "unsupported_source_rate": 0.0,
+        "citation_count": 0,
+        "truncated": truncated,
+        "truncation_known": True,
+    }
+
+
+def _cmd_evaluate_active_search(args: argparse.Namespace, examples: dict[str, dict], predictions: list[dict]) -> None:
+    from text_feedback_dpo.responses import parse_cited_response, render_cited_response
+    from text_feedback_dpo.retrieval import retrieval_metrics
+    from text_feedback_dpo.scoring import score_cited_response
+
+    _require_unique_ids(predictions, label="active prediction")
+    prediction_ids = {prediction.get("id", prediction.get("example_id")) for prediction in predictions}
+    if prediction_ids != set(examples):
+        raise ValueError("active prediction/example ID parity mismatch")
+    results = []
+    for prediction in predictions:
+        example_id = prediction.get("id", prediction.get("example_id"))
+        if example_id not in examples:
+            raise ValueError(f"prediction has unknown example id: {example_id}")
+        example = examples[example_id]
+        ranked = prediction.get("ranked_search_results")
+        if not isinstance(ranked, list):
+            raise ValueError(f"active prediction {example_id} requires ranked_search_results")
+        truncation = prediction.get("truncation")
+        if not isinstance(truncation, dict) or not isinstance(truncation.get("query"), bool) or not isinstance(truncation.get("response"), bool):
+            raise ValueError(f"active prediction {example_id} requires explicit query/response truncation flags")
+        raw_response = prediction.get("raw_response")
+        if raw_response is None:
+            score = _empty_cited_score(str(prediction.get("error_code") or "missing_raw_response"), truncated=truncation["response"])
+        elif not isinstance(raw_response, str):
+            raise ValueError(f"active prediction {example_id} raw_response must be a string or null")
+        else:
+            score = score_cited_response(raw_response, example["gold_answer"], ranked, truncated=truncation["response"])
+        parsed = None
+        rendered = None
+        if truncation["response"]:
+            score = {
+                **score,
+                "parse_valid": False,
+                "correct": False,
+                "malformed_response": True,
+                "error_code": "response_truncated",
+                "lexical_cited_answer_support": 0.0,
+                "citation_precision": 0.0,
+                "citation_recall": 0.0,
+            }
+        elif score["parse_valid"]:
+            parsed_response = parse_cited_response(raw_response, ranked)
+            parsed = {"answer": parsed_response.answer, "reasoning": parsed_response.reasoning, "source_ids": list(parsed_response.source_ids)}
+            rendered = render_cited_response(parsed_response, ranked)
+        retrieval = prediction.get("retrieval_metrics")
+        if retrieval is None:
+            retrieval = retrieval_metrics(ranked, example["gold_answer"])
+        elif not isinstance(retrieval, dict) or not isinstance(retrieval.get("recall@8"), (int, float)):
+            raise ValueError(f"active prediction {example_id} requires retrieval_metrics.recall@8")
+        results.append({
+            "id": example_id,
+            "raw_query": prediction.get("raw_query"),
+            "ranked_search_results": ranked,
+            "raw_response": raw_response,
+            "parsed_response": parsed,
+            "rendered_visible_response": rendered,
+            "cited_score": score,
+            "retrieval_metrics": retrieval,
+            "truncation": truncation,
+            "error_code": score["error_code"],
+        })
+    if not results:
+        raise ValueError("active SearchQA evaluation produced zero predictions")
+    count = len(results)
+    numeric_score_fields = ("exact_match", "f1", "citation_precision", "citation_recall", "citation_coverage", "lexical_cited_answer_support", "unsupported_source_rate")
+    summary = {field: sum(float(result["cited_score"].get(field, 0.0)) for result in results) / count for field in numeric_score_fields}
+    summary.update({
+        "examples": count,
+        "valid_format_rate": sum(bool(result["cited_score"]["parse_valid"]) for result in results) / count,
+        "valid_citation_rate": sum(float(result["cited_score"].get("valid_citation_rate", 0.0)) for result in results) / count,
+        "lexical_cited_answer_support_rate": sum(float(result["cited_score"].get("lexical_cited_answer_support", 0.0)) for result in results) / count,
+        "retrieval_recall@8": sum(float(result["retrieval_metrics"]["recall@8"]) for result in results) / count,
+        "query_truncation_rate": sum(result["truncation"]["query"] for result in results) / count,
+        "response_truncation_rate": sum(result["truncation"]["response"] for result in results) / count,
+        "truncation_rate": sum(result["truncation"]["query"] or result["truncation"]["response"] for result in results) / count,
+        "malformed_rate": sum(not result["cited_score"]["parse_valid"] for result in results) / count,
+        "rendered_visible_rate": sum(result["rendered_visible_response"] is not None for result in results) / count,
+        "correct": sum(bool(result["cited_score"].get("correct")) for result in results),
+    })
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(results, args.output.with_suffix(".jsonl"))
+    write_json(args.output, summary)
+
+
 def cmd_preflight_quality(args: argparse.Namespace) -> None:
     from text_feedback_dpo.preflight import assess_preflight, select_preflight_rows, summarize_response_quality
 
     if args.split_name != "train-dev":
         raise ValueError("prompt preflight may use only the explicit train-dev split")
     examples = read_jsonl(args.data)
-    predictions = read_jsonl(args.predictions)
-    metrics = summarize_response_quality(examples, predictions)
+    predictions = read_unique_jsonl(args.predictions, label="prediction")
+    metrics = summarize_response_quality(examples, predictions, protocol=args.protocol)
     metrics["split_name"] = args.split_name
     metrics["gate"] = assess_preflight(metrics)
     selected = select_preflight_rows(examples, sample_size=args.sample_size, seed=args.seed)
     predictions_by_id = {str(row["id"]): row for row in predictions}
-    samples = [
-        {
-            "id": example["id"],
-            "question": example["question"],
-            "gold_answer": example["gold_answer"],
-            "response": predictions_by_id[str(example["id"])]["response"],
-            "truncated": predictions_by_id[str(example["id"])]["truncated"],
-        }
-        for example in selected
-    ]
+    if args.protocol == "active-search":
+        samples = [
+            {
+                "id": example["id"],
+                "question": example["question"],
+                "gold_answer": example["gold_answer"],
+                "raw_query": predictions_by_id[str(example["id"])]["raw_query"],
+                "ranked_search_results": predictions_by_id[str(example["id"])]["ranked_search_results"],
+                "raw_response": predictions_by_id[str(example["id"])]["raw_response"],
+                "parsed_response": predictions_by_id[str(example["id"])]["parsed_response"],
+                "rendered_visible_response": predictions_by_id[str(example["id"])]["rendered_visible_response"],
+                "cited_score": predictions_by_id[str(example["id"])]["cited_score"],
+                "retrieval_metrics": predictions_by_id[str(example["id"])]["retrieval_metrics"],
+                "truncation": predictions_by_id[str(example["id"])]["truncation"],
+            }
+            for example in selected
+        ]
+    else:
+        samples = [
+            {
+                "id": example["id"],
+                "question": example["question"],
+                "gold_answer": example["gold_answer"],
+                "response": predictions_by_id[str(example["id"])]["response"],
+                "truncated": predictions_by_id[str(example["id"])]["truncated"],
+            }
+            for example in selected
+        ]
     write_jsonl(samples, args.samples)
     write_json(args.output, metrics)
 
@@ -211,6 +356,95 @@ def cmd_generate(args: argparse.Namespace) -> None:
                     output["private_scratchpad_truncated"] = generation.scratchpad_truncated
                 handle.write(json.dumps(output, ensure_ascii=False) + "\n")
             handle.flush()
+
+
+def cmd_generate_searchqa(args: argparse.Namespace) -> None:
+    """Generate structured SearchQA query/search/cited-response trajectories."""
+    from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
+    from text_feedback_dpo.runtime import generate_batch_records, generate_student_batch, load_student, load_tokenizer
+
+    if args.query_batch_size <= 0 or args.response_batch_size <= 0:
+        raise ValueError("query_batch_size and response_batch_size must be positive")
+    if args.context_budget != 4096:
+        raise ValueError("active SearchQA generation requires the explicit 4096-token total context budget")
+    if args.query_max_new_tokens <= 0 or args.response_max_new_tokens <= 0:
+        raise ValueError("query and response max_new_tokens must be positive")
+    rows = read_jsonl(args.data)
+    tokenizer = load_tokenizer(args.model, revision=args.model_revision)
+    model = load_student(args.model, revision=args.model_revision, attention_implementation=args.attention_implementation, device=args.device)
+
+    def generate_stage(prompts: list[str], *, max_new_tokens: int, temperature: float, instruction: str, scratchpad_instruction: str):
+        if args.student_thinking_mode == "direct":
+            return generate_batch_records(
+                model,
+                tokenizer,
+                prompts,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=args.top_p,
+                context_budget=args.context_budget,
+            )
+        return generate_student_batch(
+            model,
+            tokenizer,
+            prompts,
+            mode="two_pass",
+            scratchpad_max_new_tokens=args.scratchpad_max_new_tokens,
+            answer_max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=args.top_p,
+            generation_fn=lambda _model, _tokenizer, batch_prompts, **kwargs: generate_batch_records(
+                model,
+                tokenizer,
+                batch_prompts,
+                context_budget=args.context_budget,
+                **kwargs,
+            ),
+            visible_instruction=instruction,
+            scratchpad_instruction=scratchpad_instruction,
+        )
+
+    results = run_fixed_retrieval_pipeline(
+        rows,
+        query_generate_batch=lambda prompts: generate_stage(
+            prompts,
+            max_new_tokens=args.query_max_new_tokens,
+            temperature=args.query_temperature,
+            instruction="Return exactly one nonempty one-line plain-text search query. Do not use XML, JSON, code fences, or labels.",
+            scratchpad_instruction="Privately identify retrieval terms and entities only; do not solve the question or draft the answer.",
+        ),
+        response_generate_batch=lambda prompts: generate_stage(
+            prompts,
+            max_new_tokens=args.response_max_new_tokens,
+            temperature=args.response_temperature,
+            instruction="Return exactly the requested three-line Answer/Reasoning/Sources response in plain text.",
+            scratchpad_instruction="Privately reason over the retrieved sources and citation order; do not emit or imitate this scratchpad.",
+        ),
+        query_batch_size=args.query_batch_size,
+        response_batch_size=args.response_batch_size,
+        top_k=args.top_k,
+        k1=args.k1,
+        b=args.b,
+        policy_hash=args.policy_hash,
+        prompt_version=args.prompt_version,
+    )
+    write_jsonl(results, args.output)
+    manifest = {
+        "command": "generate-searchqa",
+        "rows": len(results),
+        "prompt_version": args.prompt_version,
+        "response_schema_version": 1,
+        "policy_hash": args.policy_hash,
+        "retrieval": {"backend": "fixed_bm25", "top_k": args.top_k, "k1": args.k1, "b": args.b},
+        "query_batch_size": args.query_batch_size,
+        "response_batch_size": args.response_batch_size,
+        "query_max_new_tokens": args.query_max_new_tokens,
+        "response_max_new_tokens": args.response_max_new_tokens,
+        "context_budget": args.context_budget,
+        "required_files": [args.output.name],
+    }
+    write_json(args.output.with_suffix(".manifest.json"), manifest)
+    write_json(args.output.parent / "manifest.json", manifest)
 
 
 def cmd_build_preferences(args: argparse.Namespace) -> None:
@@ -368,6 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--data", required=True, type=Path)
     evaluate.add_argument("--predictions", required=True, type=Path)
     evaluate.add_argument("--output", required=True, type=Path)
+    evaluate.add_argument("--protocol", choices=("archival", "active-search"), required=True)
     evaluate.set_defaults(func=cmd_evaluate)
     preflight_quality = sub.add_parser("preflight-quality")
     preflight_quality.add_argument("--data", required=True, type=Path)
@@ -375,6 +610,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_quality.add_argument("--output", required=True, type=Path)
     preflight_quality.add_argument("--samples", required=True, type=Path)
     preflight_quality.add_argument("--split-name", required=True)
+    preflight_quality.add_argument("--protocol", choices=("archival", "active-search"), required=True)
     preflight_quality.add_argument("--sample-size", type=int, default=32)
     preflight_quality.add_argument("--seed", type=int, default=7)
     preflight_quality.set_defaults(func=cmd_preflight_quality)
@@ -397,6 +633,29 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--top-p", type=float, default=1.0)
     generate.add_argument("--policy-hash", default="unversioned-generate")
     generate.set_defaults(func=cmd_generate)
+    active_generate = sub.add_parser("generate-searchqa", help="generate active fixed-search cited-reasoning trajectories")
+    active_generate.add_argument("--data", required=True, type=Path)
+    active_generate.add_argument("--output", required=True, type=Path)
+    active_generate.add_argument("--model", required=True)
+    active_generate.add_argument("--model-revision")
+    active_generate.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
+    active_generate.add_argument("--device", default="cuda:0")
+    active_generate.add_argument("--policy-hash", required=True)
+    active_generate.add_argument("--prompt-version", default="fixed-retrieval-cited-v1")
+    active_generate.add_argument("--student-thinking-mode", choices=("direct", "two_pass"), default="direct")
+    active_generate.add_argument("--scratchpad-max-new-tokens", type=int, default=256)
+    active_generate.add_argument("--query-batch-size", type=int, default=4)
+    active_generate.add_argument("--response-batch-size", type=int, default=4)
+    active_generate.add_argument("--query-max-new-tokens", type=int, default=32)
+    active_generate.add_argument("--response-max-new-tokens", type=int, default=256)
+    active_generate.add_argument("--query-temperature", type=float, default=0.0)
+    active_generate.add_argument("--response-temperature", type=float, default=0.0)
+    active_generate.add_argument("--top-p", type=float, default=1.0)
+    active_generate.add_argument("--top-k", type=int, default=8)
+    active_generate.add_argument("--k1", type=float, default=1.2)
+    active_generate.add_argument("--b", type=float, default=0.75)
+    active_generate.add_argument("--context-budget", type=int, default=4096)
+    active_generate.set_defaults(func=cmd_generate_searchqa)
     preferences = sub.add_parser("build-preferences")
     preferences.add_argument("--trajectories", required=True, type=Path)
     preferences.add_argument("--output", required=True, type=Path)
