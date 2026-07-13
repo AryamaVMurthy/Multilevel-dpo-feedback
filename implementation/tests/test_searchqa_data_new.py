@@ -65,7 +65,7 @@ class SearchQADataTest(unittest.TestCase):
         }
         result = build_sft_rows([row])[0]
         self.assertEqual(result["id"], "train-0")
-        self.assertEqual(result["completion"], "Ada")
+        self.assertEqual(result["completion"], " Ada")
         self.assertTrue(result["prompt"].endswith("Answer:"))
         self.assertIn("Ada evidence near the answer", result["prompt"])
         self.assertNotIn("<response>", result["prompt"] + result["completion"])

@@ -93,7 +93,7 @@ def build_sft_row(row: dict) -> dict:
     completion = str(row.get("gold_answer", "")).strip()
     if not completion:
         raise ValueError("SFT completion cannot be empty")
-    return {"id": row["id"], "prompt": build_student_prompt(row, []), "completion": completion}
+    return {"id": row["id"], "prompt": build_student_prompt(row, []), "completion": f" {completion}"}
 
 
 def write_jsonl(rows: list[dict], path: Path) -> None:
