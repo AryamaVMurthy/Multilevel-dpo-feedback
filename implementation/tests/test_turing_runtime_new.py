@@ -86,6 +86,12 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("select-thinking-mode", text)
         self.assertIn("SCRATCHPAD_MAX_NEW_TOKENS", text)
 
+    def test_prompt_preflight_initializes_runtime_before_validating_frozen_decision(self):
+        text = Path("scripts/turing_prompt_preflight.sh").read_text(encoding="utf-8")
+        self.assertLess(text.index("module load u22/cuda/12.4"), text.index("validate-decision"))
+        self.assertLess(text.index('export PATH="$HOME/.local/bin:$PATH"'), text.index("validate-decision"))
+        self.assertLess(text.index('export PYTHONPATH="$PROJECT_DIR/src'), text.index("validate-decision"))
+
     def test_model_preflight_actually_runs_role_specific_probe(self):
         text = Path("scripts/turing_preflight.sh").read_text(encoding="utf-8")
         self.assertIn("MODEL_ROLE", text)

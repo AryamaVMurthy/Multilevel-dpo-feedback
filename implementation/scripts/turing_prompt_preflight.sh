@@ -53,6 +53,17 @@ ROW_COUNT="$(wc -l < "$SAMPLED_DATA" | tr -d ' ')"
 SAMPLE_SHA256="$(sha256sum "$SAMPLED_DATA" | awk '{print $1}')"
 printf '{"status":"ready","row_count":32,"data_sha256":"%s","fallback_reason":"none"}\n' "$SAMPLE_SHA256" > "$SAMPLE_MANIFEST"
 [[ "$(grep -c '"row_count":32' "$SAMPLE_MANIFEST")" == "1" ]] || fail "prompt preflight sample manifest row count is not 32" prompt_preflight_sample_manifest_invalid
+module load u22/cuda/12.4
+cd "$PROJECT_DIR"
+[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "PROJECT_DIR must contain pyproject.toml and src/text_feedback_dpo" invalid_project_root
+export PATH="$HOME/.local/bin:$PATH"
+export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
+export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
+mkdir -p "$HF_HOME" "$OUTPUT_ROOT" logs
+nvidia-smi
+
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 DATA_SHA256="$(sha256sum "$DATA" | awk '{print $1}')"
@@ -65,17 +76,6 @@ IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE 
     --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --query-temperature "$QUERY_TEMPERATURE" \
     --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
 ) || fail "frozen optimization decision validation failed" optimization_decision_invalid
-
-module load u22/cuda/12.4
-cd "$PROJECT_DIR"
-[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "PROJECT_DIR must contain pyproject.toml and src/text_feedback_dpo" invalid_project_root
-export PATH="$HOME/.local/bin:$PATH"
-export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
-export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
-mkdir -p "$HF_HOME" "$OUTPUT_ROOT" logs
-nvidia-smi
 
 for mode in direct two_pass; do
   uv run --frozen python -m text_feedback_dpo.cli generate-searchqa \
