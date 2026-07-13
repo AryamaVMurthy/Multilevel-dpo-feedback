@@ -1,6 +1,7 @@
 #!/bin/bash
-# Compare direct and private two-pass thinking on train-derived development data.
+# Compare direct and private two-pass thinking for the active-search cited-response protocol.
 #SBATCH -p u22
+#SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
@@ -27,18 +28,24 @@ export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}"
 export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" "$OUTPUT_ROOT" logs
 SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
+QUERY_BATCH_SIZE="${QUERY_BATCH_SIZE:-4}"
+RESPONSE_BATCH_SIZE="${RESPONSE_BATCH_SIZE:-4}"
+QUERY_MAX_NEW_TOKENS="${QUERY_MAX_NEW_TOKENS:-32}"
+RESPONSE_MAX_NEW_TOKENS="${RESPONSE_MAX_NEW_TOKENS:-256}"
 nvidia-smi
 
 for mode in direct two_pass; do
-  uv run --frozen python -m text_feedback_dpo.cli generate \
+  uv run --frozen python -m text_feedback_dpo.cli generate-searchqa \
     --data "$DATA" --output "$OUTPUT_ROOT/$mode-predictions.jsonl" \
     --model "$MODEL" --model-revision "$MODEL_REVISION" --attention-implementation sdpa \
-    --student-thinking-mode "$mode" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --max-new-tokens 32 \
-    --batch-size 8 --temperature 0.0 --top-p 1.0 --policy-hash "$POLICY_HASH:$mode"
+    --device cuda:0 --student-thinking-mode "$mode" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
+    --query-batch-size "$QUERY_BATCH_SIZE" --response-batch-size "$RESPONSE_BATCH_SIZE" \
+    --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" \
+    --context-budget 4096 --top-p 1.0 --top-k 8 --k1 1.2 --b 0.75 --policy-hash "$POLICY_HASH:$mode"
   uv run --frozen python -m text_feedback_dpo.cli preflight-quality \
     --data "$DATA" --predictions "$OUTPUT_ROOT/$mode-predictions.jsonl" \
     --output "$OUTPUT_ROOT/$mode-metrics.json" --samples "$OUTPUT_ROOT/$mode-samples.jsonl" \
-    --split-name train-dev --sample-size 32 --seed 7
+    --split-name train-dev --sample-size 32 --seed 7 --protocol active-search
 done
 
 uv run --frozen python -m text_feedback_dpo.cli select-thinking-mode \

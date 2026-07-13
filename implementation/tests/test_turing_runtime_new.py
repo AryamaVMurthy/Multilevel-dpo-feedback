@@ -1,10 +1,22 @@
 import unittest
+import re
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
 
 
 class TuringRuntimeTest(unittest.TestCase):
+    OWNED_SCRIPTS = (
+        "turing_prepare.sh",
+        "turing_generate.sh",
+        "turing_collect.sh",
+        "turing_train.sh",
+        "turing_preflight.sh",
+        "turing_primary_round.sh",
+        "turing_comparisons.sh",
+        "turing_finalize_report.sh",
+    )
+
     def test_primary_config_is_searchqa_4b_full_finetune_with_quantized_teacher_candidates(self):
         config = load_config(Path("configs/searchqa.yaml"))
         self.assertEqual(config["student_model"], "Qwen/Qwen3-4B-Base")
@@ -24,7 +36,13 @@ class TuringRuntimeTest(unittest.TestCase):
 
     def test_generation_is_plain_short_answer_with_explicit_thinking_mode(self):
         text = Path("scripts/turing_generate.sh").read_text(encoding="utf-8")
-        self.assertIn("--max-new-tokens 32", text)
+        self.assertIn("generate-searchqa", text)
+        self.assertNotIn("active-generate", text)
+        self.assertIn("QUERY_BATCH_SIZE", text)
+        self.assertIn("RESPONSE_BATCH_SIZE", text)
+        self.assertIn("QUERY_MAX_NEW_TOKENS", text)
+        self.assertIn("RESPONSE_MAX_NEW_TOKENS", text)
+        self.assertIn('--context-budget 4096', text)
         self.assertIn("STUDENT_THINKING_MODE", text)
         self.assertIn('SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"', text)
         self.assertNotIn("--max-new-tokens 512", text)
@@ -71,17 +89,106 @@ class TuringRuntimeTest(unittest.TestCase):
 
     def test_training_uses_configurable_multi_gpu_with_fixed_effective_batch(self):
         text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
-        self.assertIn('TRAIN_GPUS" != "2" && "$TRAIN_GPUS" != "4"', text)
+        self.assertIn('TRAIN_GPUS" != "4"', text)
+        self.assertIn("SLURM_NNODES", text)
+        self.assertIn('SLURM_NNODES" != "1"', text)
         self.assertIn("SLURM_GPUS_ON_NODE", text)
+        self.assertIn("ALLOCATED_GPU_COUNT", text)
         self.assertIn("EFFECTIVE_BATCH_SIZE", text)
         self.assertIn("GRADIENT_ACCUMULATION_STEPS", text)
         self.assertIn('--gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"', text)
-        self.assertIn('--nproc_per_node="$TRAIN_GPUS"', text)
+        self.assertIn('--nproc_per_node="$ALLOCATED_GPU_COUNT"', text)
         self.assertIn("uv run --frozen python -m torch.distributed.run", text)
         for setting in ("LEARNING_RATE", "EPOCHS", "SAVE_STEPS", "EVAL_STEPS"):
             self.assertIn(f'${{{setting}:?', text)
         self.assertIn('--learning-rate "$LEARNING_RATE"', text)
         self.assertIn('--epochs "$EPOCHS"', text)
+
+    def test_owned_scripts_have_single_node_headers_and_no_xml_status_lines(self):
+        for name in self.OWNED_SCRIPTS:
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertIn("#SBATCH --nodes=1", text, name)
+            self.assertNotRegex(text, re.compile(r"(?:echo|printf)\s+['\"]<[^\n]*>", re.MULTILINE), name)
+            self.assertNotIn("<runtime", text, name)
+            self.assertNotIn("<report", text, name)
+
+    def test_collection_is_exactly_two_gpu_single_allocation_with_deterministic_shard_identity(self):
+        text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
+        self.assertIn("#SBATCH --gres=gpu:2", text)
+        self.assertIn('SLURM_NNODES" != "1"', text)
+        self.assertIn('SLURM_NTASKS" != "1"', text)
+        self.assertIn("ALLOCATED_GPU_COUNT", text)
+        self.assertIn('ALLOCATED_GPU_COUNT" != "2"', text)
+        for value in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "MERGE_ID"):
+            self.assertIn(value, text)
+        self.assertIn("cuda:0", text)
+        self.assertIn("cuda:1", text)
+        self.assertIn("--teacher-batch-size", text)
+        self.assertIn("--student-batch-size", text)
+        self.assertIn("--teacher-max-new-tokens", text)
+        self.assertIn("--answer-max-new-tokens", text)
+        self.assertIn("--scratchpad-max-new-tokens", text)
+
+    def test_scripts_record_required_manifest_identity_and_observability(self):
+        for name in self.OWNED_SCRIPTS:
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            for field in (
+                "commit_hash",
+                "config_hash",
+                "model_hash",
+                "dataset_hash",
+                "prompt_hash",
+                "retrieval_hash",
+                "source_schema_hash",
+                "SLURM_JOB_NODELIST",
+                "GPU_TELEMETRY",
+                "artifact_paths",
+                "package_versions",
+            ):
+                self.assertIn(field, text, f"{field} missing from {name}")
+
+    def test_training_preserves_full_finetune_and_smoke_gates(self):
+        text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
+        self.assertIn("CHECKPOINT_SMOKE_COMMAND", text)
+        self.assertIn("RESUME_SMOKE_COMMAND", text)
+        self.assertIn("bf16", text.lower())
+        self.assertIn("TF32", text)
+        self.assertIn("zero3", text.lower())
+        self.assertIn("fused", text.lower())
+        self.assertIn("non-reentrant", text.lower())
+
+    def test_no_unsafe_hard_coded_two_process_training_remains(self):
+        for name in ("turing_train.sh", "turing_primary_round.sh", "turing_comparisons.sh"):
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertNotRegex(text, re.compile(r"--nproc_per_node(?:=|\s+)2\b"), name)
+
+    def test_new_research_path_uses_explicit_active_search_protocol(self):
+        evaluate = Path("scripts/turing_evaluate.sh").read_text(encoding="utf-8")
+        prompt = Path("scripts/turing_prompt_preflight.sh").read_text(encoding="utf-8")
+        comparisons = Path("scripts/turing_comparisons.sh").read_text(encoding="utf-8")
+        primary = Path("scripts/turing_primary_round.sh").read_text(encoding="utf-8")
+        self.assertIn('PROTOCOL:?PROTOCOL', evaluate)
+        self.assertIn('--protocol "$PROTOCOL"', evaluate)
+        self.assertIn("generate-searchqa", prompt)
+        self.assertIn("--protocol active-search", prompt)
+        self.assertIn("generate-searchqa", comparisons)
+        self.assertIn('--protocol active-search', comparisons)
+        self.assertIn('--protocol active-search', primary)
+        for text, name in ((prompt, "prompt"), (comparisons, "comparisons"), (primary, "primary")):
+            self.assertNotRegex(text, re.compile(r"cli generate(?:\s|\\)"), name)
+
+    def test_merge_and_offline_scripts_are_structured_and_protocol_scoped(self):
+        for name in ("turing_merge_predictions.sh", "turing_offline_reuse_check.sh"):
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertIn("#SBATCH --nodes=1", text, name)
+            self.assertNotRegex(text, re.compile(r"(?:echo|printf)\s+['\"]<[^\n]*>", re.MULTILINE), name)
+            self.assertIn("PROTOCOL", text, name)
+            self.assertIn("fallback_reason", text, name)
+
+    def test_protocol_audit_scripts_have_single_node_headers(self):
+        for name in ("turing_evaluate.sh", "turing_prompt_preflight.sh"):
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertIn("#SBATCH --nodes=1", text, name)
 
 
 if __name__ == "__main__":

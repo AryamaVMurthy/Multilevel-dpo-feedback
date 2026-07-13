@@ -1,6 +1,7 @@
 #!/bin/bash
 # Submit with: sbatch -A <account> --export=ALL,... scripts/turing_merge_predictions.sh
 #SBATCH -p u22
+#SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4096
@@ -9,11 +10,17 @@
 #SBATCH --error=logs/slurm-%x-%j.err
 set -euo pipefail
 
+COMPONENT=turing_merge_predictions
+log_event() { local event="$1"; shift; printf 'event=%s timestamp=%s component=%s %s\n' "$event" "$(date -u +%FT%TZ)" "$COMPONENT" "$*"; }
+fail() { log_event failure reason="$1" fallback_reason="${2:-none}" >&2; exit 2; }
+
 : "${TURING_ACCOUNT:?TURING_ACCOUNT must be supplied with --export}"
 : "${PROJECT_DIR:?PROJECT_DIR must be supplied with --export}"
 : "${SHARD_DIR:?SHARD_DIR must be supplied with --export}"
 : "${SHARDS:?SHARDS must be supplied with --export}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
+: "${PROTOCOL:?PROTOCOL must be archival or active-search}"
+[[ "$PROTOCOL" == "archival" || "$PROTOCOL" == "active-search" ]] || fail "unsupported PROTOCOL=$PROTOCOL" "protocol_validation"
 CLEANUP_INPUT_SHARDS="${CLEANUP_INPUT_SHARDS:-true}"
 
 cd "$PROJECT_DIR"
@@ -29,8 +36,7 @@ if [[ "$CLEANUP_INPUT_SHARDS" == "true" ]]; then
   if [[ -d "$SHARD_DIR" ]]; then
     rmdir "$SHARD_DIR"
   fi
-  echo "<cleanup component=merge_predictions removed=duplicate_shard_inputs reason=verified_merged_output/>"
+  log_event cleanup removed=duplicate_shard_inputs reason=verified_merged_output protocol="$PROTOCOL" fallback_reason=none
 elif [[ "$CLEANUP_INPUT_SHARDS" != "false" ]]; then
-  echo "ERROR: CLEANUP_INPUT_SHARDS must be true or false" >&2
-  exit 2
+  fail "CLEANUP_INPUT_SHARDS must be true or false" "cleanup_option_validation"
 fi
