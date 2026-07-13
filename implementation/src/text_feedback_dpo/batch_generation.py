@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 import json
+import re
 import time
 from typing import Any
 
 from text_feedback_dpo.prompts import build_cited_response_prompt, build_search_query_prompt
 from text_feedback_dpo.responses import parse_cited_response, render_cited_response
-from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics
+from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, tokenize_query
 from text_feedback_dpo.searchqa import SOURCE_SCHEMA_VERSION
 from text_feedback_dpo.scoring import score_cited_response
 
@@ -18,6 +19,9 @@ FIXED_K1 = 1.2
 FIXED_B = 0.75
 PROMPT_VERSION = "fixed-retrieval-cited-v1"
 RESPONSE_SCHEMA_VERSION = 1
+MAX_QUERY_TOKENS = 16
+_TAG_PATTERN = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
+_RESPONSE_LABEL_PATTERN = re.compile(r"^(?:answer|reasoning|sources|search\s+query)\s*:", re.IGNORECASE)
 
 
 def generate_batch(provider: Callable[..., list[str]], prompts: list[str], **generation_kwargs: object) -> list[dict]:
@@ -46,6 +50,10 @@ def _zero_cited_score(error_code: str, *, truncated: bool) -> dict:
         "malformed_response": True,
         "exact_match": 0.0,
         "f1": 0.0,
+        "answer_capability_exact_match": 0.0,
+        "answer_capability_f1": 0.0,
+        "protocol_exact_match": 0.0,
+        "protocol_f1": 0.0,
         "citation_count": 0,
         "valid_citation_rate": 0.0,
         "citation_coverage": 0.0,
@@ -120,13 +128,48 @@ def _validate_rows(rows: list[dict]) -> None:
             raise ValueError(f"SearchQA row {example_id} requires structured sources")
 
 
-def _query_error(text: str) -> str | None:
+def parse_search_query(text: str) -> str:
+    """Validate the model's one-line retrieval query without guessing its semantics."""
+    if not isinstance(text, str):
+        raise ValueError("query_invalid_format: query must be a string")
     stripped = text.strip()
     if not stripped or "\n" in stripped or "\r" in stripped:
-        return "query_invalid_format"
-    if any(marker in stripped for marker in ("<", ">", "{", "}", "```")):
+        raise ValueError("query_invalid_format: query must be exactly one nonempty line")
+    query_tokens = tokenize_query(stripped)
+    if not query_tokens:
+        raise ValueError("query_invalid_format: query must contain searchable tokens")
+    if len(query_tokens) > MAX_QUERY_TOKENS:
+        raise ValueError(f"query_invalid_format: query exceeds {MAX_QUERY_TOKENS} searchable tokens")
+    if "```" in stripped:
+        raise ValueError("query_invalid_format: code fences are forbidden")
+    if (stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]")):
+        raise ValueError("query_invalid_format: JSON is forbidden")
+    if _TAG_PATTERN.search(stripped):
+        raise ValueError("query_invalid_format: tag-like XML is forbidden")
+    if _RESPONSE_LABEL_PATTERN.match(stripped):
+        raise ValueError("query_invalid_format: response labels are forbidden")
+    return stripped
+
+
+def _query_error(text: str) -> str | None:
+    try:
+        parse_search_query(text)
+    except ValueError:
         return "query_invalid_format"
     return None
+
+
+def _add_protocol_metrics(score: dict, *, protocol_valid: bool) -> dict:
+    capability_exact = float(score.get("exact_match", 0.0))
+    capability_f1 = float(score.get("f1", 0.0))
+    return {
+        **score,
+        "answer_capability_exact_match": capability_exact,
+        "answer_capability_f1": capability_f1,
+        "protocol_exact_match": capability_exact if protocol_valid else 0.0,
+        "protocol_f1": capability_f1 if protocol_valid else 0.0,
+        "correct": bool(score.get("correct", False) and protocol_valid),
+    }
 
 
 def run_fixed_retrieval_pipeline(
@@ -154,6 +197,7 @@ def run_fixed_retrieval_pipeline(
     if response_schema_version != RESPONSE_SCHEMA_VERSION:
         raise ValueError(f"response_schema_version must be {RESPONSE_SCHEMA_VERSION}")
 
+    pipeline_started = time.perf_counter_ns()
     gold_by_id = {row["id"]: row["gold_answer"] for row in rows}
     query_prompts = [build_search_query_prompt(row, []) for row in rows]
     query_prompt_hashes = [_hash(prompt, context=f"query prompt at index {index}") for index, prompt in enumerate(query_prompts)]
@@ -166,7 +210,6 @@ def run_fixed_retrieval_pipeline(
     for row, prompt, prompt_hash, (raw_query, query_truncated, scratchpad, scratchpad_truncated) in zip(
         rows, query_prompts, query_prompt_hashes, query_records, strict=True
     ):
-        row_started = time.perf_counter_ns()
         artifact = {
             "id": row["id"],
             "raw_query": raw_query,
@@ -195,20 +238,18 @@ def run_fixed_retrieval_pipeline(
             "cited_score": None,
             "error_code": None,
             "timings_ms": {
-                "query_generation_batch_ms": query_elapsed_ms,
-                "query_generation_amortized_ms": query_elapsed_ms / len(rows) if rows else 0.0,
-                "retrieval_ms": 0.0,
-                "response_generation_batch_ms": 0.0,
-                "response_generation_amortized_ms": 0.0,
-                "total_example_ms": 0.0,
+                "query_generation_batch_wall_ms": query_elapsed_ms,
+                "query_generation_amortized_per_item_ms": query_elapsed_ms / len(rows) if rows else 0.0,
+                "retrieval_individual_ms": 0.0,
+                "response_generation_batch_wall_ms": 0.0,
+                "response_generation_amortized_per_item_ms": 0.0,
+                "pipeline_wall_ms": 0.0,
             },
-            "_row_started_ns": row_started,
         }
         if query_truncated:
             artifact["error_code"] = "query_truncated"
             artifact["cited_score"] = _zero_cited_score("query_truncated", truncated=True)
             artifact["retrieval_metrics"] = retrieval_metrics([], row["gold_answer"])
-            artifact["timings_ms"]["total_example_ms"] = (time.perf_counter_ns() - row_started) / 1_000_000
             results.append(artifact)
             continue
         query_error = _query_error(raw_query)
@@ -216,16 +257,16 @@ def run_fixed_retrieval_pipeline(
             artifact["error_code"] = query_error
             artifact["cited_score"] = _zero_cited_score(query_error, truncated=False)
             artifact["retrieval_metrics"] = retrieval_metrics([], row["gold_answer"])
-            artifact["timings_ms"]["total_example_ms"] = (time.perf_counter_ns() - row_started) / 1_000_000
             results.append(artifact)
             continue
 
+        normalized_query = parse_search_query(raw_query)
         retrieval_started = time.perf_counter_ns()
         retriever = FixedBM25Retriever(row["sources"], k1=k1, b=b)
-        ranked = retriever.search(raw_query, top_k=top_k)
+        ranked = retriever.search(normalized_query, top_k=top_k)
         artifact["ranked_search_results"] = ranked
         artifact["retrieval_metrics"] = retrieval_metrics(ranked, row["gold_answer"])
-        artifact["timings_ms"]["retrieval_ms"] = (time.perf_counter_ns() - retrieval_started) / 1_000_000
+        artifact["timings_ms"]["retrieval_individual_ms"] = (time.perf_counter_ns() - retrieval_started) / 1_000_000
         response_prompt = build_cited_response_prompt(row, ranked, [])
         artifact["response_prompt_hash"] = _hash(response_prompt, context=f"response prompt for {row['id']}")
         artifact["response_prompt"] = response_prompt
@@ -241,8 +282,8 @@ def run_fixed_retrieval_pipeline(
         artifact["response_truncated"] = response_truncated
         artifact["truncated"] = bool(artifact["query_truncated"] or response_truncated)
         artifact["truncation"]["response"] = response_truncated
-        artifact["timings_ms"]["response_generation_batch_ms"] = response_elapsed_ms
-        artifact["timings_ms"]["response_generation_amortized_ms"] = response_elapsed_ms / len(active) if active else 0.0
+        artifact["timings_ms"]["response_generation_batch_wall_ms"] = response_elapsed_ms
+        artifact["timings_ms"]["response_generation_amortized_per_item_ms"] = response_elapsed_ms / len(active) if active else 0.0
         if scratchpad is not None:
             if artifact["private_scratchpad"] is None:
                 artifact["private_scratchpad"] = {}
@@ -256,11 +297,11 @@ def run_fixed_retrieval_pipeline(
             artifact["ranked_search_results"],
             truncated=response_truncated,
         )
-        artifact["cited_score"] = score
+        artifact["cited_score"] = _add_protocol_metrics(score, protocol_valid=bool(score["parse_valid"] and not response_truncated))
         if response_truncated:
             artifact["error_code"] = "response_truncated"
             artifact["cited_score"] = {
-                **score,
+                **artifact["cited_score"],
                 "parse_valid": False,
                 "correct": False,
                 "malformed_response": True,
@@ -277,9 +318,9 @@ def run_fixed_retrieval_pipeline(
         artifact["parsed_response"] = {"answer": parsed.answer, "reasoning": parsed.reasoning, "source_ids": list(parsed.source_ids)}
         artifact["rendered_visible_response"] = render_cited_response(parsed, artifact["ranked_search_results"])
 
+    pipeline_wall_ms = (time.perf_counter_ns() - pipeline_started) / 1_000_000
     for artifact in results:
-        row_started = artifact.pop("_row_started_ns")
-        artifact["timings_ms"]["total_example_ms"] = (time.perf_counter_ns() - row_started) / 1_000_000
+        artifact["timings_ms"]["pipeline_wall_ms"] = pipeline_wall_ms
         if artifact["id"] not in gold_by_id:
             raise RuntimeError("internal active-search ID mismatch")
     return results

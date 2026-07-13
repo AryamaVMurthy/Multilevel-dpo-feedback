@@ -26,6 +26,29 @@ def source(source_id: str, original_rank: int, snippet: str, *, title: str | Non
 
 
 class FixedBM25RetrievalTest(unittest.TestCase):
+    def test_related_links_accept_real_searchqa_shapes_and_affect_canonical_hash(self):
+        shaped = [
+            {**source("S001", 1, "alpha evidence"), "related_links": None},
+            {**source("S002", 2, "beta evidence"), "related_links": " https://related.test/one "},
+            {**source("S003", 3, "gamma evidence"), "related_links": [" https://related.test/two ", ""]},
+        ]
+
+        results = FixedBM25Retriever(shaped).search("evidence", top_k=8)
+
+        self.assertEqual(results[0]["related_links"], None)
+        self.assertEqual(results[1]["related_links"], "https://related.test/one")
+        self.assertEqual(results[2]["related_links"], ["https://related.test/two", ""])
+        changed = copy.deepcopy(shaped)
+        changed[2]["related_links"] = ["https://related.test/different"]
+        self.assertNotEqual(
+            results[0]["corpus_hash"],
+            FixedBM25Retriever(changed).search("evidence", top_k=8)[0]["corpus_hash"],
+        )
+        malformed = copy.deepcopy(shaped)
+        malformed[2]["related_links"] = ["valid", 3]
+        with self.assertRaisesRegex(ValueError, "only strings"):
+            FixedBM25Retriever(malformed)
+
     def test_default_k1_is_frozen_at_one_point_two(self):
         self.assertEqual(FixedBM25Retriever([source("S001", 1, "evidence")]).k1, 1.2)
 

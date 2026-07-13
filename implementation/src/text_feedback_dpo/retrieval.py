@@ -61,14 +61,21 @@ def _validate_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, An
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"source {index} requires a non-empty {field}")
         related_links = source.get("related_links")
-        if related_links is not None and not isinstance(related_links, str):
-            raise ValueError(f"source {index} related_links must be null or a string")
+        if related_links is not None and not isinstance(related_links, (str, list)):
+            raise ValueError(f"source {index} related_links must be null, a string, or an array of strings")
+        if isinstance(related_links, list) and not all(isinstance(link, str) for link in related_links):
+            raise ValueError(f"source {index} related_links array must contain only strings")
         source_copy = dict(source)
         source_copy["source_id"] = source_id
         source_copy["title"] = source["title"].strip()
         source_copy["url"] = source["url"].strip()
         source_copy["snippet"] = source["snippet"].strip()
-        source_copy["related_links"] = related_links.strip() if isinstance(related_links, str) else None
+        if isinstance(related_links, str):
+            source_copy["related_links"] = related_links.strip()
+        elif isinstance(related_links, list):
+            source_copy["related_links"] = [link.strip() for link in related_links]
+        else:
+            source_copy["related_links"] = None
         if not tokenize_query(source_copy["snippet"]):
             raise ValueError(f"source {index} snippet must contain at least one token")
         normalized.append(source_copy)

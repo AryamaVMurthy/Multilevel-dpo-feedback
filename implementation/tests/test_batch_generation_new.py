@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from text_feedback_dpo.batch_generation import _hash, _record_output, generate_batch, run_fixed_retrieval_pipeline
+from text_feedback_dpo.batch_generation import _hash, _record_output, generate_batch, parse_search_query, run_fixed_retrieval_pipeline
 from text_feedback_dpo.runtime import GeneratedText, StudentGeneration
 
 
@@ -19,6 +19,16 @@ def source_records(prefix: str) -> list[dict]:
 
 
 class BatchGenerationTest(unittest.TestCase):
+    def test_search_query_parser_is_strict_without_rejecting_legitimate_math(self):
+        self.assertEqual(parse_search_query("prove 3 > 2"), "prove 3 > 2")
+        for invalid in (
+            "!!!", "two\nlines", "```query```", '{"query":"Ada"}',
+            "<query>Ada</query>", "Answer: Ada", "Reasoning: Ada", "Sources: S001",
+            "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "query_invalid_format"):
+                parse_search_query(invalid)
+
     def test_batch_generation_calls_provider_once_and_preserves_order(self):
         calls = []
 
@@ -80,12 +90,13 @@ class BatchGenerationTest(unittest.TestCase):
         self.assertNotIn("<", results[0]["rendered_visible_response"])
         self.assertEqual(results[0]["prompt_version"], "fixed-retrieval-cited-v1")
         self.assertEqual(results[0]["policy_hash"], "policy-v1")
-        self.assertIn("query_generation_batch_ms", results[0]["timings_ms"])
-        self.assertIn("query_generation_amortized_ms", results[0]["timings_ms"])
-        self.assertIn("retrieval_ms", results[0]["timings_ms"])
-        self.assertIn("response_generation_batch_ms", results[0]["timings_ms"])
-        self.assertIn("response_generation_amortized_ms", results[0]["timings_ms"])
-        self.assertIn("total_example_ms", results[0]["timings_ms"])
+        self.assertEqual(set(results[0]["timings_ms"]), {
+            "query_generation_batch_wall_ms", "query_generation_amortized_per_item_ms",
+            "retrieval_individual_ms", "response_generation_batch_wall_ms",
+            "response_generation_amortized_per_item_ms", "pipeline_wall_ms",
+        })
+        self.assertNotIn("total_example_ms", results[0]["timings_ms"])
+        self.assertEqual(results[0]["timings_ms"]["pipeline_wall_ms"], results[1]["timings_ms"]["pipeline_wall_ms"])
         self.assertFalse(results[0]["truncation"]["query"])
         self.assertFalse(results[0]["truncation"]["response"])
 
@@ -102,6 +113,19 @@ class BatchGenerationTest(unittest.TestCase):
         self.assertTrue(all(item["requested_top_k"] == 8 for item in ranked))
         self.assertTrue(all(item["effective_top_k"] == 3 for item in ranked))
         self.assertTrue(all(item["source_count"] == 3 for item in ranked))
+
+    def test_active_pipeline_accepts_real_related_links_shape(self):
+        sources = source_records("real")[:3]
+        sources[0]["related_links"] = None
+        sources[1]["related_links"] = "https://related.test/one"
+        sources[2]["related_links"] = ["https://related.test/two"]
+        result = run_fixed_retrieval_pipeline(
+            [{"id": "real", "question": "What is real?", "gold_answer": "real", "sources": sources}],
+            query_generate_batch=lambda _prompts: [GeneratedText("real evidence", False)],
+            response_generate_batch=lambda _prompts: [GeneratedText("Answer: real\nReasoning: Source says real [S001].\nSources: S001", False)],
+            policy_hash="policy-v1",
+        )[0]
+        self.assertEqual(result["ranked_search_results"][2]["related_links"], ["https://related.test/two"])
 
     def test_active_search_compacts_invalid_query_examples_without_reordering_outputs(self):
         rows = [
@@ -166,6 +190,9 @@ class BatchGenerationTest(unittest.TestCase):
         self.assertFalse(result["cited_score"]["parse_valid"])
         self.assertIsNone(result["parsed_response"])
         self.assertIsNone(result["rendered_visible_response"])
+        self.assertEqual(result["cited_score"]["answer_capability_exact_match"], 1.0)
+        self.assertEqual(result["cited_score"]["protocol_exact_match"], 0.0)
+        self.assertFalse(result["cited_score"]["correct"])
 
     def test_all_model_failures_have_zero_retrieval_and_cited_diagnostics(self):
         rows = [

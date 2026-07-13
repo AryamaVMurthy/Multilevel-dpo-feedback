@@ -1,4 +1,5 @@
 import unittest
+import copy
 
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.preflight import assess_preflight, select_preflight_rows, select_thinking_mode, summarize_response_quality
@@ -6,6 +7,74 @@ from text_feedback_dpo.runtime import GeneratedText
 
 
 class PreflightQualityTest(unittest.TestCase):
+    @staticmethod
+    def _active_fixture():
+        sources = [
+            {"source_id": f"S{index:03d}", "original_rank": index, "title": f"Ada {index}",
+             "url": f"https://example.test/{index}", "snippet": f"Ada evidence {index}",
+             "related_links": [f"https://related.test/{index}"] if index == 1 else None}
+            for index in range(1, 4)
+        ]
+        example = {"id": "1", "question": "Who?", "gold_answer": "Ada", "sources": sources}
+        prediction = run_fixed_retrieval_pipeline(
+            [example],
+            query_generate_batch=lambda _prompts: [GeneratedText("Ada author", False)],
+            response_generate_batch=lambda _prompts: [GeneratedText("Answer: Ada\nReasoning: Source says Ada [S001].\nSources: S001", False)],
+            policy_hash="policy-v1",
+        )[0]
+        return example, prediction
+
+    def test_active_preflight_recomputes_dataset_owned_retrieval_and_rejects_tampering(self):
+        example, prediction = self._active_fixture()
+        for field, value in (("bm25_score", 999.0), ("url", "https://evil.test"), ("requested_top_k", 7)):
+            tampered = copy.deepcopy(prediction)
+            tampered["ranked_search_results"][0][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "retrieval artifact mismatch"):
+                summarize_response_quality([example], [tampered], protocol="active-search")
+        tampered_metrics = copy.deepcopy(prediction)
+        tampered_metrics["retrieval_metrics"]["recall@8"] = 0.0
+        with self.assertRaisesRegex(ValueError, "retrieval metrics mismatch"):
+            summarize_response_quality([example], [tampered_metrics], protocol="active-search")
+
+    def test_active_preflight_ignores_persisted_score_and_reports_protocol_and_capability_metrics(self):
+        example, prediction = self._active_fixture()
+        prediction["cited_score"] = {"parse_valid": False, "exact_match": 0.0}
+        metrics = summarize_response_quality([example], [prediction], protocol="active-search")
+        self.assertEqual(metrics["answer_capability_exact_match"], 1.0)
+        self.assertEqual(metrics["protocol_exact_match"], 1.0)
+        self.assertEqual(metrics["retrieval_recall@1"], 1.0)
+        self.assertEqual(metrics["retrieval_recall@3"], 1.0)
+        self.assertEqual(metrics["retrieval_recall@5"], 1.0)
+        self.assertEqual(metrics["retrieval_recall@8"], 1.0)
+        self.assertEqual(metrics["retrieval_mrr"], 1.0)
+        self.assertEqual(metrics["empty_query_rate"], 0.0)
+        self.assertEqual(metrics["invalid_query_rate"], 0.0)
+        self.assertEqual(metrics["duplicate_citation_rate"], 0.0)
+        self.assertIn("query_words", metrics)
+        self.assertIn("timing_ms", metrics)
+        self.assertIn("throughput_examples_per_second", metrics)
+
+    def test_active_preflight_allows_null_response_only_for_canonical_query_stage_errors(self):
+        example, prediction = self._active_fixture()
+        prediction["raw_response"] = None
+        prediction["error_code"] = "line_count"
+        with self.assertRaisesRegex(ValueError, "raw_response null"):
+            summarize_response_quality([example], [prediction], protocol="active-search")
+
+    def test_active_preflight_rejects_contradictory_stage_truncation_flags(self):
+        example, prediction = self._active_fixture()
+        prediction["query_truncated"] = True
+        with self.assertRaisesRegex(ValueError, "query_truncated.*mismatch"):
+            summarize_response_quality([example], [prediction], protocol="active-search")
+
+    def test_archival_preflight_rejects_any_active_only_schema_field(self):
+        predictions = [
+            {"id": "1", "response": "Ada", "truncated": False, "raw_response": "active"},
+            {"id": "2", "response": "California", "truncated": False},
+        ]
+        with self.assertRaisesRegex(ValueError, "active-search fields"):
+            summarize_response_quality(self.examples, predictions, protocol="archival")
+
     def setUp(self):
         self.examples = [
             {"id": "1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada wrote it."},
@@ -50,19 +119,8 @@ class PreflightQualityTest(unittest.TestCase):
         self.assertEqual(select_thinking_mode({"direct": direct, "two_pass": two_pass})["selected"], "two_pass")
 
     def test_cited_summary_and_gate_cover_query_retrieval_format_citation_support_and_rendering(self):
-        examples = [{"id": "1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada"}]
-        predictions = [{
-            "id": "1",
-            "raw_query": "Ada author",
-            "ranked_search_results": [{"source_id": "S001", "title": "Ada", "url": "https://example.test/1", "snippet": "Ada", "original_rank": 1, "retrieval_rank": 1, "bm25_score": 1.0, "query_hash": "q", "corpus_hash": "c"}],
-            "raw_response": "Answer: Ada\nReasoning: Source says Ada [S001].\nSources: S001",
-            "parsed_response": {"answer": "Ada", "reasoning": "Source says Ada [S001].", "source_ids": ["S001"]},
-            "rendered_visible_response": "Answer: Ada\nReasoning: Source says Ada [S001].\nSources:\n[S001] Ada — https://example.test/1",
-            "truncated": False,
-            "truncation": {"query": False, "response": False},
-            "retrieval_metrics": {"recall@8": 1.0},
-        }]
-        metrics = summarize_response_quality(examples, predictions, protocol="active-search")
+        example, prediction = self._active_fixture()
+        metrics = summarize_response_quality([example], [prediction], protocol="active-search")
         self.assertEqual(metrics["valid_format_rate"], 1.0)
         self.assertEqual(metrics["valid_citation_rate"], 1.0)
         self.assertEqual(metrics["lexical_cited_answer_support_rate"], 1.0)
@@ -96,6 +154,7 @@ class PreflightQualityTest(unittest.TestCase):
         self.assertEqual(metrics["query_truncation_rate"], 0.25)
         self.assertEqual(metrics["response_truncation_rate"], 0.25)
         self.assertEqual(metrics["malformed_rate"], 1.0)
+        self.assertEqual(metrics["any_stage_truncation_rate"], 0.5)
         self.assertFalse(assess_preflight(metrics)["promote"])
 
 

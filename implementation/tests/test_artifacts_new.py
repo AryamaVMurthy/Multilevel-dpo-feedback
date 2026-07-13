@@ -1,4 +1,6 @@
 import unittest
+import hashlib
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -8,6 +10,11 @@ from text_feedback_dpo.preferences import build_preference_rows
 
 
 class ArtifactTest(unittest.TestCase):
+    @staticmethod
+    def _identity_hash(value):
+        payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def test_sft_rows_use_plain_completion_and_teacher_free_prompt(self):
         rows = build_sft_rows([{"id": "1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada evidence"}])
         self.assertEqual(len(rows), 1)
@@ -35,6 +42,50 @@ class ArtifactTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "manifest"):
                 validate_artifacts(Path(tmp))
+
+    def test_active_manifest_requires_complete_identities_and_matching_artifact_hash(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "predictions.jsonl"
+            artifact.write_text('{"id":"1"}\n', encoding="utf-8")
+            source_identity = {"identity": "searchqa.search_results.v1", "version": 1}
+            prompt_identity = {"identity": "fixed-retrieval-cited-v1"}
+            response_identity = {"identity": "cited-response", "schema_version": 1}
+            manifest = {
+                "command": "generate-searchqa", "max_length": 4096, "rows": 1,
+                "model": {"identity": "model", "revision": "rev", "policy_hash": "policy"},
+                "dataset": {"source": "searchqa", "revision": "data-rev", "sha256": "a" * 64},
+                "source_schema": {**source_identity, "sha256": self._identity_hash(source_identity)},
+                "retrieval": {"identity": "fixed_bm25", "schema_version": 1, "requested_top_k": 8, "k1": 1.2, "b": 0.75},
+                "prompt": {**prompt_identity, "sha256": self._identity_hash(prompt_identity)},
+                "response": {**response_identity, "sha256": self._identity_hash(response_identity)},
+                "generation": {"context_budget": 4096, "query_max_new_tokens": 32, "response_max_new_tokens": 256},
+                "timing": {"pipeline_wall_ms": 1.0},
+                "required_files": [artifact.name],
+                "artifacts": [{"path": artifact.name, "format": "jsonl", "rows": 1, "bytes": artifact.stat().st_size,
+                               "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}],
+            }
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertTrue(validate_artifacts(root)["valid"])
+            manifest["artifacts"][0]["sha256"] = "0" * 64
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "sha256 mismatch"):
+                validate_artifacts(root)
+            manifest["artifacts"][0]["sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            manifest["model"]["revision"] = ""
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "model.revision"):
+                validate_artifacts(root)
+            manifest["model"]["revision"] = "rev"
+            manifest["source_schema"]["sha256"] = "0" * 64
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "source_schema identity hash"):
+                validate_artifacts(root)
+            manifest["source_schema"]["sha256"] = self._identity_hash(source_identity)
+            manifest["rows"] = 999
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "manifest rows.*artifact row count"):
+                validate_artifacts(root)
 
 
 if __name__ == "__main__":

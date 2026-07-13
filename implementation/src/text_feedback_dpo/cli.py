@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -46,6 +47,15 @@ def read_unique_jsonl(path: Path, *, label: str) -> list[dict]:
 def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _identity_hash(value: dict) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def cmd_prepare(args: argparse.Namespace) -> None:
@@ -146,6 +156,8 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.preflight import has_active_search_fields
+
     example_rows = read_unique_jsonl(args.data, label="example")
     examples = {row["id"]: row for row in example_rows}
     predictions = read_unique_jsonl(args.predictions, label="prediction")
@@ -154,7 +166,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     if args.protocol == "active-search":
         _cmd_evaluate_active_search(args, examples, predictions)
         return
-    if any("ranked_search_results" in prediction or "raw_query" in prediction for prediction in predictions):
+    if any(has_active_search_fields(prediction) for prediction in predictions):
         raise ValueError("archival evaluation received active-search fields; choose --protocol active-search explicitly")
     results = []
     for prediction in predictions:
@@ -171,137 +183,55 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     write_json(args.output, {"examples": len(results), "exact_match": exact, "f1": f1, "correct": sum(row["correct"] for row in results)})
 
 
-def _empty_cited_score(error_code: str, *, truncated: bool) -> dict:
-    return {
-        "parse_valid": False,
-        "error_code": error_code,
-        "exact_match": 0.0,
-        "f1": 0.0,
-        "answer_correct": False,
-        "correct": False,
-        "valid_citation_rate": 0.0,
-        "citation_coverage": 0.0,
-        "citation_precision": 0.0,
-        "citation_recall": 0.0,
-        "lexical_cited_answer_support": 0.0,
-        "unsupported_source_rate": 0.0,
-        "citation_count": 0,
-        "truncated": truncated,
-        "truncation_known": True,
-    }
-
-
 def _cmd_evaluate_active_search(args: argparse.Namespace, examples: dict[str, dict], predictions: list[dict]) -> None:
-    from text_feedback_dpo.responses import parse_cited_response, render_cited_response
-    from text_feedback_dpo.retrieval import retrieval_metrics
-    from text_feedback_dpo.scoring import score_cited_response
+    from text_feedback_dpo.preflight import evaluate_active_predictions, summarize_active_evaluation
 
-    _require_unique_ids(predictions, label="active prediction")
-    prediction_ids = {prediction.get("id", prediction.get("example_id")) for prediction in predictions}
-    if prediction_ids != set(examples):
-        raise ValueError("active prediction/example ID parity mismatch")
-    results = []
-    for prediction in predictions:
-        example_id = prediction.get("id", prediction.get("example_id"))
-        if example_id not in examples:
-            raise ValueError(f"prediction has unknown example id: {example_id}")
-        example = examples[example_id]
-        ranked = prediction.get("ranked_search_results")
-        if not isinstance(ranked, list):
-            raise ValueError(f"active prediction {example_id} requires ranked_search_results")
-        truncation = prediction.get("truncation")
-        if not isinstance(truncation, dict) or not isinstance(truncation.get("query"), bool) or not isinstance(truncation.get("response"), bool):
-            raise ValueError(f"active prediction {example_id} requires explicit query/response truncation flags")
-        raw_response = prediction.get("raw_response")
-        if raw_response is None:
-            score = _empty_cited_score(str(prediction.get("error_code") or "missing_raw_response"), truncated=truncation["response"])
-        elif not isinstance(raw_response, str):
-            raise ValueError(f"active prediction {example_id} raw_response must be a string or null")
-        else:
-            score = score_cited_response(raw_response, example["gold_answer"], ranked, truncated=truncation["response"])
-        parsed = None
-        rendered = None
-        if truncation["response"]:
-            score = {
-                **score,
-                "parse_valid": False,
-                "correct": False,
-                "malformed_response": True,
-                "error_code": "response_truncated",
-                "lexical_cited_answer_support": 0.0,
-                "citation_precision": 0.0,
-                "citation_recall": 0.0,
-            }
-        elif score["parse_valid"]:
-            parsed_response = parse_cited_response(raw_response, ranked)
-            parsed = {"answer": parsed_response.answer, "reasoning": parsed_response.reasoning, "source_ids": list(parsed_response.source_ids)}
-            rendered = render_cited_response(parsed_response, ranked)
-        retrieval = prediction.get("retrieval_metrics")
-        if retrieval is None:
-            retrieval = retrieval_metrics(ranked, example["gold_answer"])
-        elif not isinstance(retrieval, dict) or not isinstance(retrieval.get("recall@8"), (int, float)):
-            raise ValueError(f"active prediction {example_id} requires retrieval_metrics.recall@8")
-        results.append({
-            "id": example_id,
-            "raw_query": prediction.get("raw_query"),
-            "ranked_search_results": ranked,
-            "raw_response": raw_response,
-            "parsed_response": parsed,
-            "rendered_visible_response": rendered,
-            "cited_score": score,
-            "retrieval_metrics": retrieval,
-            "truncation": truncation,
-            "error_code": score["error_code"],
-        })
-    if not results:
-        raise ValueError("active SearchQA evaluation produced zero predictions")
-    count = len(results)
-    numeric_score_fields = ("exact_match", "f1", "citation_precision", "citation_recall", "citation_coverage", "lexical_cited_answer_support", "unsupported_source_rate")
-    summary = {field: sum(float(result["cited_score"].get(field, 0.0)) for result in results) / count for field in numeric_score_fields}
-    summary.update({
-        "examples": count,
-        "valid_format_rate": sum(bool(result["cited_score"]["parse_valid"]) for result in results) / count,
-        "valid_citation_rate": sum(float(result["cited_score"].get("valid_citation_rate", 0.0)) for result in results) / count,
-        "lexical_cited_answer_support_rate": sum(float(result["cited_score"].get("lexical_cited_answer_support", 0.0)) for result in results) / count,
-        "retrieval_recall@8": sum(float(result["retrieval_metrics"]["recall@8"]) for result in results) / count,
-        "query_truncation_rate": sum(result["truncation"]["query"] for result in results) / count,
-        "response_truncation_rate": sum(result["truncation"]["response"] for result in results) / count,
-        "truncation_rate": sum(result["truncation"]["query"] or result["truncation"]["response"] for result in results) / count,
-        "malformed_rate": sum(not result["cited_score"]["parse_valid"] for result in results) / count,
-        "rendered_visible_rate": sum(result["rendered_visible_response"] is not None for result in results) / count,
-        "correct": sum(bool(result["cited_score"].get("correct")) for result in results),
-    })
+    results = evaluate_active_predictions(list(examples.values()), predictions)
+    summary = summarize_active_evaluation(results)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_jsonl(results, args.output.with_suffix(".jsonl"))
     write_json(args.output, summary)
 
 
 def cmd_preflight_quality(args: argparse.Namespace) -> None:
-    from text_feedback_dpo.preflight import assess_preflight, select_preflight_rows, summarize_response_quality
+    from text_feedback_dpo.preflight import (
+        assess_preflight,
+        evaluate_active_predictions,
+        select_preflight_rows,
+        summarize_active_evaluation,
+        summarize_response_quality,
+    )
 
     if args.split_name != "train-dev":
         raise ValueError("prompt preflight may use only the explicit train-dev split")
     examples = read_jsonl(args.data)
     predictions = read_unique_jsonl(args.predictions, label="prediction")
-    metrics = summarize_response_quality(examples, predictions, protocol=args.protocol)
+    canonical_active_rows = None
+    if args.protocol == "active-search":
+        canonical_active_rows = evaluate_active_predictions(examples, predictions)
+        metrics = summarize_active_evaluation(canonical_active_rows)
+    else:
+        metrics = summarize_response_quality(examples, predictions, protocol=args.protocol)
     metrics["split_name"] = args.split_name
     metrics["gate"] = assess_preflight(metrics)
     selected = select_preflight_rows(examples, sample_size=args.sample_size, seed=args.seed)
     predictions_by_id = {str(row["id"]): row for row in predictions}
     if args.protocol == "active-search":
+        canonical_by_id = {row["id"]: row for row in canonical_active_rows}
         samples = [
             {
                 "id": example["id"],
                 "question": example["question"],
                 "gold_answer": example["gold_answer"],
-                "raw_query": predictions_by_id[str(example["id"])]["raw_query"],
-                "ranked_search_results": predictions_by_id[str(example["id"])]["ranked_search_results"],
-                "raw_response": predictions_by_id[str(example["id"])]["raw_response"],
-                "parsed_response": predictions_by_id[str(example["id"])]["parsed_response"],
-                "rendered_visible_response": predictions_by_id[str(example["id"])]["rendered_visible_response"],
-                "cited_score": predictions_by_id[str(example["id"])]["cited_score"],
-                "retrieval_metrics": predictions_by_id[str(example["id"])]["retrieval_metrics"],
-                "truncation": predictions_by_id[str(example["id"])]["truncation"],
+                "raw_query": canonical_by_id[str(example["id"])]["raw_query"],
+                "ranked_search_results": canonical_by_id[str(example["id"])]["ranked_search_results"],
+                "raw_response": canonical_by_id[str(example["id"])]["raw_response"],
+                "parsed_response": canonical_by_id[str(example["id"])]["parsed_response"],
+                "rendered_visible_response": canonical_by_id[str(example["id"])]["rendered_visible_response"],
+                "cited_score": canonical_by_id[str(example["id"])]["cited_score"],
+                "retrieval_metrics": canonical_by_id[str(example["id"])]["retrieval_metrics"],
+                "truncation": canonical_by_id[str(example["id"])]["truncation"],
+                "timings_ms": canonical_by_id[str(example["id"])]["timings_ms"],
             }
             for example in selected
         ]
@@ -360,8 +290,9 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 def cmd_generate_searchqa(args: argparse.Namespace) -> None:
     """Generate structured SearchQA query/search/cited-response trajectories."""
-    from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
+    from text_feedback_dpo.batch_generation import RESPONSE_SCHEMA_VERSION, run_fixed_retrieval_pipeline
     from text_feedback_dpo.runtime import generate_batch_records, generate_student_batch, load_student, load_tokenizer
+    from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
     if args.query_batch_size <= 0 or args.response_batch_size <= 0:
         raise ValueError("query_batch_size and response_batch_size must be positive")
@@ -429,19 +360,37 @@ def cmd_generate_searchqa(args: argparse.Namespace) -> None:
         prompt_version=args.prompt_version,
     )
     write_jsonl(results, args.output)
+    prompt_identity = {"identity": args.prompt_version, "query_builder": "build_search_query_prompt", "response_builder": "build_cited_response_prompt"}
+    response_identity = {"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION, "parser": "parse_cited_response", "renderer": "render_cited_response"}
+    source_identity = {"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}
+    pipeline_wall_ms = float(results[0]["timings_ms"]["pipeline_wall_ms"]) if results else 0.0
     manifest = {
         "command": "generate-searchqa",
+        "max_length": 4096,
         "rows": len(results),
-        "prompt_version": args.prompt_version,
-        "response_schema_version": 1,
-        "policy_hash": args.policy_hash,
-        "retrieval": {"backend": "fixed_bm25", "top_k": args.top_k, "k1": args.k1, "b": args.b},
-        "query_batch_size": args.query_batch_size,
-        "response_batch_size": args.response_batch_size,
-        "query_max_new_tokens": args.query_max_new_tokens,
-        "response_max_new_tokens": args.response_max_new_tokens,
-        "context_budget": args.context_budget,
+        "model": {"identity": args.model, "revision": args.model_revision, "policy_hash": args.policy_hash},
+        "dataset": {"source": args.dataset_source, "revision": args.dataset_revision, "sha256": _sha256_file(args.data)},
+        "source_schema": {**source_identity, "sha256": _identity_hash(source_identity)},
+        "retrieval": {"identity": "fixed_bm25", "schema_version": 1, "requested_top_k": args.top_k, "k1": args.k1, "b": args.b},
+        "prompt": {**prompt_identity, "sha256": _identity_hash(prompt_identity)},
+        "response": {**response_identity, "sha256": _identity_hash(response_identity)},
+        "generation": {
+            "context_budget": args.context_budget,
+            "query_batch_size": args.query_batch_size,
+            "response_batch_size": args.response_batch_size,
+            "query_max_new_tokens": args.query_max_new_tokens,
+            "response_max_new_tokens": args.response_max_new_tokens,
+            "student_thinking_mode": args.student_thinking_mode,
+        },
+        "timing": {"pipeline_wall_ms": pipeline_wall_ms},
         "required_files": [args.output.name],
+        "artifacts": [{
+            "path": args.output.name,
+            "format": "jsonl",
+            "rows": len(results),
+            "bytes": args.output.stat().st_size,
+            "sha256": _sha256_file(args.output),
+        }],
     }
     write_json(args.output.with_suffix(".manifest.json"), manifest)
     write_json(args.output.parent / "manifest.json", manifest)
@@ -637,7 +586,9 @@ def build_parser() -> argparse.ArgumentParser:
     active_generate.add_argument("--data", required=True, type=Path)
     active_generate.add_argument("--output", required=True, type=Path)
     active_generate.add_argument("--model", required=True)
-    active_generate.add_argument("--model-revision")
+    active_generate.add_argument("--model-revision", required=True)
+    active_generate.add_argument("--dataset-source", required=True)
+    active_generate.add_argument("--dataset-revision", required=True)
     active_generate.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
     active_generate.add_argument("--device", default="cuda:0")
     active_generate.add_argument("--policy-hash", required=True)

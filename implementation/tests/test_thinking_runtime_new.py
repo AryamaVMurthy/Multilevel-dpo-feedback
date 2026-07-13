@@ -20,6 +20,15 @@ class FakeTeacherTokenizer:
 
 
 class ThinkingRuntimeTest(unittest.TestCase):
+    def test_direct_student_generation_requires_exact_batch_cardinality(self):
+        with self.assertRaisesRegex(RuntimeError, "answer batch cardinality"):
+            generate_student_batch(
+                object(), object(), ["one", "two"], mode="direct",
+                scratchpad_max_new_tokens=8, answer_max_new_tokens=8,
+                temperature=0.0, top_p=1.0,
+                generation_fn=lambda *_args, **_kwargs: [GeneratedText("one", False)],
+            )
+
     def test_generation_refuses_input_truncation_with_explicit_total_budget(self):
         from text_feedback_dpo.runtime import generate_batch_records
 

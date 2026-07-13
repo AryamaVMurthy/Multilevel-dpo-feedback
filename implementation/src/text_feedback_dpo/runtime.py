@@ -246,6 +246,8 @@ def generate_student_batch(
             model, tokenizer, prompts, max_new_tokens=answer_max_new_tokens,
             temperature=temperature, top_p=top_p,
         )
+        if len(responses) != len(prompts):
+            raise RuntimeErrorExplicit("student answer batch cardinality mismatch")
         return [
             StudentGeneration(response=response.text, scratchpad=None, mode=mode, truncated=response.truncated, scratchpad_truncated=None)
             for response in responses

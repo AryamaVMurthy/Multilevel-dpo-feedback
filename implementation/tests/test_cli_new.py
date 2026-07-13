@@ -36,7 +36,7 @@ class CLITest(unittest.TestCase):
 
     def test_generate_searchqa_is_explicit_and_has_independent_batch_defaults(self):
         parser = build_parser()
-        parsed = parser.parse_args(["generate-searchqa", "--data", "x.jsonl", "--output", "y.jsonl", "--model", "model", "--attention-implementation", "sdpa", "--policy-hash", "p1"])
+        parsed = parser.parse_args(["generate-searchqa", "--data", "x.jsonl", "--output", "y.jsonl", "--model", "model", "--model-revision", "model-rev", "--dataset-source", "searchqa", "--dataset-revision", "data-rev", "--attention-implementation", "sdpa", "--policy-hash", "p1"])
         self.assertEqual(parsed.command, "generate-searchqa")
         self.assertEqual(parsed.query_batch_size, 4)
         self.assertEqual(parsed.response_batch_size, 4)
@@ -58,24 +58,41 @@ class CLITest(unittest.TestCase):
         from text_feedback_dpo.cli import _cmd_evaluate_active_search
 
         example = {"id": "1", "gold_answer": "Ada"}
-        with self.assertRaisesRegex(ValueError, "ranked_search_results"):
+        with self.assertRaisesRegex(ValueError, "raw_query"):
             _cmd_evaluate_active_search(object(), {"1": example}, [{"id": "1", "response": "Ada"}])
+
+    def test_archival_evaluator_rejects_active_only_fields(self):
+        from text_feedback_dpo.cli import cmd_evaluate
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data.jsonl"
+            predictions = root / "predictions.jsonl"
+            data.write_text(json.dumps({"id": "1", "gold_answer": "Ada", "packed_evidence": "Ada"}) + "\n", encoding="utf-8")
+            predictions.write_text(json.dumps({"id": "1", "response": "Ada", "raw_response": "active"}) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "active-search fields"):
+                cmd_evaluate(Namespace(data=data, predictions=predictions, output=root / "out.json", protocol="archival"))
 
     def test_active_evaluator_aggregates_all_model_failure_categories(self):
         from text_feedback_dpo.cli import _cmd_evaluate_active_search
+        from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
+        from text_feedback_dpo.runtime import GeneratedText
 
-        ranked = [{
-            "source_id": "S001", "original_rank": 1, "retrieval_rank": 1, "title": "Response source",
-            "url": "https://example.test/response", "snippet": "response evidence", "bm25_score": 1.0,
-            "query_hash": "q", "corpus_hash": "c", "requested_top_k": 8, "effective_top_k": 1, "source_count": 1,
-        }]
-        examples = {f"{name}": {"id": name, "gold_answer": "response"} for name in ("invalid", "query-truncated", "malformed", "response-truncated")}
-        predictions = [
-            {"id": "invalid", "raw_query": "two\nlines", "ranked_search_results": [], "raw_response": None, "truncation": {"query": False, "response": False}, "error_code": "query_invalid_format"},
-            {"id": "query-truncated", "raw_query": "query", "ranked_search_results": [], "raw_response": None, "truncation": {"query": True, "response": False}, "error_code": "query_truncated"},
-            {"id": "malformed", "raw_query": "query", "ranked_search_results": ranked, "raw_response": "bad", "truncation": {"query": False, "response": False}},
-            {"id": "response-truncated", "raw_query": "query", "ranked_search_results": ranked, "raw_response": "Answer: response\nReasoning: Source [S001].\nSources: S001", "truncation": {"query": False, "response": True}},
-        ]
+        names = ("invalid", "query-truncated", "malformed", "response-truncated")
+        examples = {
+            name: {
+                "id": name, "question": f"{name}?", "gold_answer": "response",
+                "sources": [{"source_id": "S001", "original_rank": 1, "title": "Response source",
+                             "url": "https://example.test/response", "snippet": "response evidence"}],
+            }
+            for name in names
+        }
+        predictions = run_fixed_retrieval_pipeline(
+            list(examples.values()),
+            query_generate_batch=lambda _prompts: [GeneratedText("two\nlines", False), GeneratedText("query", True), GeneratedText("query", False), GeneratedText("query", False)],
+            response_generate_batch=lambda _prompts: [GeneratedText("bad", False), GeneratedText("Answer: response\nReasoning: Source [S001].\nSources: S001", True)],
+            policy_hash="policy-v1",
+        )
         with TemporaryDirectory() as directory:
             output = Path(directory) / "evaluation.json"
             _cmd_evaluate_active_search(Namespace(output=output), examples, predictions)
@@ -103,7 +120,8 @@ class CLITest(unittest.TestCase):
             output = root / "predictions.jsonl"
             args = build_parser().parse_args([
                 "generate-searchqa", "--data", str(data), "--output", str(output), "--model", "model",
-                "--attention-implementation", "sdpa", "--policy-hash", "policy-v1",
+                "--model-revision", "model-rev", "--dataset-source", "searchqa",
+                "--dataset-revision", "data-rev", "--attention-implementation", "sdpa", "--policy-hash", "policy-v1",
             ])
 
             def fake_records(_model, _tokenizer, prompts, **_kwargs):
@@ -125,6 +143,20 @@ class CLITest(unittest.TestCase):
             self.assertFalse(row["truncation"]["query"])
             self.assertFalse(row["truncation"]["response"])
 
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["max_length"], 4096)
+            self.assertEqual(manifest["model"]["revision"], "model-rev")
+            self.assertEqual(manifest["dataset"]["source"], "searchqa")
+            self.assertEqual(manifest["dataset"]["revision"], "data-rev")
+            self.assertEqual(manifest["source_schema"]["identity"], "searchqa.search_results.v1")
+            self.assertEqual(manifest["retrieval"]["requested_top_k"], 8)
+            self.assertEqual(manifest["artifacts"][0]["path"], output.name)
+            self.assertIn("sha256", manifest["artifacts"][0])
+            validated = root / "validated.json"
+            validate_args = build_parser().parse_args(["validate-run", "--directory", str(root), "--output", str(validated)])
+            validate_args.func(validate_args)
+            self.assertTrue(json.loads(validated.read_text(encoding="utf-8"))["valid"])
+
             evaluated = root / "evaluated.json"
             evaluate_args = build_parser().parse_args([
                 "evaluate", "--data", str(data), "--predictions", str(output), "--output", str(evaluated), "--protocol", "active-search",
@@ -135,6 +167,21 @@ class CLITest(unittest.TestCase):
             self.assertEqual(summary["retrieval_recall@8"], 1.0)
             self.assertEqual(summary["query_truncation_rate"], 0.0)
             self.assertEqual(summary["response_truncation_rate"], 0.0)
+
+            preflight = root / "preflight.json"
+            samples = root / "samples.jsonl"
+            preflight_args = build_parser().parse_args([
+                "preflight-quality", "--data", str(data), "--predictions", str(output),
+                "--output", str(preflight), "--samples", str(samples), "--split-name", "train-dev",
+                "--protocol", "active-search", "--sample-size", "1",
+            ])
+            preflight_args.func(preflight_args)
+            preflight_summary = json.loads(preflight.read_text(encoding="utf-8"))
+            sample = json.loads(samples.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(preflight_summary["protocol_exact_match"], 1.0)
+            self.assertEqual(preflight_summary["retrieval_recall@8"], 1.0)
+            self.assertIn("https://example.test/ada/1", sample["rendered_visible_response"])
+            self.assertEqual(sample["ranked_search_results"], row["ranked_search_results"])
 
     @staticmethod
     def _required_args(command):
