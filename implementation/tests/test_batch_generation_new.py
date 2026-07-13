@@ -3,7 +3,14 @@ import json
 import unittest
 from unittest.mock import patch
 
-from text_feedback_dpo.batch_generation import _hash, _record_output, generate_batch, parse_search_query, run_fixed_retrieval_pipeline
+from text_feedback_dpo.batch_generation import (
+    SCAFFOLD_PROMPT_VERSION,
+    _hash,
+    _record_output,
+    generate_batch,
+    parse_search_query,
+    run_fixed_retrieval_pipeline,
+)
 from text_feedback_dpo.runtime import GeneratedText, StudentGeneration
 
 
@@ -21,6 +28,23 @@ def source_records(prefix: str) -> list[dict]:
 
 
 class BatchGenerationTest(unittest.TestCase):
+    def test_v2_answer_prefix_is_model_visible_and_composed_without_parser_repair(self):
+        row = {"id": "v2", "question": "What fact?", "gold_answer": "relevant fact", "sources": source_records("relevant")}
+        result = run_fixed_retrieval_pipeline(
+            [row],
+            query_generate_batch=lambda _prompts: [GeneratedText("relevant fact", False)],
+            response_generate_batch=lambda prompts: [GeneratedText(
+                "relevant fact\nReasoning: The source states the relevant fact [S001].\nSources: S001",
+                False,
+            ) if prompts[0].endswith("Response:\nAnswer:") else None],
+            policy_hash="policy-v1",
+            prompt_version=SCAFFOLD_PROMPT_VERSION,
+        )[0]
+        self.assertEqual(result["response_prefix"], "Answer: ")
+        self.assertTrue(result["raw_response"].startswith("Answer: relevant fact"))
+        self.assertEqual(result["generated_response"].splitlines()[0], "relevant fact")
+        self.assertTrue(result["cited_score"]["correct"])
+
     def test_active_artifact_persists_hashes_for_every_canonical_derived_field(self):
         row = {
             "id": "hashes", "question": "What fact?", "gold_answer": "relevant fact",

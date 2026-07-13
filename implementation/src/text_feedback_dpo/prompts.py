@@ -111,6 +111,21 @@ def build_cited_response_prompt(
     return "\n".join(sections)
 
 
+def build_cited_response_prompt_v2(
+    example: dict,
+    retrieved_sources: Sequence[Mapping[str, object]],
+    hints: list[str],
+) -> str:
+    """Base-model continuation scaffold with an explicit, model-visible first label."""
+    prompt = build_cited_response_prompt(example, retrieved_sources, hints)
+    if not prompt.endswith("Response:"):
+        raise RuntimeError("v1 cited response prompt lost its terminal response marker")
+    return prompt.removesuffix("Response:") + """Your response has already started below. Continue immediately after the final `Answer:` with the concise answer text.
+Then emit exactly two more lines beginning `Reasoning:` and `Sources:`. Emit no other lines or preface.
+Response:
+Answer:"""
+
+
 def build_teacher_prompt(
     example: dict,
     failed_response: str,
@@ -183,6 +198,13 @@ def prompt_builder_identity() -> dict[str, dict[str, str]]:
             "builder": "text_feedback_dpo.prompts.build_cited_response_prompt",
             "implementation_sha256": _implementation_hash(
                 build_cited_response_prompt, _question, validate_retrieved_sources
+            ),
+        },
+        "response_v2": {
+            "builder": "text_feedback_dpo.prompts.build_cited_response_prompt_v2",
+            "implementation_sha256": _implementation_hash(
+                build_cited_response_prompt_v2, build_cited_response_prompt,
+                _question, validate_retrieved_sources,
             ),
         },
         "teacher": {

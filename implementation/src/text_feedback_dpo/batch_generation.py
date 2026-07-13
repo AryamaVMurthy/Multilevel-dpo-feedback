@@ -7,7 +7,11 @@ import re
 import time
 from typing import Any
 
-from text_feedback_dpo.prompts import build_cited_response_prompt, build_search_query_prompt
+from text_feedback_dpo.prompts import (
+    build_cited_response_prompt,
+    build_cited_response_prompt_v2,
+    build_search_query_prompt,
+)
 from text_feedback_dpo.responses import parse_cited_response, render_cited_response
 from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, tokenize_query, validate_source_records
 from text_feedback_dpo.searchqa import SOURCE_SCHEMA_VERSION
@@ -18,6 +22,7 @@ FIXED_TOP_K = 8
 FIXED_K1 = 1.2
 FIXED_B = 0.75
 PROMPT_VERSION = "fixed-retrieval-cited-v1"
+SCAFFOLD_PROMPT_VERSION = "fixed-retrieval-cited-answer-prefix-v2"
 RESPONSE_SCHEMA_VERSION = 1
 EVALUATOR_VERSION = "cited-response-evaluator-v1"
 MAX_QUERY_TOKENS = 16
@@ -248,8 +253,8 @@ def run_fixed_retrieval_pipeline(
         raise ValueError("active SearchQA retrieval is frozen at top_k=8, k1=1.2, b=0.75")
     if not isinstance(policy_hash, str) or not policy_hash.strip():
         raise ValueError("policy_hash must be a non-empty string")
-    if not isinstance(prompt_version, str) or not prompt_version.strip():
-        raise ValueError("prompt_version must be a non-empty string")
+    if prompt_version not in {PROMPT_VERSION, SCAFFOLD_PROMPT_VERSION}:
+        raise ValueError("prompt_version must be a registered active SearchQA prompt")
     if response_schema_version != RESPONSE_SCHEMA_VERSION:
         raise ValueError(f"response_schema_version must be {RESPONSE_SCHEMA_VERSION}")
     if not isinstance(evaluator_version, str) or not evaluator_version.strip():
@@ -341,7 +346,12 @@ def run_fixed_retrieval_pipeline(
         artifact["retrieval_context_hash"] = _hash(ranked, context=f"retrieval context for {row['id']}")
         artifact["retrieval_metrics"] = retrieval_metrics(ranked, row["gold_answer"])
         artifact["timings_ms"]["retrieval_individual_ms"] = (time.perf_counter_ns() - retrieval_started) / 1_000_000
-        response_prompt = build_cited_response_prompt(row, ranked, hints_by_id[row["id"]])
+        response_builder = (
+            build_cited_response_prompt_v2
+            if prompt_version == SCAFFOLD_PROMPT_VERSION
+            else build_cited_response_prompt
+        )
+        response_prompt = response_builder(row, ranked, hints_by_id[row["id"]])
         artifact["response_prompt_hash"] = _hash(response_prompt, context=f"response prompt for {row['id']}")
         artifact["response_prompt"] = response_prompt
         active.append(artifact)
@@ -351,7 +361,12 @@ def run_fixed_retrieval_pipeline(
     response_started = time.perf_counter_ns()
     response_records = _call_batch(response_generate_batch, response_prompts, batch_size=response_batch_size) if response_prompts else []
     response_elapsed_ms = (time.perf_counter_ns() - response_started) / 1_000_000
-    for artifact, (raw_response, response_truncated, scratchpad, scratchpad_truncated) in zip(active, response_records, strict=True):
+    for artifact, (generated_response, response_truncated, scratchpad, scratchpad_truncated) in zip(active, response_records, strict=True):
+        response_prefix = "Answer: " if prompt_version == SCAFFOLD_PROMPT_VERSION else ""
+        raw_response = response_prefix + generated_response
+        if prompt_version == SCAFFOLD_PROMPT_VERSION:
+            artifact["response_prefix"] = response_prefix
+            artifact["generated_response"] = generated_response
         artifact["raw_response"] = raw_response
         artifact["response_truncated"] = response_truncated
         artifact["truncated"] = bool(artifact["query_truncated"] or response_truncated)

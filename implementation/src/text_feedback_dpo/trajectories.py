@@ -11,6 +11,7 @@ from text_feedback_dpo.batch_generation import (
     FIXED_K1,
     FIXED_TOP_K,
     PROMPT_VERSION,
+    SCAFFOLD_PROMPT_VERSION,
     RESPONSE_SCHEMA_VERSION,
     _zero_cited_score,
     canonical_artifact_hashes,
@@ -18,7 +19,12 @@ from text_feedback_dpo.batch_generation import (
     parse_search_query,
 )
 from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
-from text_feedback_dpo.prompts import build_cited_response_prompt, build_search_query_prompt, build_teacher_prompt
+from text_feedback_dpo.prompts import (
+    build_cited_response_prompt,
+    build_cited_response_prompt_v2,
+    build_search_query_prompt,
+    build_teacher_prompt,
+)
 from text_feedback_dpo.responses import CitedResponseFormatError, parse_cited_response, render_cited_response
 from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, validate_source_records
 from text_feedback_dpo.searchqa import SOURCE_SCHEMA_VERSION
@@ -105,8 +111,8 @@ def validate_active_artifact(
         raise TrajectoryError(f"active artifact {example_id} requires explicit student provenance")
     if not isinstance(artifact["no_hint"], bool) or artifact["no_hint"] != (len(hints) == 0):
         raise TrajectoryError(f"active artifact {example_id} no_hint disagrees with exact hint context")
-    if artifact["prompt_version"] != PROMPT_VERSION:
-        raise TrajectoryError(f"active artifact {example_id} prompt_version must be {PROMPT_VERSION}")
+    if artifact["prompt_version"] not in {PROMPT_VERSION, SCAFFOLD_PROMPT_VERSION}:
+        raise TrajectoryError(f"active artifact {example_id} has an unregistered prompt_version")
     if artifact["evaluator_version"] != EVALUATOR_VERSION:
         raise TrajectoryError(f"active artifact {example_id} evaluator_version must be {EVALUATOR_VERSION}")
     if artifact["response_schema_version"] != RESPONSE_SCHEMA_VERSION:
@@ -154,7 +160,12 @@ def validate_active_artifact(
         raise TrajectoryError(f"active artifact {example_id} canonical ranked retrieval records do not match recomputation")
     _require_exact_field(artifact, "retrieval_context_hash", retrieval_context_hash(expected_ranked), example_id=example_id)
 
-    expected_response_prompt = build_cited_response_prompt(dict(example), expected_ranked, list(hints)) if query_valid else None
+    response_builder = (
+        build_cited_response_prompt_v2
+        if artifact["prompt_version"] == SCAFFOLD_PROMPT_VERSION
+        else build_cited_response_prompt
+    )
+    expected_response_prompt = response_builder(dict(example), expected_ranked, list(hints)) if query_valid else None
     _require_exact_field(artifact, "response_prompt", expected_response_prompt, example_id=example_id)
     expected_response_hash = _structured_hash(expected_response_prompt) if expected_response_prompt is not None else None
     _require_exact_field(artifact, "response_prompt_hash", expected_response_hash, example_id=example_id)
@@ -184,6 +195,12 @@ def validate_active_artifact(
     raw_response = artifact["raw_response"]
     if not isinstance(raw_response, str):
         raise TrajectoryError(f"active artifact {example_id} response-stage artifact requires raw_response text")
+    if artifact["prompt_version"] == SCAFFOLD_PROMPT_VERSION:
+        if artifact.get("response_prefix") != "Answer: ":
+            raise TrajectoryError(f"active artifact {example_id} response_prefix mismatch")
+        generated_response = artifact.get("generated_response")
+        if not isinstance(generated_response, str) or raw_response != "Answer: " + generated_response:
+            raise TrajectoryError(f"active artifact {example_id} scaffold composition mismatch")
     if stored_score := artifact["cited_score"]:
         if isinstance(stored_score, Mapping) and stored_score.get("correct") is True and ("<" in raw_response or ">" in raw_response):
             raise TrajectoryError(f"active artifact {example_id} successful response contains XML or angle markup")

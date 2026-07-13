@@ -2,6 +2,7 @@ import unittest
 
 from text_feedback_dpo.prompts import (
     build_cited_response_prompt,
+    build_cited_response_prompt_v2,
     build_search_query_prompt,
     build_short_answer_prompt,
     build_student_prompt,
@@ -240,6 +241,15 @@ class CitedResponseScoringTest(unittest.TestCase):
 
 
 class CitedPromptTest(unittest.TestCase):
+    def test_v2_response_scaffold_is_plain_text_and_forces_exact_first_characters(self):
+        prompt = build_cited_response_prompt_v2(
+            {"question": "Who wrote the first algorithm?"}, SOURCES, []
+        )
+        self.assertTrue(prompt.endswith("Response:\nAnswer:"))
+        self.assertIn("Continue immediately after the final `Answer:`", prompt)
+        self.assertIn("exactly two more lines", prompt)
+        self.assertNotIn("<answer>", prompt)
+
     def test_archival_short_prompt_has_explicit_builder_and_compatibility_wrapper(self):
         example = {"question": "Who?", "packed_evidence": "Ada evidence", "gold_answer": "Ada"}
         self.assertEqual(build_student_prompt(example, []), build_short_answer_prompt(example, []))

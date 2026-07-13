@@ -562,7 +562,9 @@ def build_sft_rows_from_bootstrap(
             seed = choice[1] if task == "query" else choice[0]
             artifact = choice[2] if task == "query" else choice[1]
             prompt_field = "query_prompt" if task == "query" else "response_prompt"
-            completion_field = "raw_query" if task == "query" else "raw_response"
+            completion_field = "raw_query" if task == "query" else (
+                "generated_response" if artifact.get("response_prefix") == "Answer: " else "raw_response"
+            )
             completion = _completion(artifact[completion_field], task=task)
             if _sft_combined_token_count(tokenizer, str(artifact[prompt_field]), completion) > max_length:
                 exclude(task, "combined_token_length_exceeds_max_length")
