@@ -33,7 +33,7 @@ def collect_dataset_batchwise(*, examples: list[dict], student_generate_batch: C
                 teacher_prompts.append(build_teacher_prompt(state["example"], response, state["interventions"]))
         if not failed_ids:
             break
-        feedback_rows = teacher_generate_batch(teacher_prompts, max_new_tokens=96, temperature=0.0, top_p=1.0)
+        feedback_rows = teacher_generate_batch(teacher_prompts, max_new_tokens=512, temperature=0.0, top_p=1.0)
         if len(feedback_rows) != len(failed_ids):
             raise ValueError(f"teacher batch cardinality mismatch at attempt {attempt_index}")
         for example_id, raw_feedback in zip(failed_ids, feedback_rows, strict=True):

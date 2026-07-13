@@ -20,12 +20,14 @@ class CLITest(unittest.TestCase):
         self.assertEqual(collected.student_thinking_mode, "direct")
         self.assertTrue(collected.teacher_thinking)
         self.assertEqual(collected.answer_max_new_tokens, 32)
-        self.assertEqual(collected.teacher_max_new_tokens, 96)
+        self.assertEqual(collected.teacher_max_new_tokens, 512)
         self.assertEqual(collected.student_batch_size, 32)
         self.assertEqual(collected.teacher_batch_size, 8)
         self.assertEqual(collected.dataset_revision, "data-rev")
         self.assertEqual(collected.prompt_version, "plain-v2")
         self.assertEqual(collected.seed, 7)
+        teacher_probe = parser.parse_args(["probe-model"] + self._required_args("probe-model"))
+        self.assertEqual(teacher_probe.teacher_max_new_tokens, 512)
 
     @staticmethod
     def _required_args(command):

@@ -46,6 +46,7 @@ class CollectionBatchTest(unittest.TestCase):
 
         def teacher(prompts, **_kwargs):
             teacher_calls.append(len(prompts))
+            self.assertEqual(_kwargs["max_new_tokens"], 512)
             return ['{"hint":"Recheck the entity."}']
 
         rows = collect_dataset_batchwise(

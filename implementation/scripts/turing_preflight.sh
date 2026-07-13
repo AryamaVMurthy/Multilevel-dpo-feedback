@@ -64,4 +64,5 @@ PY
 
 uv run --frozen python -m text_feedback_dpo.cli probe-model \
   --role "$MODEL_ROLE" --model "$MODEL_ID" --model-revision "$MODEL_REVISION" \
-  --teacher-quantization 4bit --attention-implementation sdpa --output "$OUTPUT"
+  --teacher-quantization 4bit --teacher-max-new-tokens 512 \
+  --attention-implementation sdpa --output "$OUTPUT"

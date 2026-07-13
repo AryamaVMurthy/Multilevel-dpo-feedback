@@ -35,6 +35,7 @@ mkdir -p "$HF_HOME" logs
 ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}"
 STUDENT_BATCH_SIZE="${STUDENT_BATCH_SIZE:-32}"
 TEACHER_BATCH_SIZE="${TEACHER_BATCH_SIZE:-8}"
+TEACHER_MAX_NEW_TOKENS="${TEACHER_MAX_NEW_TOKENS:-512}"
 STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"
 SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
 echo "<runtime component=collection attention_implementation=\"$ATTENTION_IMPLEMENTATION\" fallback_reason=\"${ATTENTION_FALLBACK_REASON:-none}\"/>"
@@ -65,6 +66,6 @@ COLLECT_ARGS=(
   --student-batch-size "$STUDENT_BATCH_SIZE" --teacher-batch-size "$TEACHER_BATCH_SIZE"
   --student-thinking-mode "$STUDENT_THINKING_MODE"
   --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --answer-max-new-tokens 32
-  --teacher-max-new-tokens 96 --teacher-thinking
+  --teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS" --teacher-thinking
 )
 uv run --frozen python -m text_feedback_dpo.cli collect "${COLLECT_ARGS[@]}"

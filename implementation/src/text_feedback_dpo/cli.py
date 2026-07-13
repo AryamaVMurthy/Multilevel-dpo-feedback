@@ -93,7 +93,7 @@ def cmd_probe_model(args: argparse.Namespace) -> None:
         [],
     )
     rendered = render_teacher_prompts(tokenizer, [prompt], enable_thinking=True)
-    final = extract_qwen_final_content(generate_batch(model, tokenizer, rendered, max_new_tokens=96, temperature=0.0, top_p=1.0)[0])
+    final = extract_qwen_final_content(generate_batch(model, tokenizer, rendered, max_new_tokens=args.teacher_max_new_tokens, temperature=0.0, top_p=1.0)[0])
     feedback = parse_feedback(final, gold_answer="Ada Lovelace")
     write_json(args.output, {"role": "teacher", "model": args.model, "quantization": args.teacher_quantization, "hint": feedback.hint, "native_thinking": True})
 
@@ -360,6 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--model", required=True)
     probe.add_argument("--model-revision", required=True)
     probe.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
+    probe.add_argument("--teacher-max-new-tokens", type=int, default=512)
     probe.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
     probe.add_argument("--output", required=True, type=Path)
     probe.set_defaults(func=cmd_probe_model)
@@ -439,7 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--student-thinking-mode", choices=("direct", "two_pass"), default="direct")
     collect.add_argument("--scratchpad-max-new-tokens", type=int, default=256)
     collect.add_argument("--answer-max-new-tokens", type=int, default=32)
-    collect.add_argument("--teacher-max-new-tokens", type=int, default=96)
+    collect.add_argument("--teacher-max-new-tokens", type=int, default=512)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)
