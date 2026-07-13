@@ -55,8 +55,10 @@ class TuringRuntimeTest(unittest.TestCase):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):
             self.assertIn(value, text)
-        self.assertNotIn("TEACHER_FALLBACK", text)
-        self.assertIn("STUDENT_BATCH_SIZE", text)
+        self.assertIn("TEACHER_FALLBACK_REASON", text)
+        self.assertIn("--teacher-fallback-reason", text)
+        self.assertIn("QUERY_BATCH_SIZE", text)
+        self.assertIn("RESPONSE_BATCH_SIZE", text)
         self.assertIn("TEACHER_BATCH_SIZE", text)
         self.assertIn("TEACHER_MAX_NEW_TOKENS", text)
         self.assertIn('--teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS"', text)
@@ -130,7 +132,8 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("--teacher-batch-size", text)
         self.assertIn("--student-batch-size", text)
         self.assertIn("--teacher-max-new-tokens", text)
-        self.assertIn("--answer-max-new-tokens", text)
+        self.assertIn("--query-max-new-tokens", text)
+        self.assertIn("--response-max-new-tokens", text)
         self.assertIn("--scratchpad-max-new-tokens", text)
 
     def test_scripts_record_required_manifest_identity_and_observability(self):
@@ -165,13 +168,17 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("non-reentrant", text.lower())
 
     def test_generation_and_training_consume_a_hashed_frozen_optimization_decision(self):
-        for name in ("turing_generate.sh", "turing_train.sh", "turing_comparisons.sh"):
+        for name in ("turing_generate.sh", "turing_train.sh"):
             text = Path("scripts", name).read_text(encoding="utf-8")
             self.assertIn("OPTIMIZATION_DECISION", text, name)
             self.assertIn("OPTIMIZATION_DECISION_SHA256", text, name)
             self.assertIn("validate-decision", text, name)
             self.assertNotIn('ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-', text, name)
         comparisons = Path("scripts/turing_comparisons.sh").read_text(encoding="utf-8")
+        for name in ("SFT_TRAIN_DECISION", "GRPO_TRAIN_DECISION", "DAPO_TRAIN_DECISION", "SFT_GENERATION_DECISION", "GRPO_GENERATION_DECISION", "DAPO_GENERATION_DECISION"):
+            self.assertIn(name, comparisons)
+            self.assertIn(f"{name}_SHA256", comparisons)
+        self.assertIn("validate-decision", comparisons)
         self.assertNotIn("CHECKPOINT_SMOKE_COMMAND", comparisons)
         self.assertNotIn("RESUME_SMOKE_COMMAND", comparisons)
         self.assertIn("validate-checkpoints", comparisons)

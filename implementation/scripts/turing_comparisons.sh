@@ -1,5 +1,6 @@
 #!/bin/bash
-# Matched SFT/GRPO/DAPO comparison arms on one four-GPU node.
+# Matched SFT/GRPO/DAPO training and validation-only comparison on one four-GPU node.
+# Untouched test evaluation is reserved for turing_finalize_report.sh after promotion.
 #SBATCH -p u22
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -14,115 +15,129 @@ set -euo pipefail
 COMPONENT=turing_comparisons
 log_event() { local event="$1"; shift; printf 'event=%s timestamp=%s component=%s %s\n' "$event" "$(date -u +%FT%TZ)" "$COMPONENT" "$*"; }
 fail() { log_event failure reason="$1" fallback_reason="${2:-none}" >&2; exit 2; }
-hash_value() { printf '%s' "$1" | sha256sum | awk '{print $1}'; }
-hash_path() { if [[ -f "$1" ]]; then sha256sum "$1" | awk '{print $1}'; else hash_value "$1"; fi; }
-allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is required}"; if [[ "$raw" =~ ^[0-9]+$ ]]; then printf '%s\n' "$raw"; elif [[ "$raw" =~ ^gpu:([0-9]+)$ ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; else fail "unsupported SLURM_GPUS_ON_NODE format: $raw" "gpu_count_parse_unsupported"; fi; }
-write_manifest() {
-  local status="$1"; export MANIFEST_STATUS="$status" MANIFEST_ENDED_AT="$(date -u +%FT%TZ)"
-  uv run --frozen python - "$RUN_MANIFEST" <<'PY'
-import json, os, platform, socket, sys
-manifest = {"status": os.environ["MANIFEST_STATUS"], "commit_hash": os.environ["COMMIT_HASH"], "config_hash": os.environ["CONFIG_HASH"], "model_hash": os.environ["MODEL_HASH"], "dataset_hash": os.environ["DATASET_HASH"], "prompt_hash": os.environ["PROMPT_HASH"], "retrieval_hash": os.environ["RETRIEVAL_HASH"], "source_schema_hash": os.environ["SOURCE_SCHEMA_HASH"], "node": socket.gethostname(), "platform": platform.platform(), "slurm_allocation": {k: os.environ.get(k) for k in ("SLURM_JOB_ID", "SLURM_JOB_NODELIST", "SLURM_NNODES", "SLURM_NTASKS", "SLURM_GPUS_ON_NODE")}, "package_versions": os.environ["PACKAGE_VERSIONS"].split(";"), "gpu_telemetry": os.environ["GPU_TELEMETRY"], "timings": {"started_at": os.environ["MANIFEST_STARTED_AT"], "ended_at": os.environ["MANIFEST_ENDED_AT"]}, "artifact_paths": os.environ["ARTIFACT_PATHS"].split("|"), "fallback_reason": os.environ.get("ATTENTION_FALLBACK_REASON", "none"), "max_length": 4096, "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]}, "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]}}
-with open(sys.argv[1], "w", encoding="utf-8") as handle: json.dump(manifest, handle, sort_keys=True, indent=2); handle.write("\n")
-PY
-}
+hash_file() { sha256sum "$1" | awk '{print $1}'; }
+allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is required}"; if [[ "$raw" =~ ^[0-9]+$ ]]; then printf '%s\n' "$raw"; elif [[ "$raw" =~ ^gpu:([0-9]+)$ ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; else fail "unsupported SLURM_GPUS_ON_NODE format: $raw" gpu_count_parse_unsupported; fi; }
 
-: "${TURING_ACCOUNT:?TURING_ACCOUNT must be supplied with --export}"
-: "${PROJECT_DIR:?PROJECT_DIR must be supplied with --export}"
-: "${CONFIG:?CONFIG must be supplied with --export}"
-: "${BASE_MODEL:?BASE_MODEL must be supplied with --export}"
-: "${BASE_REVISION:?BASE_REVISION must be supplied with --export}"
-: "${SFT_TRAIN:?SFT_TRAIN must be supplied with --export}"
-: "${SFT_EVAL:?SFT_EVAL must be supplied with --export}"
-: "${RL_DATA:?RL_DATA must be supplied with --export}"
-: "${VAL_DATA:?VAL_DATA must be supplied with --export}"
-: "${TEST_DATA:?TEST_DATA must be supplied with --export}"
-: "${DPO_METRICS:?DPO_METRICS must be supplied with --export}"
-: "${OUTPUT_ROOT:?OUTPUT_ROOT must be supplied with --export}"
-: "${TRAIN_GPUS:?TRAIN_GPUS must be 4 for comparison training}"
-: "${PROMPT_HASH:?PROMPT_HASH must be supplied with --export}"
-: "${RETRIEVAL_HASH:?RETRIEVAL_HASH must be supplied with --export}"
-: "${SOURCE_SCHEMA_HASH:?SOURCE_SCHEMA_HASH must be supplied with --export}"
-: "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied}"
-: "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied}"
-: "${DATASET_SOURCE:?DATASET_SOURCE must be supplied}"
-: "${DATASET_REVISION:?DATASET_REVISION must be supplied}"
-: "${SFT_INITIAL_CHECKPOINT:?SFT_INITIAL_CHECKPOINT must be supplied}"
-: "${SFT_RESUMED_CHECKPOINT:?SFT_RESUMED_CHECKPOINT must be supplied}"
-: "${GRPO_INITIAL_CHECKPOINT:?GRPO_INITIAL_CHECKPOINT must be supplied}"
-: "${GRPO_RESUMED_CHECKPOINT:?GRPO_RESUMED_CHECKPOINT must be supplied}"
-: "${DAPO_INITIAL_CHECKPOINT:?DAPO_INITIAL_CHECKPOINT must be supplied}"
-: "${DAPO_RESUMED_CHECKPOINT:?DAPO_RESUMED_CHECKPOINT must be supplied}"
+required=(TURING_ACCOUNT PROJECT_DIR CONFIG BASE_MODEL BASE_REVISION RL_START_MODEL RL_START_REVISION SFT_TRAIN SFT_EVAL RL_DATA VAL_DATA OUTPUT_ROOT TRAIN_GPUS DATASET_SOURCE DATASET_REVISION PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH POLICY_HASH LEARNING_RATE EPOCHS SAVE_STEPS EVAL_STEPS
+  SFT_TRAIN_DECISION SFT_TRAIN_DECISION_SHA256 GRPO_TRAIN_DECISION GRPO_TRAIN_DECISION_SHA256 DAPO_TRAIN_DECISION DAPO_TRAIN_DECISION_SHA256
+  SFT_GENERATION_DECISION SFT_GENERATION_DECISION_SHA256 GRPO_GENERATION_DECISION GRPO_GENERATION_DECISION_SHA256 DAPO_GENERATION_DECISION DAPO_GENERATION_DECISION_SHA256
+  SFT_SMOKE_MANIFEST SFT_SMOKE_MANIFEST_SHA256 GRPO_SMOKE_MANIFEST GRPO_SMOKE_MANIFEST_SHA256 DAPO_SMOKE_MANIFEST DAPO_SMOKE_MANIFEST_SHA256
+  SFT_OUTPUT_REVISION GRPO_OUTPUT_REVISION DAPO_OUTPUT_REVISION STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B)
+for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || fail "$name must be supplied explicitly" comparison_contract_missing; done
+: "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == 1 ]] || fail "local torchrun requires one node; got $SLURM_NNODES" multi_node_training_forbidden
+: "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == 1 ]] || fail "local torchrun requires one task; got $SLURM_NTASKS" multi_task_training_forbidden
+ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
+[[ "$TRAIN_GPUS" == 4 && "$ALLOCATED_GPU_COUNT" == "$TRAIN_GPUS" ]] || fail "comparison requires exactly four allocated GPUs and TRAIN_GPUS=4" gpu_allocation_mismatch
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
-[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "invalid PROJECT_DIR" "invalid_project_root"
+[[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "invalid PROJECT_DIR" invalid_project_root
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
-mkdir -p "$HF_HOME" "$OUTPUT_ROOT" logs
-: "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == "1" ]] || fail "local torchrun requires one node; got $SLURM_NNODES" "multi_node_training_forbidden"
-: "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == "1" ]] || fail "local torchrun requires one task; got $SLURM_NTASKS" "multi_task_training_forbidden"
-ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
-[[ "$TRAIN_GPUS" == "4" ]] || fail "full comparison training requires TRAIN_GPUS=4; got $TRAIN_GPUS" "full_training_gpu_count"
-[[ "$ALLOCATED_GPU_COUNT" == "$TRAIN_GPUS" ]] || fail "TRAIN_GPUS=$TRAIN_GPUS differs from allocated GPU count=$ALLOCATED_GPU_COUNT" "gpu_allocation_mismatch"
-
-PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
-CONFIG_HASH="$(hash_path "$CONFIG")" DATASET_HASH="$(hash_path "$RL_DATA")"
-IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
-  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose training --output-format training-tsv \
-    --config-sha256 "$CONFIG_HASH" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" \
-    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
-) || fail "frozen optimization decision validation failed" optimization_decision_invalid
-[[ "$DECISION_MICROBATCH" == "1" && "$DECISION_DATALOADER_WORKERS" == "0" ]] || fail "selected trainer microbatch/workers require Task 7 CLI support" task7_training_probe_support_missing
-IFS=$'\t' read -r GENERATION_ATTENTION_IMPLEMENTATION GENERATION_QUERY_BATCH_SIZE GENERATION_RESPONSE_BATCH_SIZE GENERATION_QUERY_MAX_NEW_TOKENS GENERATION_RESPONSE_MAX_NEW_TOKENS GENERATION_FALLBACK_REASON GENERATION_DECISION_SHA256 < <(
-  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv
-) || fail "frozen generation decision validation failed" optimization_decision_invalid
-[[ "$GENERATION_ATTENTION_IMPLEMENTATION" == "$ATTENTION_IMPLEMENTATION" ]] || fail "training and generation attention decisions differ" optimization_decision_attention_mismatch
-STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}" SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}"
-COMMIT_HASH="$(git rev-parse HEAD)" MODEL_HASH="${MODEL_HASH:-$(hash_value "$BASE_MODEL@$BASE_REVISION")}" RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT_ROOT/run-manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" ARTIFACT_PATHS="$OUTPUT_ROOT|$CONFIG|$SFT_TRAIN|$RL_DATA|$VAL_DATA|$TEST_DATA|$OPTIMIZATION_DECISION" MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
+export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy PYTORCH_TF32_CUBLAS_OVERRIDE=1
+PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"; [[ -x "$PROBE_RUNNER" ]] || fail "probe runner missing" probe_runner_missing
+COMMIT_HASH="$(git rev-parse HEAD)"; CONFIG_HASH="$(hash_file "$CONFIG")"; mkdir -p "$OUTPUT_ROOT" logs
+MODEL_HASH="$(printf '%s' "$BASE_MODEL@$BASE_REVISION|$RL_START_MODEL@$RL_START_REVISION" | sha256sum | awk '{print $1}')"
+DATASET_HASH="$(printf '%s' "$(hash_file "$SFT_TRAIN")|$(hash_file "$RL_DATA")|$(hash_file "$VAL_DATA")" | sha256sum | awk '{print $1}')"
+GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}"; RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT_ROOT/run-manifest.json}"; MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
 PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
 import importlib.metadata
-print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transformers", "trl", "deepspeed", "bitsandbytes")))
+print(";".join(f"{name}={importlib.metadata.version(name)}" for name in ("torch", "transformers", "trl", "deepspeed", "bitsandbytes")))
 PY
 )"
-export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH RUN_MANIFEST GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT PACKAGE_VERSIONS OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 DATASET_SOURCE DATASET_REVISION
-log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" allocated_gpus="$ALLOCATED_GPU_COUNT" max_length=4096
+ARTIFACT_PATHS="$OUTPUT_ROOT|$CONFIG|$SFT_TRAIN|$SFT_EVAL|$RL_DATA|$VAL_DATA|$SFT_TRAIN_DECISION|$GRPO_TRAIN_DECISION|$DAPO_TRAIN_DECISION|$SFT_GENERATION_DECISION|$GRPO_GENERATION_DECISION|$DAPO_GENERATION_DECISION|$SFT_SMOKE_MANIFEST|$GRPO_SMOKE_MANIFEST|$DAPO_SMOKE_MANIFEST"
+
+validate_training() {
+  local method="$1" decision="$2" decision_sha="$3" model="$4" revision="$5" data="$6" smoke="$7" smoke_sha="$8"
+  local data_sha help
+  data_sha="$(hash_file "$data")"
+  IFS=$'\t' read -r TRAIN_ATTENTION TRAIN_MICROBATCH TRAIN_ACCUM TRAIN_WORKERS TRAIN_FALLBACK TRAIN_DECISION_SHA < <(
+    "$PROBE_RUNNER" validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose training --output-format training-tsv \
+      --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
+      --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
+      --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+  ) || fail "$method training decision validation failed" optimization_decision_invalid
+  "$PROBE_RUNNER" validate-checkpoints --smoke-manifest "$smoke" --expected-sha256 "$smoke_sha" \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
+    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
+    --optimization-decision-sha256 "$decision_sha" --method "$method" >/dev/null || fail "$method checkpoint smoke validation failed" checkpoint_smoke_invalid
+  help="$(uv run --frozen python -m text_feedback_dpo.cli "train-$method" --help)" || fail "cannot inspect train-$method CLI" task7_train_cli_help_failed
+  for flag in --dataloader-workers --per-device-train-batch-size; do [[ "$help" == *"$flag"* ]] || fail "Task 7 train-$method lacks $flag" task7_training_worker_cli_missing; done
+}
+
+validate_generation() {
+  local method="$1" decision="$2" decision_sha="$3" model="$4" revision="$5" data_sha
+  data_sha="$(hash_file "$VAL_DATA")"
+  IFS=$'\t' read -r GEN_ATTENTION GEN_QUERY_BATCH GEN_RESPONSE_BATCH GEN_QUERY_TOKENS GEN_RESPONSE_TOKENS GEN_THINKING GEN_SCRATCH GEN_QUERY_TEMP GEN_RESPONSE_TEMP GEN_TOP_P GEN_TOP_K GEN_K1 GEN_B GEN_FALLBACK GEN_DECISION_SHA < <(
+    "$PROBE_RUNNER" validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose generation --output-format generation-tsv \
+      --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
+      --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
+      --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
+      --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
+      --query-temperature "$QUERY_TEMPERATURE" --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
+  ) || fail "$method generation decision validation failed" generation_decision_invalid
+}
+
+SFT_MODEL="$OUTPUT_ROOT/sft/final"; GRPO_MODEL="$OUTPUT_ROOT/grpo/final"; DAPO_MODEL="$OUTPUT_ROOT/dapo/final"
+validate_training sft "$SFT_TRAIN_DECISION" "$SFT_TRAIN_DECISION_SHA256" "$BASE_MODEL" "$BASE_REVISION" "$SFT_TRAIN" "$SFT_SMOKE_MANIFEST" "$SFT_SMOKE_MANIFEST_SHA256"
+SFT_MICROBATCH="$TRAIN_MICROBATCH"; SFT_ACCUM="$TRAIN_ACCUM"; SFT_WORKERS="$TRAIN_WORKERS"
+validate_training grpo "$GRPO_TRAIN_DECISION" "$GRPO_TRAIN_DECISION_SHA256" "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$GRPO_SMOKE_MANIFEST" "$GRPO_SMOKE_MANIFEST_SHA256"
+GRPO_MICROBATCH="$TRAIN_MICROBATCH"; GRPO_ACCUM="$TRAIN_ACCUM"; GRPO_WORKERS="$TRAIN_WORKERS"
+validate_training dapo "$DAPO_TRAIN_DECISION" "$DAPO_TRAIN_DECISION_SHA256" "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$DAPO_SMOKE_MANIFEST" "$DAPO_SMOKE_MANIFEST_SHA256"
+DAPO_MICROBATCH="$TRAIN_MICROBATCH"; DAPO_ACCUM="$TRAIN_ACCUM"; DAPO_WORKERS="$TRAIN_WORKERS"
+validate_generation sft "$SFT_GENERATION_DECISION" "$SFT_GENERATION_DECISION_SHA256" "$SFT_MODEL" "$SFT_OUTPUT_REVISION"
+validate_generation grpo "$GRPO_GENERATION_DECISION" "$GRPO_GENERATION_DECISION_SHA256" "$GRPO_MODEL" "$GRPO_OUTPUT_REVISION"
+validate_generation dapo "$DAPO_GENERATION_DECISION" "$DAPO_GENERATION_DECISION_SHA256" "$DAPO_MODEL" "$DAPO_OUTPUT_REVISION"
+log_event launch_contract_validated decisions="${SFT_TRAIN_DECISION_SHA256},${GRPO_TRAIN_DECISION_SHA256},${DAPO_TRAIN_DECISION_SHA256},${SFT_GENERATION_DECISION_SHA256},${GRPO_GENERATION_DECISION_SHA256},${DAPO_GENERATION_DECISION_SHA256}" fallback_reason=none
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu --format=csv -l 10 > "$GPU_TELEMETRY" &
 GPU_MONITOR_PID=$!
 cleanup() { if kill -0 "$GPU_MONITOR_PID" 2>/dev/null; then kill "$GPU_MONITOR_PID"; fi; }
 trap cleanup EXIT
-validate_checkpoint_gate() {
-  local method="$1" initial="$2" resumed="$3" artifact="$OUTPUT_ROOT/$method-checkpoint-gate.json"
-  "$PROBE_RUNNER" validate-checkpoints --initial-checkpoint "$initial" --resumed-checkpoint "$resumed" --expected-root "$OUTPUT_ROOT" --output "$artifact"
-  log_event checkpoint_resume_gate_passed method="$method" artifact="$artifact" fallback_reason=none
-}
-if [[ -z "${EXISTING_SFT:-}" ]]; then validate_checkpoint_gate sft "$SFT_INITIAL_CHECKPOINT" "$SFT_RESUMED_CHECKPOINT"; fi
-validate_checkpoint_gate grpo "$GRPO_INITIAL_CHECKPOINT" "$GRPO_RESUMED_CHECKPOINT"
-validate_checkpoint_gate dapo "$DAPO_INITIAL_CHECKPOINT" "$DAPO_RESUMED_CHECKPOINT"
 
-TRAIN_COMMON=(--deepspeed-config configs/deepspeed_zero3.json --save-steps 100 --eval-steps 100 --gradient-accumulation-steps "$DECISION_GRADIENT_ACCUMULATION_STEPS")
-if [[ -n "${EXISTING_SFT:-}" ]]; then
-  SFT_MODEL="$EXISTING_SFT"; START_MODEL="$EXISTING_SFT"; START_REVISION=""; log_event comparison_sft source=existing_checkpoint model="$SFT_MODEL" fallback_reason=none
-else
-  uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node="$ALLOCATED_GPU_COUNT" -m text_feedback_dpo.cli train-sft --config "$CONFIG" --train "$SFT_TRAIN" --eval "$SFT_EVAL" --model "$BASE_MODEL" --model-revision "$BASE_REVISION" --output "$OUTPUT_ROOT/sft" "${TRAIN_COMMON[@]}"
-  SFT_MODEL="$OUTPUT_ROOT/sft/final"; START_MODEL="$SFT_MODEL"; START_REVISION=""
-fi
-RL_ARGS=(--config "$CONFIG" --train "$RL_DATA" --output "$OUTPUT_ROOT/grpo" --model "$START_MODEL" "${TRAIN_COMMON[@]}")
-if [[ -n "$START_REVISION" ]]; then RL_ARGS+=(--model-revision "$START_REVISION"); fi
-uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node="$ALLOCATED_GPU_COUNT" -m text_feedback_dpo.cli train-grpo "${RL_ARGS[@]}"
-RL_ARGS=(--config "$CONFIG" --train "$RL_DATA" --output "$OUTPUT_ROOT/dapo" --model "$START_MODEL" "${TRAIN_COMMON[@]}")
-if [[ -n "$START_REVISION" ]]; then RL_ARGS+=(--model-revision "$START_REVISION"); fi
-uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node="$ALLOCATED_GPU_COUNT" -m text_feedback_dpo.cli train-dapo "${RL_ARGS[@]}"
+train_arm() {
+  local method="$1" model="$2" revision="$3" train="$4" output="$5" microbatch="$6" accum="$7" workers="$8"; shift 8
+  uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node="$ALLOCATED_GPU_COUNT" -m text_feedback_dpo.cli "train-$method" \
+    --config "$CONFIG" --train "$train" --output "$output" --model "$model" --model-revision "$revision" \
+    --deepspeed-config configs/deepspeed_zero3.json --save-steps "$SAVE_STEPS" --eval-steps "$EVAL_STEPS" --gradient-accumulation-steps "$accum" \
+    --learning-rate "$LEARNING_RATE" --epochs "$EPOCHS" \
+    --per-device-train-batch-size "$microbatch" --dataloader-workers "$workers" "$@"
+}
+train_arm sft "$BASE_MODEL" "$BASE_REVISION" "$SFT_TRAIN" "$OUTPUT_ROOT/sft" "$SFT_MICROBATCH" "$SFT_ACCUM" "$SFT_WORKERS" --eval "$SFT_EVAL"
+train_arm grpo "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$OUTPUT_ROOT/grpo" "$GRPO_MICROBATCH" "$GRPO_ACCUM" "$GRPO_WORKERS"
+train_arm dapo "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$OUTPUT_ROOT/dapo" "$DAPO_MICROBATCH" "$DAPO_ACCUM" "$DAPO_WORKERS"
 
 for method in sft grpo dapo; do
-  MODEL="$OUTPUT_ROOT/$method/final"; if [[ "$method" == "sft" ]]; then MODEL="$SFT_MODEL"; fi
-  for split in validation test; do
-    DATA="$VAL_DATA"; if [[ "$split" == "test" ]]; then DATA="$TEST_DATA"; fi
-    uv run --frozen python -m text_feedback_dpo.cli generate-searchqa --data "$DATA" --output "$OUTPUT_ROOT/$method-$split-predictions.jsonl" --model "$MODEL" --model-revision "$BASE_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --attention-implementation "$ATTENTION_IMPLEMENTATION" --device cuda:0 --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --query-batch-size "$GENERATION_QUERY_BATCH_SIZE" --response-batch-size "$GENERATION_RESPONSE_BATCH_SIZE" --query-max-new-tokens "$GENERATION_QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$GENERATION_RESPONSE_MAX_NEW_TOKENS" --top-p 1.0 --top-k 8 --k1 1.2 --b 0.75 --context-budget 4096 --prompt-version fixed-retrieval-cited-v1 --policy-hash "${POLICY_HASH:?POLICY_HASH must be supplied with --export}:$method:$split"
-    uv run --frozen python -m text_feedback_dpo.cli evaluate --data "$DATA" --predictions "$OUTPUT_ROOT/$method-$split-predictions.jsonl" --output "$OUTPUT_ROOT/$method-$split-metrics.json" --protocol active-search
-  done
+  case "$method" in
+    sft) model="$SFT_MODEL"; revision="$SFT_OUTPUT_REVISION"; decision="$SFT_GENERATION_DECISION"; decision_sha="$SFT_GENERATION_DECISION_SHA256" ;;
+    grpo) model="$GRPO_MODEL"; revision="$GRPO_OUTPUT_REVISION"; decision="$GRPO_GENERATION_DECISION"; decision_sha="$GRPO_GENERATION_DECISION_SHA256" ;;
+    dapo) model="$DAPO_MODEL"; revision="$DAPO_OUTPUT_REVISION"; decision="$DAPO_GENERATION_DECISION"; decision_sha="$DAPO_GENERATION_DECISION_SHA256" ;;
+  esac
+  validate_generation "$method" "$decision" "$decision_sha" "$model" "$revision"
+  uv run --frozen python -m text_feedback_dpo.cli generate-searchqa --data "$VAL_DATA" --output "$OUTPUT_ROOT/$method-validation-predictions.jsonl" \
+    --model "$model" --model-revision "$revision" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" \
+    --attention-implementation "$GEN_ATTENTION" --device cuda:0 --student-thinking-mode "$GEN_THINKING" --scratchpad-max-new-tokens "$GEN_SCRATCH" \
+    --query-batch-size "$GEN_QUERY_BATCH" --response-batch-size "$GEN_RESPONSE_BATCH" --query-max-new-tokens "$GEN_QUERY_TOKENS" --response-max-new-tokens "$GEN_RESPONSE_TOKENS" \
+    --query-temperature "$GEN_QUERY_TEMP" --response-temperature "$GEN_RESPONSE_TEMP" --top-p "$GEN_TOP_P" --top-k "$GEN_TOP_K" --k1 "$GEN_K1" --b "$GEN_B" \
+    --context-budget 4096 --prompt-version fixed-retrieval-cited-v1 --policy-hash "$POLICY_HASH:$method:validation"
+  uv run --frozen python -m text_feedback_dpo.cli evaluate --data "$VAL_DATA" --predictions "$OUTPUT_ROOT/$method-validation-predictions.jsonl" --output "$OUTPUT_ROOT/$method-validation-metrics.json" --protocol active-search
 done
-uv run --frozen python -m text_feedback_dpo.cli compare --run "dpo=$DPO_METRICS" --run "sft-validation=$OUTPUT_ROOT/sft-validation-metrics.json" --run "grpo-validation=$OUTPUT_ROOT/grpo-validation-metrics.json" --run "dapo-validation=$OUTPUT_ROOT/dapo-validation-metrics.json" --run "sft-test=$OUTPUT_ROOT/sft-test-metrics.json" --run "grpo-test=$OUTPUT_ROOT/grpo-test-metrics.json" --run "dapo-test=$OUTPUT_ROOT/dapo-test-metrics.json" --output "$OUTPUT_ROOT/comparison.json" --html "$OUTPUT_ROOT/comparison.html" --artifact "$DPO_METRICS" --artifact "$OUTPUT_ROOT/sft-validation-metrics.json" --artifact "$OUTPUT_ROOT/grpo-validation-metrics.json" --artifact "$OUTPUT_ROOT/dapo-validation-metrics.json" --artifact "$OUTPUT_ROOT/sft-test-metrics.json" --artifact "$OUTPUT_ROOT/grpo-test-metrics.json" --artifact "$OUTPUT_ROOT/dapo-test-metrics.json"
-log_event comparisons_complete artifact="$OUTPUT_ROOT/comparison.json"
-write_manifest complete
+uv run --frozen python -m text_feedback_dpo.cli compare --run "sft-validation=$OUTPUT_ROOT/sft-validation-metrics.json" --run "grpo-validation=$OUTPUT_ROOT/grpo-validation-metrics.json" --run "dapo-validation=$OUTPUT_ROOT/dapo-validation-metrics.json" \
+  --output "$OUTPUT_ROOT/comparison.json" --html "$OUTPUT_ROOT/comparison.html" --artifact "$OUTPUT_ROOT/sft-validation-metrics.json" --artifact "$OUTPUT_ROOT/grpo-validation-metrics.json" --artifact "$OUTPUT_ROOT/dapo-validation-metrics.json"
+log_event comparisons_complete artifact="$OUTPUT_ROOT/comparison.json" protocol=active-search split=validation fallback_reason=none
+MANIFEST_ENDED_AT="$(date -u +%FT%TZ)"
+export COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH GPU_TELEMETRY PACKAGE_VERSIONS ARTIFACT_PATHS MANIFEST_STARTED_AT MANIFEST_ENDED_AT RUN_MANIFEST
+export SFT_TRAIN_DECISION_SHA256 GRPO_TRAIN_DECISION_SHA256 DAPO_TRAIN_DECISION_SHA256 SFT_GENERATION_DECISION_SHA256 GRPO_GENERATION_DECISION_SHA256 DAPO_GENERATION_DECISION_SHA256
+uv run --frozen python - "$RUN_MANIFEST" <<'PY'
+import json, os, platform, socket, sys
+manifest = {
+    "status": "complete", "commit_hash": os.environ["COMMIT_HASH"], "config_hash": os.environ["CONFIG_HASH"],
+    "model_hash": os.environ["MODEL_HASH"], "dataset_hash": os.environ["DATASET_HASH"], "prompt_hash": os.environ["PROMPT_HASH"],
+    "retrieval_hash": os.environ["RETRIEVAL_HASH"], "source_schema_hash": os.environ["SOURCE_SCHEMA_HASH"], "node": socket.gethostname(),
+    "platform": platform.platform(), "slurm_allocation": {key: os.environ.get(key) for key in ("SLURM_JOB_ID", "SLURM_JOB_NODELIST", "SLURM_NNODES", "SLURM_NTASKS", "SLURM_GPUS_ON_NODE")},
+    "package_versions": os.environ["PACKAGE_VERSIONS"].split(";"), "gpu_telemetry": os.environ["GPU_TELEMETRY"],
+    "timings": {"started_at": os.environ["MANIFEST_STARTED_AT"], "ended_at": os.environ["MANIFEST_ENDED_AT"]}, "artifact_paths": os.environ["ARTIFACT_PATHS"].split("|"), "fallback_reason": "none",
+    "optimization_decision_hashes": {key: os.environ[key] for key in ("SFT_TRAIN_DECISION_SHA256", "GRPO_TRAIN_DECISION_SHA256", "DAPO_TRAIN_DECISION_SHA256", "SFT_GENERATION_DECISION_SHA256", "GRPO_GENERATION_DECISION_SHA256", "DAPO_GENERATION_DECISION_SHA256")},
+}
+with open(sys.argv[1], "w", encoding="utf-8") as handle: json.dump(manifest, handle, sort_keys=True, indent=2); handle.write("\n")
+PY

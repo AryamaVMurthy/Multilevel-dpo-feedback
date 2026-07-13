@@ -32,9 +32,10 @@ manifest = {
     "platform": platform.platform(), "slurm_allocation": {k: os.environ.get(k) for k in ("SLURM_JOB_ID", "SLURM_JOB_NODELIST", "SLURM_NNODES", "SLURM_NTASKS", "SLURM_GPUS_ON_NODE")},
     "package_versions": values("PACKAGE_VERSIONS"), "gpu_telemetry": os.environ.get("GPU_TELEMETRY"),
     "timings": {"started_at": os.environ["MANIFEST_STARTED_AT"], "ended_at": os.environ["MANIFEST_ENDED_AT"]}, "artifact_paths": values("ARTIFACT_PATHS"),
-    "fallback_reason": os.environ.get("ATTENTION_FALLBACK_REASON", "none"), "shard": {k: os.environ[k] for k in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "SHARD_INPUT_SHA256", "MERGE_ID")},
+    "fallback_reason": os.environ["ATTENTION_FALLBACK_REASON"], "shard": {k: os.environ[k] for k in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "SHARD_INPUT_SHA256", "MERGE_ID")},
     "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
-    "collection": {"teacher_device": "cuda:0", "student_device": "cuda:1", "teacher_quantization": "4bit", "max_length": 4096},
+    "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
+    "collection": {"teacher_device": "cuda:0", "student_device": "cuda:1", "teacher_quantization": os.environ["TEACHER_QUANTIZATION"], "teacher_temperature": os.environ["TEACHER_TEMPERATURE"], "teacher_top_p": os.environ["TEACHER_TOP_P"], "sibling_count": os.environ["SIBLING_COUNT"], "sibling_seeds": os.environ["SIBLING_SEEDS"].split(), "max_length": 4096},
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle: json.dump(manifest, handle, sort_keys=True, indent=2); handle.write("\n")
 PY
@@ -62,6 +63,19 @@ PY
 : "${SHARD_INPUT_SHA256:?SHARD_INPUT_SHA256 must be supplied with --export}"
 : "${TRAJECTORY_CACHE:?TRAJECTORY_CACHE must be supplied with --export}"
 : "${POLICY_HASH:?POLICY_HASH must be supplied with --export}"
+: "${POLICY_VERSION:?POLICY_VERSION must be supplied with --export}"
+: "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied}"
+: "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied}"
+: "${TEACHER_BATCH_SIZE:?TEACHER_BATCH_SIZE must be supplied}"
+: "${TEACHER_MAX_NEW_TOKENS:?TEACHER_MAX_NEW_TOKENS must be supplied}"
+: "${TEACHER_TEMPERATURE:?TEACHER_TEMPERATURE must be supplied}"
+: "${TEACHER_TOP_P:?TEACHER_TOP_P must be supplied}"
+: "${TEACHER_THINKING:?TEACHER_THINKING must be true or false}"
+: "${TEACHER_QUANTIZATION:?TEACHER_QUANTIZATION must be 4bit or bf16}"
+: "${TEACHER_FALLBACK_REASON:?TEACHER_FALLBACK_REASON must be explicit, use none when absent}"
+: "${MAX_INTERVENTIONS:?MAX_INTERVENTIONS must be supplied}"
+: "${SIBLING_COUNT:?SIBLING_COUNT must be supplied}"
+: "${SIBLING_SEEDS:?SIBLING_SEEDS must be a space-separated deterministic list}"
 
 : "${SLURM_NNODES:?SLURM_NNODES is required inside the allocation}"
 if [[ "$SLURM_NNODES" != "1" ]]; then fail "collection requires one node; got $SLURM_NNODES" "multi_node_collection_forbidden"; fi
@@ -81,19 +95,34 @@ export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1
 export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
 
-ATTENTION_IMPLEMENTATION="${ATTENTION_IMPLEMENTATION:-sdpa}" ATTENTION_FALLBACK_REASON="${ATTENTION_FALLBACK_REASON:-none}"
-STUDENT_BATCH_SIZE="${STUDENT_BATCH_SIZE:-32}" TEACHER_BATCH_SIZE="${TEACHER_BATCH_SIZE:-8}"
-TEACHER_MAX_NEW_TOKENS="${TEACHER_MAX_NEW_TOKENS:-512}" ANSWER_MAX_NEW_TOKENS="${ANSWER_MAX_NEW_TOKENS:-32}"
-SCRATCHPAD_MAX_NEW_TOKENS="${SCRATCHPAD_MAX_NEW_TOKENS:-128}" STUDENT_THINKING_MODE="${STUDENT_THINKING_MODE:-direct}"
 RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" ARTIFACT_PATHS="$OUTPUT|$TRAJECTORY_CACHE|$DATA"
-COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "${CONFIG:?CONFIG must be supplied with --export}")" MODEL_HASH="${MODEL_HASH:-$(hash_value "$STUDENT_MODEL@$STUDENT_REVISION|teacher=$TEACHER_MODEL@$TEACHER_REVISION")}" DATASET_HASH="$ACTUAL_SHARD_INPUT_SHA256"
+COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "${CONFIG:?CONFIG must be supplied with --export}")" MODEL_HASH="$(hash_value "$STUDENT_MODEL@$STUDENT_REVISION|teacher=$TEACHER_MODEL@$TEACHER_REVISION")" DATASET_HASH="$ACTUAL_SHARD_INPUT_SHA256"
+PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
+IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
+  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$STUDENT_MODEL" --model-revision "$STUDENT_REVISION" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" \
+    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
+    --student-thinking-mode "${STUDENT_THINKING_MODE:?STUDENT_THINKING_MODE must be explicit}" --scratchpad-max-new-tokens "${SCRATCHPAD_MAX_NEW_TOKENS:?SCRATCHPAD_MAX_NEW_TOKENS must be explicit}" \
+    --query-temperature "${QUERY_TEMPERATURE:?QUERY_TEMPERATURE must be explicit}" --response-temperature "${RESPONSE_TEMPERATURE:?RESPONSE_TEMPERATURE must be explicit}" \
+    --top-p "${TOP_P:?TOP_P must be explicit}" --top-k "${TOP_K:?TOP_K must be explicit}" --k1 "${BM25_K1:?BM25_K1 must be explicit}" --b "${BM25_B:?BM25_B must be explicit}"
+) || fail "frozen generation decision validation failed" optimization_decision_invalid
+[[ "$QUERY_BATCH_SIZE" == "$RESPONSE_BATCH_SIZE" ]] || fail "collect CLI has one student batch control; query=$QUERY_BATCH_SIZE response=$RESPONSE_BATCH_SIZE" task5_collect_batch_controls_incomplete
+[[ "$QUERY_TEMPERATURE" == "$RESPONSE_TEMPERATURE" ]] || fail "collect CLI has one student temperature control; query=$QUERY_TEMPERATURE response=$RESPONSE_TEMPERATURE" task5_collect_temperature_controls_incomplete
+[[ "$TOP_K" == 8 && "$BM25_K1" == 1.2 && "$BM25_B" == 0.75 ]] || fail "collect CLI has no retrieval controls; decision must match pinned top_k=8 k1=1.2 b=0.75" task5_collect_retrieval_cli_missing
+[[ "$TEACHER_TEMPERATURE" == 0 || "$TEACHER_TEMPERATURE" == 0.0 ]] || fail "collect CLI pins teacher temperature=0 and exposes no override" task5_teacher_decoding_cli_missing
+[[ "$TEACHER_TOP_P" == 1 || "$TEACHER_TOP_P" == 1.0 ]] || fail "collect CLI pins teacher top_p=1 and exposes no override" task5_teacher_decoding_cli_missing
+[[ "$TEACHER_THINKING" == true || "$TEACHER_THINKING" == false ]] || fail "TEACHER_THINKING must be true or false" teacher_thinking_invalid
+[[ "$TEACHER_QUANTIZATION" == 4bit || "$TEACHER_QUANTIZATION" == bf16 ]] || fail "TEACHER_QUANTIZATION must be 4bit or bf16" teacher_quantization_invalid
+read -r -a SIBLING_SEED_ARGS <<< "$SIBLING_SEEDS"
+[[ "$SIBLING_COUNT" =~ ^[1-9][0-9]*$ && "${#SIBLING_SEED_ARGS[@]}" == "$SIBLING_COUNT" ]] || fail "SIBLING_COUNT must equal the number of SIBLING_SEEDS" sibling_seed_contract_invalid
 PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
 import importlib.metadata
 print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transformers", "trl", "deepspeed", "bitsandbytes")))
 PY
 )"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION
+export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" shard_index="$SHARD_INDEX" shard_count="$SHARD_COUNT" merge_id="$MERGE_ID" allocated_gpus="$ALLOCATED_GPU_COUNT"
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu --format=csv -l 10 > "$GPU_TELEMETRY" &
@@ -104,14 +133,18 @@ trap cleanup EXIT
 COLLECT_ARGS=(
   --data "$DATA" --output "$OUTPUT" --student-model "$STUDENT_MODEL" --student-revision "$STUDENT_REVISION"
   --teacher-model "$TEACHER_MODEL" --teacher-revision "$TEACHER_REVISION" --dataset-revision "$DATASET_REVISION"
-  --prompt-version "$PROMPT_VERSION" --seed "$SHARD_SEED" --teacher-quantization 4bit
+  --prompt-version "$PROMPT_VERSION" --policy-version "$POLICY_VERSION" --seed "$SHARD_SEED" --teacher-quantization "$TEACHER_QUANTIZATION"
   --attention-implementation "$ATTENTION_IMPLEMENTATION" --student-device cuda:1 --teacher-device cuda:0
-  --trajectory-cache "$TRAJECTORY_CACHE" --policy-hash "$POLICY_HASH" --max-interventions 4
-  --student-batch-size "$STUDENT_BATCH_SIZE" --teacher-batch-size "$TEACHER_BATCH_SIZE"
+  --trajectory-cache "$TRAJECTORY_CACHE" --policy-hash "$POLICY_HASH" --max-interventions "$MAX_INTERVENTIONS"
+  --student-batch-size "$QUERY_BATCH_SIZE" --teacher-batch-size "$TEACHER_BATCH_SIZE"
   --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS"
-  --answer-max-new-tokens "$ANSWER_MAX_NEW_TOKENS" --teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS" --teacher-thinking
+  --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS"
+  --student-temperature "$QUERY_TEMPERATURE" --student-top-p "$TOP_P"
+  --teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS" --sibling-count "$SIBLING_COUNT" --sibling-seeds "${SIBLING_SEED_ARGS[@]}"
 )
-log_event collection_launch teacher_device=cuda:0 student_device=cuda:1 teacher_batch_size="$TEACHER_BATCH_SIZE" student_batch_size="$STUDENT_BATCH_SIZE" max_length=4096
+if [[ "$TEACHER_THINKING" == true ]]; then COLLECT_ARGS+=(--teacher-thinking); else COLLECT_ARGS+=(--no-teacher-thinking); fi
+if [[ "$TEACHER_FALLBACK_REASON" != none ]]; then COLLECT_ARGS+=(--teacher-fallback-reason "$TEACHER_FALLBACK_REASON"); fi
+log_event collection_launch teacher_device=cuda:0 student_device=cuda:1 teacher_batch_size="$TEACHER_BATCH_SIZE" student_batch_size="$QUERY_BATCH_SIZE" max_length=4096 decision_sha256="$VALIDATED_DECISION_SHA256" fallback_reason="$ATTENTION_FALLBACK_REASON"
 uv run --frozen python -m text_feedback_dpo.cli collect "${COLLECT_ARGS[@]}"
 log_event collection_complete artifact="$OUTPUT" merge_id="$MERGE_ID"
 write_manifest complete

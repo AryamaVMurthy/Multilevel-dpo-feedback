@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import re
 import subprocess
 import sys
@@ -219,22 +220,88 @@ def checkpoint_step(path: Path) -> tuple[int, Path]:
     return step, state_path
 
 
+def load_torch_state(path: Path, kind: str) -> object:
+    if path.stat().st_size < 64:
+        reject("checkpoint_state_too_small", f"{kind} state is too small to be substantive: {path}")
+    try:
+        import torch
+
+        value = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        reject("checkpoint_state_invalid", f"cannot parse {kind} state {path}: {type(exc).__name__}: {exc}")
+    if not isinstance(value, dict) or not value:
+        reject("checkpoint_state_invalid", f"{kind} state must be a nonempty mapping: {path}")
+    return value
+
+
+def inspect_model_state(path: Path, files: list[Path]) -> list[str]:
+    index_paths = [path / name for name in ("pytorch_model.bin.index.json", "model.safetensors.index.json") if (path / name).is_file()]
+    if len(index_paths) > 1:
+        reject("checkpoint_model_index_invalid", f"multiple incompatible model indexes found: {path}")
+    if index_paths:
+        index_path = index_paths[0]
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            reject("checkpoint_model_index_invalid", f"cannot parse model index {index_path}: {exc}")
+        weight_map = index.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map or any(not isinstance(key, str) or not isinstance(value, str) for key, value in weight_map.items()):
+            reject("checkpoint_model_index_invalid", f"model index weight_map is empty or malformed: {index_path}")
+        model_files = [path / name for name in sorted(set(weight_map.values()))]
+        if any(not item.is_file() for item in model_files):
+            reject("checkpoint_model_shard_missing", f"model index references a missing shard: {index_path}")
+    else:
+        model_files = [item for item in files if item.name in {"model.safetensors", "pytorch_model.bin"} or item.name.endswith("model_states.pt")]
+    if not model_files:
+        reject("checkpoint_model_state_missing", f"checkpoint has no model state: {path}")
+    for model_file in model_files:
+        if model_file.stat().st_size < 64:
+            reject("checkpoint_state_too_small", f"model state is too small to be substantive: {model_file}")
+        if model_file.suffix in {".bin", ".pt"}:
+            load_torch_state(model_file, "model")
+        elif model_file.suffix == ".safetensors":
+            try:
+                from safetensors import safe_open
+
+                with safe_open(model_file, framework="pt", device="cpu") as handle:
+                    if not list(handle.keys()):
+                        reject("checkpoint_state_invalid", f"safetensors model contains no tensors: {model_file}")
+            except GateError:
+                raise
+            except Exception as exc:
+                reject("checkpoint_state_invalid", f"cannot parse safetensors model {model_file}: {type(exc).__name__}: {exc}")
+    return [str(item.relative_to(path)) for item in model_files]
+
+
 def inspect_checkpoint(path: Path) -> dict[str, Any]:
     step, state_path = checkpoint_step(path)
     files = [item for item in path.rglob("*") if item.is_file()]
-    if not any(item.name in {"model.safetensors", "pytorch_model.bin"} or item.name.endswith("model_states.pt") for item in files):
-        reject("checkpoint_model_state_missing", f"checkpoint has no model state: {path}")
-    if not any(item.name == "optimizer.pt" or item.name.endswith("optim_states.pt") for item in files):
+    model_files = inspect_model_state(path, files)
+    optimizer_files = [item for item in files if item.name == "optimizer.pt" or item.name.endswith("optim_states.pt")]
+    if not optimizer_files:
         reject("checkpoint_optimizer_state_missing", f"checkpoint has no optimizer state: {path}")
-    if not (path / "scheduler.pt").is_file():
+    scheduler = path / "scheduler.pt"
+    if not scheduler.is_file():
         reject("checkpoint_scheduler_state_missing", f"checkpoint has no scheduler.pt: {path}")
-    if not any(item.name == "rng_state.pth" or re.fullmatch(r"rng_state_\d+\.pth", item.name) for item in files):
+    rng_files = [item for item in files if item.name == "rng_state.pth" or re.fullmatch(r"rng_state_\d+\.pth", item.name)]
+    if not rng_files:
         reject("checkpoint_rng_state_missing", f"checkpoint has no RNG state: {path}")
+    for item in optimizer_files:
+        load_torch_state(item, "optimizer")
+    load_torch_state(scheduler, "scheduler")
+    for item in rng_files:
+        load_torch_state(item, "RNG")
+    if state_path.stat().st_size < 64:
+        reject("trainer_state_invalid", f"trainer state is too small to establish substantive lineage: {state_path}")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(state.get("max_steps"), int) or state["max_steps"] < step or not isinstance(state.get("log_history"), list) or not state["log_history"]:
+        reject("trainer_state_invalid", f"trainer state lacks max_steps/log_history lineage: {state_path}")
     return {
         "path": str(path.resolve()),
         "step": step,
         "tree_sha256": sha256_tree(path),
         "trainer_state_sha256": sha256_file(state_path),
+        "model_files": model_files,
     }
 
 
@@ -244,6 +311,8 @@ def smoke_identities(args: argparse.Namespace) -> dict[str, str]:
         "config_sha256": args.config_sha256,
         "model": args.model,
         "model_revision": args.model_revision,
+        "dataset_source": args.dataset_source,
+        "dataset_revision": args.dataset_revision,
         "dataset_sha256": args.dataset_sha256,
         "prompt_sha256": args.prompt_sha256,
         "retrieval_sha256": args.retrieval_sha256,
@@ -254,12 +323,12 @@ def smoke_identities(args: argparse.Namespace) -> dict[str, str]:
 
 
 def cmd_create_smoke_manifest(args: argparse.Namespace) -> None:
-    initial_step, _ = checkpoint_step(args.initial_checkpoint)
-    resumed_step, _ = checkpoint_step(args.resumed_checkpoint)
-    if resumed_step <= initial_step:
-        reject("resume_step_not_advanced", f"resumed step {resumed_step} must be greater than saved step {initial_step}")
     initial = inspect_checkpoint(args.initial_checkpoint)
     resumed = inspect_checkpoint(args.resumed_checkpoint)
+    initial_step = initial["step"]
+    resumed_step = resumed["step"]
+    if resumed_step <= initial_step:
+        reject("resume_step_not_advanced", f"resumed step {resumed_step} must be greater than saved step {initial_step}")
     payload = {
         "schema_version": 1,
         "status": "passed",
@@ -485,6 +554,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 "output_hash": repeat_hashes[0],
                 "decoded_output_hash": sha256_json(decoded),
                 "output_token_ids": final_ids,
+                "decoded_outputs": decoded,
                 "peak_gpu_memory_mb": torch.cuda.max_memory_allocated() / (1024 * 1024),
                 "gpu_utilization": telemetry.summary(),
             }
@@ -504,9 +574,96 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     print(json.dumps(base_result, sort_keys=True))
 
 
+PROBE_IDENTITY_FIELDS = (
+    "commit_hash", "config_sha256", "model", "model_revision", "dataset_source",
+    "dataset_revision", "dataset_sha256", "prompt_sha256", "retrieval_sha256",
+    "source_schema_sha256",
+)
+PROBE_CONFIG_FIELDS = (
+    "probe_kind", "attention_implementation", "generation_batch_size", "static_cache",
+    "compile", "train_microbatch", "gradient_accumulation_steps", "dataloader_workers",
+    "packing", "padding_free", "use_liger_kernel",
+)
+TELEMETRY_FIELDS = (
+    "sample_count", "utilization_mean_percent", "utilization_peak_percent",
+    "nvidia_smi_peak_memory_mb", "power_peak_watts", "temperature_peak_c",
+)
+
+
+def probe_artifact_error(result: object) -> str | None:
+    if not isinstance(result, dict):
+        return "probe_not_object"
+    if result.get("schema_version") != DECISION_SCHEMA_VERSION:
+        return "probe_schema_invalid"
+    if result.get("status") != "ok" or result.get("fallback_reason") != "none":
+        return "probe_status_invalid"
+    for key in ("output_hash", "decoded_output_hash"):
+        if not isinstance(result.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", result[key]) is None:
+            return f"probe_{key}_invalid"
+    token_ids = result.get("output_token_ids")
+    if not isinstance(token_ids, list) or not token_ids or any(
+        not isinstance(row, list) or not row or any(not isinstance(token, int) or token < 0 for token in row)
+        for row in token_ids
+    ):
+        return "probe_output_token_ids_invalid"
+    if sha256_json(token_ids) != result["output_hash"]:
+        return "probe_output_hash_not_from_token_ids"
+    decoded_outputs = result.get("decoded_outputs")
+    if not isinstance(decoded_outputs, list) or not decoded_outputs or any(not isinstance(value, str) for value in decoded_outputs):
+        return "probe_decoded_outputs_invalid"
+    if sha256_json(decoded_outputs) != result["decoded_output_hash"]:
+        return "probe_decoded_hash_not_from_outputs"
+    for key in ("examples_per_second", "tokens_per_second", "peak_gpu_memory_mb"):
+        value = result.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            return f"probe_{key}_invalid"
+    telemetry = result.get("gpu_utilization")
+    if not isinstance(telemetry, dict) or set(TELEMETRY_FIELDS) - telemetry.keys():
+        return "probe_gpu_telemetry_invalid"
+    for key in TELEMETRY_FIELDS:
+        value = telemetry[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return "probe_gpu_telemetry_invalid"
+        if key == "sample_count" and (not isinstance(value, int) or value <= 0):
+            return "probe_gpu_telemetry_invalid"
+        if key != "sample_count" and value < 0:
+            return "probe_gpu_telemetry_invalid"
+    packages = result.get("package_versions")
+    if not isinstance(packages, dict) or set(REQUIRED_PACKAGES) - packages.keys() or any(
+        not isinstance(value, str) or not value for value in packages.values()
+    ):
+        return "probe_package_versions_invalid"
+    identities = result.get("identities")
+    if not isinstance(identities, dict) or set(PROBE_IDENTITY_FIELDS) - identities.keys() or any(
+        not isinstance(identities[key], str) or not identities[key] for key in PROBE_IDENTITY_FIELDS
+    ):
+        return "probe_identities_invalid"
+    config = result.get("config")
+    if not isinstance(config, dict) or set(PROBE_CONFIG_FIELDS) - config.keys():
+        return "probe_config_invalid"
+    if config["probe_kind"] not in {"generation", "training"} or config["attention_implementation"] not in {"sdpa", "flash_attention_2"}:
+        return "probe_config_invalid"
+    for key in ("generation_batch_size", "train_microbatch", "gradient_accumulation_steps"):
+        if not isinstance(config[key], int) or isinstance(config[key], bool) or config[key] <= 0:
+            return "probe_config_invalid"
+    if not isinstance(config["dataloader_workers"], int) or isinstance(config["dataloader_workers"], bool) or config["dataloader_workers"] < 0:
+        return "probe_config_invalid"
+    if any(not isinstance(config[key], bool) for key in ("static_cache", "compile", "packing", "padding_free", "use_liger_kernel")):
+        return "probe_config_invalid"
+    return None
+
+
 def accepted_candidate(baseline: dict[str, Any], candidate: dict[str, Any]) -> tuple[bool, str]:
-    if candidate.get("status") != "ok":
-        return False, str(candidate.get("fallback_reason") or "candidate_not_ok")
+    baseline_error = probe_artifact_error(baseline)
+    if baseline_error:
+        return False, f"baseline_{baseline_error}"
+    candidate_error = probe_artifact_error(candidate)
+    if candidate_error:
+        return False, f"candidate_{candidate_error}"
+    if candidate["identities"] != baseline["identities"]:
+        return False, "identity_parity_mismatch"
+    if candidate["package_versions"] != baseline["package_versions"]:
+        return False, "package_parity_mismatch"
     if candidate.get("output_hash") != baseline.get("output_hash"):
         return False, "output_hash_mismatch"
     if candidate.get("decoded_output_hash") != baseline.get("decoded_output_hash"):
@@ -548,8 +705,9 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 def cmd_freeze_decision(args: argparse.Namespace) -> None:
     baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
-    if baseline.get("status") != "ok":
-        reject("baseline_probe_invalid", "cannot freeze a decision without a successful SDPA baseline")
+    baseline_error = probe_artifact_error(baseline)
+    if baseline_error or baseline.get("config", {}).get("attention_implementation") != "sdpa":
+        reject("baseline_probe_invalid", f"cannot freeze without a complete measured SDPA baseline: {baseline_error or 'attention_not_sdpa'}")
     accepted: list[tuple[Path, dict[str, Any]]] = []
     rejected: list[dict[str, str]] = []
     for path in args.candidate:
@@ -656,6 +814,8 @@ def build_parser() -> argparse.ArgumentParser:
         checkpoint_parser.add_argument("--config-sha256", required=True)
         checkpoint_parser.add_argument("--model", required=True)
         checkpoint_parser.add_argument("--model-revision", required=True)
+        checkpoint_parser.add_argument("--dataset-source", required=True)
+        checkpoint_parser.add_argument("--dataset-revision", required=True)
         checkpoint_parser.add_argument("--dataset-sha256", required=True)
         checkpoint_parser.add_argument("--prompt-sha256", required=True)
         checkpoint_parser.add_argument("--retrieval-sha256", required=True)

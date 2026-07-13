@@ -52,20 +52,23 @@ export PYTORCH_TF32_CUBLAS_OVERRIDE=1
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 CONFIG_SHA256="$(sha256sum "$CONFIG" | awk '{print $1}')"
 DATASET_SHA256="$(sha256sum "$TRAIN" | awk '{print $1}')"
-"$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" \
+IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <("$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" \
   --purpose training --commit-hash "$CURRENT_COMMIT_HASH" --config-sha256 "$CONFIG_SHA256" --model "$START_MODEL" --model-revision "$START_REVISION" \
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_SHA256" \
-  --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+  --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --output-format training-tsv) \
+  || fail "frozen training decision validation failed" optimization_decision_invalid
 
-if ! uv run --frozen python -m text_feedback_dpo.cli "train-$METHOD" --help | rg -q -- '--max-steps'; then
-  fail "Task 7 train-$METHOD CLI does not expose --max-steps; bounded smoke cannot run" task7_max_steps_cli_missing
-fi
+TRAIN_HELP="$(uv run --frozen python -m text_feedback_dpo.cli "train-$METHOD" --help)" || fail "cannot inspect Task 7 train-$METHOD CLI" task7_train_cli_help_failed
+for required_flag in --max-steps --dataloader-workers --per-device-train-batch-size; do
+  [[ "$TRAIN_HELP" == *"$required_flag"* ]] || fail "Task 7 train-$METHOD CLI does not expose $required_flag; bounded smoke cannot run" task7_checkpoint_smoke_cli_missing
+done
 
 mkdir -p "$SMOKE_ROOT"
 COMMON_ARGS=(
   --config "$CONFIG" --train "$TRAIN" --output "$SMOKE_ROOT" --model "$START_MODEL" --model-revision "$START_REVISION"
   --deepspeed-config configs/deepspeed_zero3.json --save-steps 1 --eval-steps 1
-  --gradient-accumulation-steps 1 --learning-rate "$LEARNING_RATE"
+  --gradient-accumulation-steps "$DECISION_GRADIENT_ACCUMULATION_STEPS" --learning-rate "$LEARNING_RATE"
+  --per-device-train-batch-size "$DECISION_MICROBATCH" --dataloader-workers "$DECISION_DATALOADER_WORKERS"
 )
 if [[ "$METHOD" == sft || "$METHOD" == dpo ]]; then
   : "${EVAL:?EVAL must be supplied for $METHOD checkpoint smoke}"
@@ -84,7 +87,7 @@ RESUMED_CHECKPOINT="$SMOKE_ROOT/checkpoint-$RESUMED_MAX_STEPS"
 
 "$PROBE_RUNNER" create-smoke-manifest --initial-checkpoint "$INITIAL_CHECKPOINT" --resumed-checkpoint "$RESUMED_CHECKPOINT" \
   --output "$SMOKE_MANIFEST" --commit-hash "$CURRENT_COMMIT_HASH" --config-sha256 "$CONFIG_SHA256" --model "$START_MODEL" \
-  --model-revision "$START_REVISION" --dataset-sha256 "$DATASET_SHA256" --prompt-sha256 "$PROMPT_HASH" \
+  --model-revision "$START_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_SHA256" --prompt-sha256 "$PROMPT_HASH" \
   --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
   --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --method "$METHOD"
 SMOKE_MANIFEST_SHA256="$(sha256sum "$SMOKE_MANIFEST" | awk '{print $1}')"

@@ -205,19 +205,23 @@ trap cleanup EXIT
 log_event checkpoint_gate_started smoke_manifest="$CHECKPOINT_SMOKE_MANIFEST" fallback_reason=none
 "$PROBE_RUNNER" validate-checkpoints --smoke-manifest "$CHECKPOINT_SMOKE_MANIFEST" --expected-sha256 "$CHECKPOINT_SMOKE_MANIFEST_SHA256" \
   --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" \
-  --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" \
+  --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" \
   --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --method "$METHOD"
 log_event checkpoint_resume_gate_passed artifact="$CHECKPOINT_SMOKE_MANIFEST" checkpoint_gate_sha256="$CHECKPOINT_SMOKE_MANIFEST_SHA256" fallback_reason=none
 
 GRADIENT_ACCUMULATION_STEPS="$((EFFECTIVE_BATCH_SIZE / ALLOCATED_GPU_COUNT))"
-[[ "$DECISION_MICROBATCH" == "1" ]] || fail "Task 7 trainer has no per-device microbatch CLI; selected=$DECISION_MICROBATCH" task7_microbatch_cli_missing
-[[ "$DECISION_DATALOADER_WORKERS" == "0" ]] || fail "Task 7 trainer has no dataloader-worker CLI; selected=$DECISION_DATALOADER_WORKERS" task7_dataloader_workers_cli_missing
 [[ "$DECISION_GRADIENT_ACCUMULATION_STEPS" == "$GRADIENT_ACCUMULATION_STEPS" ]] || fail "frozen gradient accumulation=$DECISION_GRADIENT_ACCUMULATION_STEPS differs from required=$GRADIENT_ACCUMULATION_STEPS" optimization_decision_batch_mismatch
+TRAIN_HELP="$(uv run --frozen python -m text_feedback_dpo.cli "train-$METHOD" --help)" || fail "cannot inspect Task 7 train-$METHOD CLI" task7_train_cli_help_failed
+for required_flag in --dataloader-workers --per-device-train-batch-size; do
+  [[ "$TRAIN_HELP" == *"$required_flag"* ]] || fail "Task 7 train-$METHOD CLI does not expose $required_flag; cannot launch frozen worker settings" task7_training_worker_cli_missing
+done
 ARGS=(
   --config "$CONFIG" --train "$TRAIN" --output "$OUTPUT"
   --deepspeed-config configs/deepspeed_zero3.json
   --save-steps "$SAVE_STEPS" --eval-steps "$EVAL_STEPS"
   --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"
+  --per-device-train-batch-size "$DECISION_MICROBATCH"
+  --dataloader-workers "$DECISION_DATALOADER_WORKERS"
   --learning-rate "$LEARNING_RATE" --epochs "$EPOCHS"
 )
 if [[ "$METHOD" == sft || "$METHOD" == dpo ]]; then
