@@ -1484,10 +1484,18 @@ def load_scale_decision(path: Path, expected_sha256: str) -> tuple[dict[str, Any
 
 def cmd_freeze_collection_decision(args: argparse.Namespace) -> None:
     result = json.loads(args.hardware_result.read_text(encoding="utf-8"))
-    error = probe_artifact_error(result)
-    if error:
-        reject("collection_hardware_probe_invalid", f"collection hardware probe is invalid: {error}")
-    hardware = result["gpu_hardware"]
+    if not isinstance(result, dict):
+        reject("collection_hardware_probe_invalid", "collection hardware probe must be a JSON object")
+    if result.get("schema_version") != DECISION_SCHEMA_VERSION:
+        reject("collection_hardware_probe_invalid", "collection hardware probe schema version is invalid")
+    if result.get("status") != "ok" or result.get("fallback_reason") != "none":
+        reject("collection_hardware_probe_invalid", "collection hardware probe is not an unfallbacked successful probe")
+    hardware = result.get("gpu_hardware")
+    hardware_error = gpu_hardware_error(hardware)
+    if hardware_error:
+        reject("collection_hardware_probe_invalid", f"collection hardware identity is invalid: {hardware_error}")
+    if result.get("package_versions") != required_package_versions():
+        reject("collection_hardware_probe_invalid", "collection hardware probe package identity differs from the runtime")
     if hardware["count"] != 2:
         reject("collection_gpu_count", "collection device decisions require exactly two measured GPUs")
     if args.teacher_device_index == args.student_device_index:

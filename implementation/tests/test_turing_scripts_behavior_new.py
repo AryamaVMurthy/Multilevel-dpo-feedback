@@ -594,6 +594,30 @@ def test_collection_decision_freezes_largest_vram_teacher_and_distinct_student(t
     assert validate.stdout.split("\t")[:2] == ["cuda:1", "cuda:0"]
 
 
+def test_collection_decision_accepts_hardware_probe_without_generation_artifact_fields(tmp_path: Path):
+    probe = valid_probe_result(gpu_count=2)
+    hardware = {
+        "schema_version": probe["schema_version"],
+        "status": probe["status"],
+        "fallback_reason": probe["fallback_reason"],
+        "gpu_hardware": probe["gpu_hardware"],
+        "package_versions": probe["package_versions"],
+    }
+    result_path = tmp_path / "hardware.json"
+    result_path.write_text(json.dumps(hardware), encoding="utf-8")
+    decision = tmp_path / "collection.json"
+    freeze = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "freeze-collection-decision", "--hardware-result", str(result_path),
+        "--output", str(decision), "--teacher-model", "teacher", "--teacher-revision", "teacher-rev",
+        "--student-model", "student", "--student-revision", "student-rev", "--teacher-device-index", "0",
+        "--student-device-index", "1",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert freeze.returncode == 0, freeze.stderr
+    payload = json.loads(decision.read_text(encoding="utf-8"))
+    assert payload["decision_kind"] == "collection_devices"
+    assert payload["teacher"]["device_index"] == 0
+
+
 def test_collection_decision_rejects_non_largest_or_same_device(tmp_path: Path):
     hardware = valid_probe_result(gpu_count=2)
     hardware["gpu_hardware"]["devices"][1]["free_memory_bytes"] -= 1024
