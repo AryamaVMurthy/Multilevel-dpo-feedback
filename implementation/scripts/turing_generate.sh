@@ -1,7 +1,8 @@
 #!/bin/bash
 # Submit with: sbatch -A <account> --export=ALL,PROJECT_DIR=...,DATA=...,OUTPUT=...,MODEL=... scripts/turing_generate.sh
 #SBATCH -p u22
-#SBATCH -n 16
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=12:00:00

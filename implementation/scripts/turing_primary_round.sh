@@ -1,7 +1,8 @@
 #!/bin/bash
 # One resumable primary DPO round. Submit with: sbatch -A <account> --export=ALL,... scripts/turing_primary_round.sh
 #SBATCH -p u22
-#SBATCH -n 64
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:2
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=48:00:00
@@ -83,7 +84,7 @@ fi
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
   TRAIN_ARGS+=(--resume-from-checkpoint "$RESUME_FROM_CHECKPOINT")
 fi
-torchrun --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-dpo "${TRAIN_ARGS[@]}"
+uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-dpo "${TRAIN_ARGS[@]}"
 
 uv run --frozen python -m text_feedback_dpo.cli generate \
   --data "$EVAL_DATA" --output "$PREDICTIONS" \

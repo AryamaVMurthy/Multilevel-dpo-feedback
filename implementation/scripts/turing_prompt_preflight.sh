@@ -1,7 +1,8 @@
 #!/bin/bash
 # Compare direct and private two-pass thinking on train-derived development data.
 #SBATCH -p u22
-#SBATCH -n 16
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=02:00:00

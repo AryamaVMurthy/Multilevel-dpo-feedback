@@ -18,6 +18,8 @@ class TuringRuntimeTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("set -euo pipefail", text)
             self.assertNotIn("|| true", text)
+            if "#SBATCH" in text:
+                self.assertNotIn("#SBATCH -n ", text)
 
     def test_generation_is_plain_short_answer_with_explicit_thinking_mode(self):
         text = Path("scripts/turing_generate.sh").read_text(encoding="utf-8")
@@ -71,6 +73,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("GRADIENT_ACCUMULATION_STEPS", text)
         self.assertIn('--gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"', text)
         self.assertIn('--nproc_per_node="$TRAIN_GPUS"', text)
+        self.assertIn("uv run --frozen python -m torch.distributed.run", text)
         for setting in ("LEARNING_RATE", "EPOCHS", "SAVE_STEPS", "EVAL_STEPS"):
             self.assertIn(f'${{{setting}:?', text)
         self.assertIn('--learning-rate "$LEARNING_RATE"', text)

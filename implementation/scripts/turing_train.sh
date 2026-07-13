@@ -83,4 +83,4 @@ if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
   ARGS+=(--resume-from-checkpoint "$RESUME_FROM_CHECKPOINT")
 fi
 
-torchrun --standalone --nproc_per_node="$TRAIN_GPUS" -m text_feedback_dpo.cli "train-$METHOD" "${ARGS[@]}"
+uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node="$TRAIN_GPUS" -m text_feedback_dpo.cli "train-$METHOD" "${ARGS[@]}"

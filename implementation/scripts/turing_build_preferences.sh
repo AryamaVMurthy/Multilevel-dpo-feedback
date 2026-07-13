@@ -1,7 +1,8 @@
 #!/bin/bash
 # Submit with: sbatch -A <account> --export=ALL,... scripts/turing_build_preferences.sh
 #SBATCH -p u22
-#SBATCH -n 2
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/slurm-%x-%j.out

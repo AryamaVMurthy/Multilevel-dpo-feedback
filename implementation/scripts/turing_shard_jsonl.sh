@@ -2,7 +2,7 @@
 # Deterministically shard a JSONL dataset by ID for parallel GPU generation.
 #SBATCH -p u22
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/slurm-%x-%j.out

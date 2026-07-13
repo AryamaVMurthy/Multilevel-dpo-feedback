@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run post-DPO SFT/GRPO/DAPO comparisons from one frozen initialization.
 #SBATCH -p u22
-#SBATCH -n 64
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:2
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=72:00:00
@@ -52,7 +53,7 @@ if [[ -n "${EXISTING_SFT:-}" ]]; then
   START_REVISION=""
   echo "<comparison_sft source=existing_checkpoint model=\"$SFT_MODEL\"/>"
 else
-  torchrun --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-sft \
+  uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-sft \
     --config "$CONFIG" --train "$SFT_TRAIN" --eval "$SFT_EVAL" \
     --model "$BASE_MODEL" --model-revision "$BASE_REVISION" \
     --output "$OUTPUT_ROOT/sft" --deepspeed-config configs/deepspeed_zero3.json \
@@ -64,11 +65,11 @@ fi
 
 RL_ARGS=(--config "$CONFIG" --train "$RL_DATA" --output "$OUTPUT_ROOT/grpo" --model "$START_MODEL" --deepspeed-config configs/deepspeed_zero3.json --save-steps 100 --eval-steps 100)
 if [[ -n "$START_REVISION" ]]; then RL_ARGS+=(--model-revision "$START_REVISION"); fi
-torchrun --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-grpo "${RL_ARGS[@]}"
+uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-grpo "${RL_ARGS[@]}"
 
 RL_ARGS=(--config "$CONFIG" --train "$RL_DATA" --output "$OUTPUT_ROOT/dapo" --model "$START_MODEL" --deepspeed-config configs/deepspeed_zero3.json --save-steps 100 --eval-steps 100)
 if [[ -n "$START_REVISION" ]]; then RL_ARGS+=(--model-revision "$START_REVISION"); fi
-torchrun --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-dapo "${RL_ARGS[@]}"
+uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=2 -m text_feedback_dpo.cli train-dapo "${RL_ARGS[@]}"
 
 for method in sft grpo dapo; do
   MODEL="$OUTPUT_ROOT/$method/final"
