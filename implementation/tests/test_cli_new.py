@@ -113,6 +113,31 @@ class CLITest(unittest.TestCase):
         teacher_probe = parser.parse_args(["probe-model"] + self._required_args("probe-model"))
         self.assertEqual(teacher_probe.teacher_max_new_tokens, 512)
 
+    def test_teacher_probe_supplies_complete_source_context_to_private_prompt(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "teacher-probe.json"
+            args = build_parser().parse_args([
+                "probe-model", "--role", "teacher", "--model", "model", "--model-revision", "rev",
+                "--teacher-quantization", "4bit", "--output", str(output),
+            ])
+            with patch("text_feedback_dpo.runtime.load_tokenizer", return_value=object()), patch(
+                "text_feedback_dpo.runtime.load_teacher", return_value=object()
+            ), patch(
+                "text_feedback_dpo.runtime.render_teacher_prompts",
+                side_effect=lambda _tokenizer, prompts, enable_thinking=True: prompts,
+            ), patch(
+                "text_feedback_dpo.runtime.generate_batch",
+                return_value=['{"hint":"Focus on the associated writer."}'],
+            ) as generate_batch:
+                args.func(args)
+
+            prompt = generate_batch.call_args.args[2][0]
+            self.assertIn('"complete_source_records"', prompt)
+            self.assertIn('"retrieved_records"', prompt)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result["role"], "teacher")
+            self.assertEqual(result["hint"], "Focus on the associated writer.")
+
     def test_generate_searchqa_is_explicit_and_has_independent_batch_defaults(self):
         parser = build_parser()
         parsed = parser.parse_args(["generate-searchqa", "--data", "x.jsonl", "--output", "y.jsonl", "--model", "model", "--model-revision", "model-rev", "--dataset-source", "searchqa", "--dataset-revision", "data-rev", "--attention-implementation", "sdpa", "--policy-hash", "p1"])

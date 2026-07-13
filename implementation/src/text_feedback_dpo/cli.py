@@ -141,10 +141,25 @@ def cmd_probe_model(args: argparse.Namespace) -> None:
         fallback_reason=args.teacher_fallback_reason,
         attention_implementation=args.attention_implementation,
     )
+    teacher_source = {
+        "source_id": "S001",
+        "original_rank": 1,
+        "title": "Algorithm history",
+        "url": "https://example.test/algorithm-history",
+        "snippet": "Ada Lovelace wrote the first algorithm.",
+    }
     prompt = build_teacher_prompt(
-        {"question": "Who wrote the first algorithm?", "packed_evidence": "Ada Lovelace wrote the first algorithm.", "gold_answer": "Ada Lovelace"},
+        {
+            "question": "Who wrote the first algorithm?",
+            "packed_evidence": "Ada Lovelace wrote the first algorithm.",
+            "gold_answer": "Ada Lovelace",
+            "sources": [teacher_source],
+        },
         "Grace Hopper",
         [],
+        raw_query="first algorithm author",
+        retrieved_sources=[teacher_source],
+        diagnostics={"responsible_region": "answer", "error_code": "answer_mismatch"},
     )
     rendered = render_teacher_prompts(tokenizer, [prompt], enable_thinking=True)
     final = extract_qwen_final_content(generate_batch(model, tokenizer, rendered, max_new_tokens=args.teacher_max_new_tokens, temperature=0.0, top_p=1.0)[0])
