@@ -856,6 +856,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         run_fixed_retrieval_pipeline,
     )
     from text_feedback_dpo.collection import collect_dataset_batchwise
+    from text_feedback_dpo.feedback import is_feedback_shape_valid
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
@@ -1023,6 +1024,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 token_count=lambda text: len(
                     teacher_tokenizer.encode(text, add_special_tokens=False)
                 ),
+                validate_output=is_feedback_shape_valid,
             )
             print(json.dumps({
                 "event": "teacher_output_contract",

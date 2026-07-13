@@ -41,6 +41,18 @@ def _gold_leak_kind(hint: str, gold_answer: str) -> str | None:
     return None
 
 
+def is_feedback_shape_valid(text: str) -> bool:
+    """Check teacher JSON shape before the caller performs gold-leak checks."""
+    try:
+        payload = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except (FeedbackFormatError, json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict) or set(payload) != {"hint"}:
+        return False
+    hint = payload["hint"]
+    return isinstance(hint, str) and bool(hint.strip()) and len(hint.strip().split()) <= 24
+
+
 def parse_feedback(text: str, *, gold_answer: str) -> MinimalFeedback:
     try:
         payload = json.loads(text, object_pairs_hook=_reject_duplicate_keys)

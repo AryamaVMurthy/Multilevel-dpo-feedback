@@ -1,10 +1,15 @@
 import unittest
 
-from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
+from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, is_feedback_shape_valid, parse_feedback
 from text_feedback_dpo.prompts import build_teacher_prompt
 
 
 class FeedbackContractTest(unittest.TestCase):
+    def test_feedback_shape_validator_rejects_truncated_teacher_json(self):
+        self.assertTrue(is_feedback_shape_valid('{"hint":"Inspect the associated person."}'))
+        self.assertFalse(is_feedback_shape_valid('{"hint":"Inspect the associated person.'))
+        self.assertFalse(is_feedback_shape_valid('{"hint":"Inspect the associated person.","critique":"wrong"}'))
+
     def test_accepts_exactly_one_short_answer_free_json_hint(self):
         feedback = parse_feedback('{"hint":"Look for the person directly associated with the algorithm."}', gold_answer="Ada Lovelace")
         self.assertEqual(feedback.hint, "Look for the person directly associated with the algorithm.")
