@@ -1,47 +1,30 @@
 # SearchQA Minimal-Intervention DPO
 
-This repository trains Qwen3 base models on SearchQA only.
+This repository trains Qwen3 base students on SearchQA with full-parameter BF16 updates.
 
-The primary method is full-parameter DPO over student-generated XML responses:
+The active protocol is:
 
 ```text
-student answer → one minimal XML hint → student retry → first correct answer
+plain student answer -> one slight answer-free hint -> plain student retry
+                     -> accumulate and minimally escalate hints until exact-correct or capped
 ```
 
-The teacher never writes the chosen answer. Hints accumulate until the student succeeds or the trajectory is explicitly unresolved. DPO prompts contain only the original question and evidence, so inference is teacher-free.
+The student emits only a short answer such as `Hemingway`. The teacher is a post-trained Qwen3 instruct model using native private thinking and emits one internal JSON hint. The teacher never writes the chosen answer. DPO chosen answers are successful student generations; DPO prompts are the original hint-free question and evidence.
 
-All model I/O uses XML:
+The primary student is `Qwen/Qwen3-4B-Base`. Full finetuning uses DeepSpeed ZeRO-3, gradient checkpointing, BF16, and a strict 4096-token total limit. The 1.7B base student is allowed only after a recorded 4B OOM under the minimum viable ZeRO-3 configuration. The primary teacher is `Qwen/Qwen3-32B` in 4-bit NF4 on one GPU; 14B is allowed only after an explicit, archived 32B failure and a new run with the fallback model named in its manifest.
 
-```xml
-<response><answer>...</answer><evidence>...</evidence></response>
-```
+Raw base, SFT, minimal-intervention DPO, GRPO, and DAPO are evaluated teacher-free. Direct and private two-pass student thinking are compared on train-derived development data before the official validation protocol is frozen. Test data is untouched until selection is complete.
 
-Training is full-parameter BF16 with a fixed total sequence limit of 4096 tokens and DeepSpeed ZeRO-3. Adapter training, auxiliary domains, private-reasoning scaffolds, teacher-written answers, and fake data are not part of the active project.
-
-SFT, GRPO, and DAPO are comparison arms after primary DPO is frozen. SFT may also be used as a warm-start only when the explicit SFT gate requires it.
-
-Run from `implementation/` with `PYTHONPATH=src`:
-
-```bash
-uv run tfdpo prepare-searchqa ...
-uv run tfdpo collect ...
-uv run tfdpo build-preferences ...
-uv run tfdpo train-sft ...
-uv run tfdpo train-dpo ...
-uv run tfdpo train-grpo ...
-uv run tfdpo train-dapo ...
-uv run tfdpo evaluate ...
-uv run tfdpo generate ...
-```
+Run from `implementation/` with `PYTHONPATH=src`. Every rollout cache is keyed by model revisions, dataset revision, prompt version, thinking modes, decoding, intervention policy, seed, and checkpoint hash; any mismatch fails.
 
 Local verification:
 
 ```bash
 PYTHONPATH=src uv run --frozen pytest -q
-PYTHONPATH=src uv run --frozen ruff check .
-PYTHONPATH=src uv run --frozen python -m compileall -q src tests
+uv run --frozen ruff check src tests
+python3 -m compileall -q src tests
 find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 git diff --check
 ```
 
-Real model work must run inside Turing Slurm allocations. Login nodes are only for source synchronization, submission, and log inspection.
+Real model work runs only in Turing Slurm allocations. See `docs/plans/2026-07-13-plain-answer-thinking-design.md` and `docs/plans/2026-07-13-plain-answer-thinking.md`.
