@@ -24,7 +24,8 @@ fail() { log_event failure reason="$1" fallback_reason="${2:-none}" >&2; exit 2;
 
 cd "$PROJECT_DIR"
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}"
+export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
 log_event evaluation_start protocol="$PROTOCOL" data="$DATA" predictions="$PREDICTIONS" fallback_reason=none
 uv run --frozen python -m text_feedback_dpo.cli evaluate --data "$DATA" --predictions "$PREDICTIONS" --output "$OUTPUT" --protocol "$PROTOCOL"

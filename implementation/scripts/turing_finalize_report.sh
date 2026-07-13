@@ -44,7 +44,8 @@ PY
 
 cd "$PROJECT_DIR"
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}"
+export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$OUTPUT_ROOT/final-report"
 for required in "$BASELINE_VALIDATION" "$BASELINE_TEST" "$DPO_VALIDATION" "$DPO_TEST" "$OFFLINE_REUSE_ARTIFACT" "$DATA_MANIFEST" "$TRAIN_MANIFEST" "$VALIDATION_MANIFEST" "$TEST_MANIFEST"; do [[ -s "$required" ]] || fail "required artifact is missing: $required" "missing_artifact"; done
 

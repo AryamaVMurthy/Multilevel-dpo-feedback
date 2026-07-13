@@ -40,7 +40,8 @@ PY
 cd "$PROJECT_DIR"
 [[ -f pyproject.toml && -d src/text_feedback_dpo ]] || fail "PROJECT_DIR must contain pyproject.toml and src/text_feedback_dpo" "invalid_project_root"
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
+export HF_HOME="${HF_CACHE_ROOT:-/scratch/$USER/searchqa-dpo/hf}"
+export HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
 COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "$CONFIG")" MODEL_HASH="${MODEL_HASH:-$(hash_value "$TOKENIZER_MODEL@$TOKENIZER_REVISION")}" DATASET_HASH="${DATASET_HASH:-$(hash_value "kyunghyuncho/search_qa@$SEARCHQA_REVISION/$SPLIT")}" PROMPT_VERSION="${PROMPT_VERSION:-fixed-retrieval-cited-v1}" ATTENTION_FALLBACK_REASON="none" GPU_TELEMETRY="not_allocated" RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" ARTIFACT_PATHS="$OUTPUT|$CONFIG"
 PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
