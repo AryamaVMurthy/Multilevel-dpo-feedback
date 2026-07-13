@@ -30,7 +30,7 @@ Important identities:
 - Retrieval identity SHA-256: `dbcbff5eeba529cb51361191378791b4e2afc371bdaee98ecac19140d83df97d`
 - Source-schema identity SHA-256: `59fe2f48bbbc35395d689c16f5aabf41103e78a6511afeeeabfc5bde20a939dc`
 - Active bounded prompt identity SHA-256: `5c52f50fb2122acd9c2fa3c334d7fe0cc276a92ffe6dac810510f0a3e0b94f27`
-- Active config SHA-256: `bbeac40b0d66fcd33c3da1b79abdd0323309cb94618f17c6506d188dabf24ad7`
+- Active config SHA-256: `992faecd7db375456ca71d2f3a1c5b0f01ccb80bd1a98fe84afd9e0060a7a501`
 
 ## Model and hardware evidence
 
@@ -118,7 +118,8 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - The root cause was unbounded duplication of every materialized SearchQA source inside the private teacher prompt. The audited sample has 6–99 complete source records per row and up to about 61 KB of source JSON. The teacher already receives the retrieved top records, private gold answer, raw attempt, deterministic diagnostics, and escalation history; duplicating all nonretrieved records was unnecessary.
 - Commit `d9e909e` removes complete-source duplication and retains only compact retrieved `source_id`/title/snippet records plus `available_source_count`. This is deterministic context selection, not hidden truncation.
 - Job `13776` confirmed the unbounded prompt was gone, then exposed a separate valid base-model state before teacher inference: an empty/invalid student query produced zero retrieved records, and the compact-record validator rejected the empty list. Empty retrieval is now explicitly accepted only when deterministic diagnostics identify `query/retrieval` as the repair region. No fake source is inserted; non-query repair regions still reject empty retrieval.
-- Job `13778` reached real 32B teacher generation with native thinking and no OOM, using about 27.4 GiB on the teacher GPU and about 9.9 GiB on the resident student GPU. A 96-token teacher cap ended inside an unterminated Qwen thinking block, so the strict final JSON extractor correctly rejected it. The cap is restored to the fit-verified 512 tokens, and collection now logs every rendered teacher prompt token count plus its 4,096-token budget decision before inference.
+- Job `13778` reached real 32B teacher generation with native thinking and no OOM, using about 27.4 GiB on the teacher GPU and about 9.9 GiB on the resident student GPU. A 96-token teacher cap ended inside an unterminated Qwen thinking block, so the strict final JSON extractor correctly rejected it. The cap was then restored to the fit-verified 512 tokens, and collection began logging every rendered teacher prompt token count plus its 4,096-token budget decision before inference.
+- Job `13780` proved all 32 rendered prompts fit with the 512-token reserve (395–1,685 prompt tokens; maximum allowed input 3,584), but at least one output still exhausted 512 tokens before closing native thinking. The next controlled cap is 1,024 tokens. Collection now logs every teacher output token count and all malformed-thinking indices without logging private reasoning text; a malformed block remains a hard failure with `fallback_reason=teacher_thinking_budget_exhausted`.
 - Because the audited base set has zero fully correct continuations, the existing SFT builder would currently produce zero rows for this sample.
 - No optimizer step has run for SFT, DPO, GRPO, or DAPO.
 

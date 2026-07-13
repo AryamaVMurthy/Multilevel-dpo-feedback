@@ -33,8 +33,8 @@
 
 **Steps:**
 1. Use bounded private teacher context only: compact retrieved records, gold answer, raw attempt, deterministic diagnostics, prior hints, and source count. Never duplicate all 6–99 complete source records and never truncate silently.
-2. Reserve 512 output tokens for native Qwen thinking plus the strict at-most-24-word final JSON hint. Log every rendered teacher prompt token count and fail before inference if any prompt plus the 512-token reserve exceeds 4,096 tokens.
-3. Regenerate the sample-bound measured generation decision after every prompt/config/commit change. Validate the 32-row sample, prompt SHA-256 `5c52f50fb2122acd9c2fa3c334d7fe0cc276a92ffe6dac810510f0a3e0b94f27`, config SHA-256 `bbeac40b0d66fcd33c3da1b79abdd0323309cb94618f17c6506d188dabf24ad7`, and canonical raw-base policy digest.
+2. Use the smallest empirically sufficient output cap for native Qwen thinking plus the strict at-most-24-word final JSON hint. Caps 96 and 512 failed; test 1,024 next. Log rendered prompt counts, output token counts, malformed-thinking indices, and fail if any prompt plus the selected reserve exceeds 4,096 tokens.
+3. Regenerate the sample-bound measured generation decision after every prompt/config/commit change. Validate the 32-row sample, prompt SHA-256 `5c52f50fb2122acd9c2fa3c334d7fe0cc276a92ffe6dac810510f0a3e0b94f27`, config SHA-256 `992faecd7db375456ca71d2f3a1c5b0f01ccb80bd1a98fe84afd9e0060a7a501`, and canonical raw-base policy digest.
 4. Submit `turing_collect.sh` on node10 with two GPUs, teacher batch 8, student batch 4, four interventions, two smoke siblings, direct student mode, temperature 0.7, top-p 0.9, and the authoritative source-schema hash.
 5. Monitor `squeue`, `sacct`, stdout, stderr, GPU telemetry, output cardinality, and cache artifacts until completion.
 6. Write a failing test requiring the audit command to emit per-attempt question, gold, query, top sources, raw response, error, teacher hint, retry, sibling, leakage, latency, prompt token count, and eligibility fields.

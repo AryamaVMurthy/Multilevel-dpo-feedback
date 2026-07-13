@@ -79,6 +79,6 @@ if not torch.cuda.is_available():
     raise RuntimeError("CUDA unavailable; refusing CPU fallback")
 print(json.dumps({"torch": torch.__version__, "transformers": transformers.__version__, "trl": trl.__version__, "deepspeed": deepspeed.__version__, "bitsandbytes": bitsandbytes.__version__, "flash_attn": flash_attention, "attention_implementation": "flash_attention_2" if flash_attention["available"] else "sdpa", "cuda": torch.cuda.get_device_name(0)}, sort_keys=True))
 PY
-uv run --frozen python -m text_feedback_dpo.cli probe-model --role "$MODEL_ROLE" --model "$MODEL_ID" --model-revision "$MODEL_REVISION" --teacher-quantization 4bit --teacher-max-new-tokens 512 --attention-implementation "$ATTENTION_IMPLEMENTATION" --output "$OUTPUT"
+uv run --frozen python -m text_feedback_dpo.cli probe-model --role "$MODEL_ROLE" --model "$MODEL_ID" --model-revision "$MODEL_REVISION" --teacher-quantization 4bit --teacher-max-new-tokens 1024 --attention-implementation "$ATTENTION_IMPLEMENTATION" --output "$OUTPUT"
 log_event preflight_complete artifact="$OUTPUT" attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON"
 write_manifest complete

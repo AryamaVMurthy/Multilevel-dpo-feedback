@@ -344,6 +344,8 @@ class Task6CollectionAndCliTest(unittest.TestCase):
 
             self.assertIn('"event": "teacher_prompt_budget"', stderr.getvalue())
             self.assertIn('"max_total_tokens": 4096', stderr.getvalue())
+            self.assertIn('"event": "teacher_output_contract"', stderr.getvalue())
+            self.assertIn('"malformed_thinking_indices": []', stderr.getvalue())
 
             output_rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["id"] for row in output_rows], ["q1", "q2"])

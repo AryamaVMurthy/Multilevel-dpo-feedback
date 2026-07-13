@@ -533,6 +533,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         render_teacher_prompts,
         set_generation_seed,
         validate_teacher_identity,
+        RuntimeErrorExplicit,
     )
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
@@ -677,7 +678,29 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 max_new_tokens=args.teacher_max_new_tokens,
                 temperature=kwargs["temperature"], top_p=kwargs["top_p"],
             )
-            return [extract_qwen_final_content(text) for text in raw]
+            final_outputs: list[str | None] = []
+            malformed_thinking_indices: list[int] = []
+            output_token_counts: list[int] = []
+            for index, text in enumerate(raw):
+                output_token_counts.append(len(teacher_tokenizer.encode(text, add_special_tokens=False)))
+                try:
+                    final_outputs.append(extract_qwen_final_content(text))
+                except RuntimeErrorExplicit:
+                    malformed_thinking_indices.append(index)
+                    final_outputs.append(None)
+            print(json.dumps({
+                "event": "teacher_output_contract",
+                "output_count": len(raw),
+                "output_token_counts": output_token_counts,
+                "malformed_thinking_indices": malformed_thinking_indices,
+                "fallback_reason": "teacher_thinking_budget_exhausted" if malformed_thinking_indices else "none",
+            }, sort_keys=True), file=sys.stderr, flush=True)
+            if malformed_thinking_indices:
+                raise RuntimeErrorExplicit(
+                    "unterminated or malformed Qwen thinking blocks at teacher batch indices: "
+                    + ",".join(str(index) for index in malformed_thinking_indices)
+                )
+            return [output for output in final_outputs if output is not None]
 
         return collect_dataset_batchwise(
             examples=pending,
@@ -834,7 +857,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--model-revision", required=True)
     probe.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
     probe.add_argument("--teacher-fallback-reason")
-    probe.add_argument("--teacher-max-new-tokens", type=int, default=512)
+    probe.add_argument("--teacher-max-new-tokens", type=int, default=1024)
     probe.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
     probe.add_argument("--output", required=True, type=Path)
     probe.set_defaults(func=cmd_probe_model)
@@ -963,7 +986,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--response-max-new-tokens", type=int, default=256)
     collect.add_argument("--student-temperature", type=float, default=0.7)
     collect.add_argument("--student-top-p", type=float, default=0.9)
-    collect.add_argument("--teacher-max-new-tokens", type=int, default=512)
+    collect.add_argument("--teacher-max-new-tokens", type=int, default=1024)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)
