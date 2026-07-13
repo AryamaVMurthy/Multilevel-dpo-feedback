@@ -10,6 +10,44 @@ from text_feedback_dpo.prompts import prompt_builder_identity
 
 
 class CLITest(unittest.TestCase):
+    def test_bootstrap_sft_gate_persists_failure_report_before_raising(self):
+        from text_feedback_dpo.dataset import SFTDataGateError
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "sft.jsonl"
+            report_path = root / "sft-report.json"
+            args = Namespace(
+                config=root / "config.yaml",
+                data=root / "data.jsonl",
+                trajectories=root / "rollouts.jsonl",
+                output=output,
+                report=report_path,
+                min_coverage=0.5,
+                min_rows=2,
+            )
+            report = {
+                "input_examples": 2,
+                "query_unique_examples": 1,
+                "response_unique_examples": 0,
+            }
+            with patch("text_feedback_dpo.cli.load_config", return_value={}), patch(
+                "text_feedback_dpo.training.validate_student_model_selection",
+                return_value=("Qwen/Qwen3-4B-Base", "revision"),
+            ), patch("text_feedback_dpo.runtime.load_tokenizer", return_value=object()), patch(
+                "text_feedback_dpo.cli.read_unique_jsonl",
+                side_effect=[[{"id": "q1"}, {"id": "q2"}], [{"id": "q1", "candidates": []}, {"id": "q2", "candidates": []}]],
+            ), patch(
+                "text_feedback_dpo.cli.build_sft_rows_from_bootstrap",
+                return_value=([], report),
+            ):
+                with self.assertRaises(SFTDataGateError):
+                    from text_feedback_dpo.cli import cmd_build_sft
+
+                    cmd_build_sft(args)
+            self.assertFalse(output.exists())
+            self.assertEqual(json.loads(report_path.read_text(encoding="utf-8"))["response_coverage"], 0.0)
+
     def test_prepare_searchqa_emits_exact_active_source_schema(self):
         class Tokenizer:
             @staticmethod

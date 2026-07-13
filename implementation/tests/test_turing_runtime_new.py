@@ -51,6 +51,35 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("SCRATCHPAD_MAX_NEW_TOKENS", text)
         self.assertNotIn("--max-new-tokens 512", text)
 
+    def test_sft_builder_launcher_matches_current_fail_fast_interface(self):
+        text = Path("scripts/turing_build_sft.sh").read_text(encoding="utf-8")
+        for value in (
+            "EXPECTED_COMMIT",
+            "CONFIG",
+            "DATA",
+            "DATA_SHA256",
+            "TRAJECTORIES",
+            "TRAJECTORIES_SHA256",
+            "OUTPUT",
+            "REPORT",
+            "MIN_COVERAGE",
+            "MIN_ROWS",
+        ):
+            self.assertIn(value, text)
+        for argument in (
+            "--config",
+            "--data",
+            "--trajectories",
+            "--output",
+            "--report",
+            "--min-coverage",
+            "--min-rows",
+        ):
+            self.assertIn(argument, text)
+        self.assertIn("git -C", text)
+        self.assertIn("sha256sum", text)
+        self.assertIn("fallback_reason", text)
+
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):

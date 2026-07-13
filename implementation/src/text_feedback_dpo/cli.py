@@ -193,6 +193,7 @@ def cmd_build_sft(args: argparse.Namespace) -> None:
         if min(query_coverage, response_coverage) < args.min_coverage or len(rows) < args.min_rows:
             from text_feedback_dpo.dataset import SFTDataGateError
 
+            write_json(args.report, report)
             raise SFTDataGateError("bootstrap SFT coverage gate failed", report)
     else:
         rows, report = build_sft_rows_from_trajectories(
