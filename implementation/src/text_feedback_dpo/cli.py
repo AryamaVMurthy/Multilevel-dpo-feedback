@@ -860,6 +860,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
+        RuntimeErrorExplicit,
         bounded_teacher_outputs,
         generate_batch,
         generate_batch_records,
@@ -1020,6 +1021,40 @@ def cmd_collect(args: argparse.Namespace) -> None:
                     f"teacher prompt budget exceeded: max_prompt_tokens={max(prompt_token_counts)} "
                     f"max_input_tokens={max_input_tokens} max_total_tokens=4096"
                 )
+
+            fallback_rendered = render_teacher_prompts(
+                teacher_tokenizer, prompts, enable_thinking=False
+            ) if args.teacher_thinking else []
+
+            def explicit_nonthinking_fallback(indices):
+                if not fallback_rendered:
+                    raise RuntimeErrorExplicit(
+                        "explicit non-thinking teacher recovery is unavailable when teacher thinking is disabled"
+                    )
+                active_prompts = [fallback_rendered[index] for index in indices]
+                fallback_prompt_counts = [
+                    len(teacher_tokenizer.encode(prompt, add_special_tokens=False))
+                    for prompt in active_prompts
+                ]
+                legal_max_new_tokens = min(512, min(4096 - count for count in fallback_prompt_counts))
+                if legal_max_new_tokens <= 0:
+                    raise RuntimeErrorExplicit(
+                        "explicit non-thinking teacher recovery has no legal output budget"
+                    )
+                print(json.dumps({
+                    "event": "teacher_explicit_nonthinking_recovery",
+                    "original_indices": indices,
+                    "prompt_token_counts": fallback_prompt_counts,
+                    "max_new_tokens": legal_max_new_tokens,
+                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery",
+                }, sort_keys=True), file=sys.stderr, flush=True)
+                return batched_generate(
+                    teacher, teacher_tokenizer, active_prompts,
+                    batch_size=args.teacher_batch_size,
+                    max_new_tokens=legal_max_new_tokens,
+                    temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                )
+
             final_outputs, output_report = bounded_teacher_outputs(
                 rendered,
                 prompt_token_counts=prompt_token_counts,
@@ -1038,12 +1073,17 @@ def cmd_collect(args: argparse.Namespace) -> None:
                     lambda text, gold_answer=gold_answer: _teacher_feedback_is_valid(text, gold_answer)
                     for gold_answer in gold_answers
                 ],
+                fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
+                fallback_reason=(
+                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery"
+                    if args.teacher_thinking else None
+                ),
             )
             print(json.dumps({
                 "event": "teacher_output_contract",
                 "output_count": len(final_outputs),
                 **output_report,
-                "fallback_reason": "none",
+                "fallback_reason": output_report.get("fallback_reason", "none"),
             }, sort_keys=True), file=sys.stderr, flush=True)
             return final_outputs
 

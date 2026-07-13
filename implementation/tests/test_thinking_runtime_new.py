@@ -158,6 +158,38 @@ class ThinkingRuntimeTest(unittest.TestCase):
                 token_count=lambda _text: 1024,
             )
 
+    def test_teacher_uses_explicit_nonthinking_recovery_only_after_retry_exhaustion(self):
+        calls = []
+
+        def generate(prompts, *, max_new_tokens):
+            calls.append((list(prompts), max_new_tokens))
+            return ["<think>unfinished" for _ in prompts]
+
+        fallback_calls = []
+
+        def fallback_generate(indices):
+            fallback_calls.append(list(indices))
+            return ['{"hint":"Inspect the associated person."}' for _ in indices]
+
+        outputs, report = bounded_teacher_outputs(
+            ["p0"],
+            prompt_token_counts=[100],
+            primary_max_new_tokens=128,
+            retry_max_new_tokens=256,
+            generate=generate,
+            token_count=lambda _text: 256,
+            fallback_generate=fallback_generate,
+            fallback_reason="teacher_thinking_retry_exhausted_explicit_nonthinking_recovery",
+        )
+        self.assertEqual(calls, [(["p0"], 128), (["p0"], 256)])
+        self.assertEqual(fallback_calls, [[0]])
+        self.assertEqual(report["fallback_indices"], [0])
+        self.assertEqual(
+            report["fallback_reason"],
+            "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery",
+        )
+        self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
+
     def test_teacher_identity_is_pinned_qwen3_instruct_with_explicit_fallback(self):
         self.assertEqual(
             validate_teacher_identity("Qwen/Qwen3-32B", revision="teacher-rev", quantization="4bit", fallback_reason=None),

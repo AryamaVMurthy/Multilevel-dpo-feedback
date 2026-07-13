@@ -40,6 +40,8 @@ def bounded_teacher_outputs(
     token_count: Callable[[str], int],
     validate_output: Callable[[str], bool] | None = None,
     validate_outputs: list[Callable[[str], bool]] | None = None,
+    fallback_generate: Callable[[list[int]], list[str]] | None = None,
+    fallback_reason: str | None = None,
 ) -> tuple[list[str], dict[str, object]]:
     """Retry outputs that violate the thinking or final-content contract."""
     if not prompts or len(prompt_token_counts) != len(prompts):
@@ -48,6 +50,10 @@ def bounded_teacher_outputs(
         raise ValueError("teacher retry accepts either one validator or per-row validators, not both")
     if validate_outputs is not None and len(validate_outputs) != len(prompts):
         raise ValueError("teacher retry requires per-row validator parity")
+    if fallback_generate is not None and (not isinstance(fallback_reason, str) or not fallback_reason.strip()):
+        raise ValueError("teacher fallback requires an explicit fallback reason")
+    if fallback_generate is None and fallback_reason is not None:
+        raise ValueError("teacher fallback reason requires a fallback generator")
     if not 0 < primary_max_new_tokens < retry_max_new_tokens < TOTAL_CONTEXT_TOKENS:
         raise ValueError("teacher retry caps must satisfy 0 < primary < retry < 4096")
     raw = generate(prompts, max_new_tokens=primary_max_new_tokens)
@@ -140,10 +146,35 @@ def bounded_teacher_outputs(
         report["retry_invalid_content_indices"] = sorted(retry_invalid_content)
         if retry_malformed or retry_invalid_content:
             original_indices = sorted(retry_malformed + retry_invalid_content)
-            raise RuntimeErrorExplicit(
-                "teacher thinking retry exhausted or remained malformed at original indices: "
-                + ",".join(str(index) for index in original_indices)
-            )
+            if fallback_generate is None:
+                raise RuntimeErrorExplicit(
+                    "teacher thinking retry exhausted or remained malformed at original indices: "
+                    + ",".join(str(index) for index in original_indices)
+                )
+            fallback_raw = fallback_generate(original_indices)
+            if not isinstance(fallback_raw, list) or len(fallback_raw) != len(original_indices) or any(
+                not isinstance(item, str) for item in fallback_raw
+            ):
+                raise RuntimeErrorExplicit("explicit teacher fallback cardinality/type mismatch")
+            fallback_invalid: list[int] = []
+            fallback_output_counts: dict[int, int] = {}
+            for original_index, text in zip(original_indices, fallback_raw, strict=True):
+                fallback_output_counts[original_index] = token_count(text)
+                try:
+                    final[original_index] = extract_valid_content(text, original_index)
+                except RuntimeErrorExplicit:
+                    fallback_invalid.append(original_index)
+            report["fallback_indices"] = original_indices
+            report["fallback_reason"] = fallback_reason
+            report["fallback_output_token_counts"] = [
+                fallback_output_counts[index] for index in original_indices
+            ]
+            report["fallback_invalid_indices"] = fallback_invalid
+            if fallback_invalid:
+                raise RuntimeErrorExplicit(
+                    "explicit teacher fallback failed the output contract at original indices: "
+                    + ",".join(str(index) for index in fallback_invalid)
+                )
     if any(item is None for item in final):
         raise RuntimeErrorExplicit("teacher retry did not populate every final output")
     return [str(item) for item in final], report
