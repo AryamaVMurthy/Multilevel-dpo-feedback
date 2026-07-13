@@ -318,6 +318,38 @@ class SearchQADataTest(unittest.TestCase):
         self.assertEqual(stats["dropped_rows"], 1)
         self.assertEqual(stats["drop_reasons"], {"no_usable_evidence": 1})
 
+    def test_stream_loader_updates_stats_as_rows_are_consumed(self):
+        from text_feedback_dpo.dataset import stream_searchqa_split_with_stats
+
+        raw_rows = [
+            {
+                "question": "Who?",
+                "answer": "Ada",
+                "search_results": {
+                    "snippets": ["Ada evidence"],
+                    "titles": ["Ada"],
+                    "urls": ["https://example.test/ada"],
+                },
+            },
+            {
+                "question": "Who else?",
+                "answer": "Grace",
+                "search_results": {
+                    "snippets": ["Grace evidence"],
+                    "titles": ["Grace"],
+                    "urls": ["https://example.test/grace"],
+                },
+            },
+        ]
+        with patch("datasets.load_dataset", return_value=raw_rows) as load_dataset:
+            rows, stats = stream_searchqa_split_with_stats("mock/searchqa", "train", revision="revision")
+            self.assertEqual(stats["materialized_rows"], 0)
+            self.assertEqual(next(rows)["id"], "train-0")
+            self.assertEqual(stats["materialized_rows"], 1)
+            self.assertEqual([row["id"] for row in rows], ["train-1"])
+            self.assertEqual(stats["materialized_rows"], 2)
+        load_dataset.assert_called_once_with("mock/searchqa", split="train", revision="revision")
+
     def test_dataset_fingerprint_is_deterministic_for_materialized_sources(self):
         row = materialize_row(
             {

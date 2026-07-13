@@ -3,10 +3,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
-from text_feedback_dpo.dataset import attach_evidence, build_sft_rows_from_trajectories, load_searchqa_split_with_stats, write_jsonl
+from text_feedback_dpo.dataset import (
+    attach_evidence,
+    build_sft_rows_from_trajectories,
+    load_searchqa_split_with_stats,
+    stream_searchqa_split_with_stats,
+    stream_stats_report,
+    write_jsonl,
+)
 from text_feedback_dpo.io import iter_jsonl as _iter_jsonl
 from text_feedback_dpo.scoring import score_searchqa
 
@@ -55,8 +63,31 @@ def cmd_prepare(args: argparse.Namespace) -> None:
     from text_feedback_dpo.runtime import load_tokenizer
 
     tokenizer = load_tokenizer(args.tokenizer_model, revision=args.tokenizer_revision)
+    def token_count(text: str) -> int:
+        return len(tokenizer.encode(text, add_special_tokens=False))
+
+    if args.source == "kyunghyuncho/search_qa":
+        rows, stream_stats = stream_searchqa_split_with_stats(args.source, args.split, revision=args.revision, limit=args.limit)
+        partial_output = args.output.with_name(f".{args.output.name}.{os.getpid()}.partial")
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        row_count = 0
+        with partial_output.open("w", encoding="utf-8") as handle:
+            for row_index, row in enumerate(rows, start=1):
+                prepared = attach_evidence([row], max_evidence_tokens=args.max_evidence_tokens, token_count=token_count)[0]
+                try:
+                    prepared["sources"] = canonicalize_materialized_source_records(prepared.get("sources"))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid materialized sources in row {row_index}: {exc}") from exc
+                handle.write(json.dumps(prepared, sort_keys=True, ensure_ascii=False) + "\n")
+                row_count += 1
+        load_stats = stream_stats_report(stream_stats)
+        partial_output.replace(args.output)
+        manifest = {"source": args.source, "split": args.split, "rows": row_count, "max_length": 4096, "load_stats": load_stats, "required_files": [args.output.name]}
+        write_json(args.output.with_suffix(".manifest.json"), manifest)
+        write_json(args.output.parent / "manifest.json", manifest)
+        return
     rows, load_stats = load_searchqa_split_with_stats(args.source, args.split, revision=args.revision, limit=args.limit)
-    rows = attach_evidence(rows, max_evidence_tokens=args.max_evidence_tokens, token_count=lambda text: len(tokenizer.encode(text, add_special_tokens=False)))
+    rows = attach_evidence(rows, max_evidence_tokens=args.max_evidence_tokens, token_count=token_count)
     for row_index, row in enumerate(rows, start=1):
         try:
             row["sources"] = canonicalize_materialized_source_records(row.get("sources"))

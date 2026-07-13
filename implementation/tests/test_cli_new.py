@@ -42,6 +42,49 @@ class CLITest(unittest.TestCase):
             source = json.loads(output.read_text(encoding="utf-8"))["sources"][0]
             self.assertEqual(set(source), {"source_id", "original_rank", "title", "url", "snippet"})
 
+    def test_prepare_searchqa_streams_official_rows_and_writes_manifest_after_success(self):
+        class Tokenizer:
+            @staticmethod
+            def encode(text, *, add_special_tokens):
+                del text
+                self.assertFalse(add_special_tokens)
+                return [1]
+
+        prepared_row = {
+            "id": "train-0", "question": "Who?", "gold_answer": "Ada",
+            "snippets": ["Ada evidence"],
+            "sources": [{
+                "source_id": "S001", "original_rank": 1, "title": "Ada",
+                "url": "https://example.test/ada", "snippet": "Ada evidence",
+                "related_links": None,
+            }],
+        }
+        stream_stats = {
+            "source_rows": 1, "materialized_rows": 1, "dropped_rows": 0,
+            "drop_reasons": {},
+            "source_records": {
+                "input_records": 1, "usable_records": 1, "dropped_records": 0,
+                "drop_reasons": {},
+            },
+        }
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "prepared.jsonl"
+            args = build_parser().parse_args([
+                "prepare-searchqa", "--source", "kyunghyuncho/search_qa", "--split", "train",
+                "--tokenizer-model", "model", "--tokenizer-revision", "tok-rev",
+                "--revision", "data-rev", "--output", str(output), "--max-evidence-tokens", "100",
+            ])
+            with patch("text_feedback_dpo.runtime.load_tokenizer", return_value=Tokenizer()), patch(
+                "text_feedback_dpo.cli.stream_searchqa_split_with_stats",
+                return_value=(iter([prepared_row]), stream_stats),
+            ):
+                args.func(args)
+
+            self.assertEqual(len(output.read_text(encoding="utf-8").splitlines()), 1)
+            manifest = json.loads((Path(directory) / "prepared.manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["rows"], 1)
+            self.assertEqual(manifest["load_stats"]["materialized_rows"], 1)
+
     def test_exposes_only_searchqa_training_commands(self):
         parser = build_parser()
         for command in ("prepare-searchqa", "shard-jsonl", "merge-predictions", "probe-model", "collect", "build-preferences", "build-sft-data", "precompute-dpo-ref-log-probs", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):

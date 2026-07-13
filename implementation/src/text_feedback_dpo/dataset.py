@@ -4,7 +4,7 @@ import hashlib
 import json
 import io
 import zipfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from text_feedback_dpo.searchqa import (
     SOURCE_SCHEMA,
@@ -37,72 +37,109 @@ def load_searchqa_split(source: str, split: str, *, revision: str, limit: int | 
     return rows
 
 
-def load_searchqa_split_with_stats(source: str, split: str, *, revision: str, limit: int | None = None) -> tuple[list[dict], dict]:
+def _new_stream_stats() -> dict:
+    return {
+        "source_rows": 0,
+        "materialized_rows": 0,
+        "dropped_rows": 0,
+        "drop_reasons": {},
+        "source_records": _empty_source_record_stats(),
+    }
+
+
+def stream_stats_report(stats: dict) -> dict:
+    return {
+        "source_schema": SOURCE_SCHEMA,
+        "source_schema_version": SOURCE_SCHEMA_VERSION,
+        "source_rows": stats["source_rows"],
+        "materialized_rows": stats["materialized_rows"],
+        "dropped_rows": stats["dropped_rows"],
+        "drop_reasons": dict(stats["drop_reasons"]),
+        "source_records": {
+            **stats["source_records"],
+            "drop_reasons": dict(stats["source_records"]["drop_reasons"]),
+        },
+    }
+
+
+def _record_dropped_row(stats: dict, exc: NoUsableSearchQASourcesError) -> None:
+    _accumulate_source_record_stats(stats["source_records"], exc.source_filter_stats)
+    stats["dropped_rows"] += 1
+    stats["drop_reasons"]["no_usable_evidence"] = stats["drop_reasons"].get("no_usable_evidence", 0) + 1
+
+
+def stream_searchqa_split_with_stats(
+    source: str,
+    split: str,
+    *,
+    revision: str,
+    limit: int | None = None,
+) -> tuple[Iterable[dict], dict]:
+    """Stream materialized SearchQA rows while retaining only compact load statistics."""
     if not source:
         raise ValueError("dataset source is required")
-    if source == "kyunghyuncho/search_qa":
-        rows, stats = _load_official_searchqa_zip(split, revision, limit)
-    else:
-        try:
-            from datasets import load_dataset
-        except ImportError as exc:
-            raise ImportError("datasets is required for SearchQA materialization") from exc
-        dataset = load_dataset(source, split=split, revision=revision)
-        rows = []
-        source_rows = 0
-        dropped_rows = 0
-        drop_reasons: dict[str, int] = {}
-        source_record_stats = _empty_source_record_stats()
-        for index, raw in enumerate(dataset):
-            if limit is not None and len(rows) >= limit:
-                break
-            source_rows += 1
+
+    stats = _new_stream_stats()
+
+    def rows() -> Iterable[dict]:
+        if source == "kyunghyuncho/search_qa":
             try:
-                row = materialize_row(raw, split=split, index=index)
-                rows.append(row)
-                _accumulate_source_record_stats(source_record_stats, row["source_filter_stats"])
-            except NoUsableSearchQASourcesError as exc:
-                _accumulate_source_record_stats(source_record_stats, exc.source_filter_stats)
-                dropped_rows += 1
-                reason = "no_usable_evidence"
-                drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
-        stats = _load_stats(source_rows, rows, dropped_rows, drop_reasons, source_record_stats)
-    if not rows:
-        raise ValueError(f"SearchQA split {split!r} produced zero rows")
-    return rows, stats
+                from huggingface_hub import hf_hub_download
+            except ImportError as exc:
+                raise ImportError("huggingface_hub is required for the official SearchQA archive") from exc
+            filename = {"train": "data/train_test_val/train.zip", "validation": "data/train_test_val/val.zip", "test": "data/train_test_val/test.zip"}.get(split)
+            if filename is None:
+                raise ValueError("official SearchQA split must be train, validation, or test")
+            archive_path = hf_hub_download(repo_id="kyunghyuncho/search_qa", filename=filename, repo_type="dataset", revision=revision)
+            with zipfile.ZipFile(archive_path) as archive:
+                for index, member in enumerate(sorted(name for name in archive.namelist() if name.endswith(".json"))):
+                    if limit is not None and stats["materialized_rows"] >= limit:
+                        break
+                    stats["source_rows"] += 1
+                    with archive.open(member) as handle:
+                        raw = json.loads(io.TextIOWrapper(handle, encoding="utf-8").read())
+                    try:
+                        row = materialize_row(raw, split=split, index=index)
+                    except NoUsableSearchQASourcesError as exc:
+                        _record_dropped_row(stats, exc)
+                        continue
+                    _accumulate_source_record_stats(stats["source_records"], row["source_filter_stats"])
+                    stats["materialized_rows"] += 1
+                    yield row
+        else:
+            try:
+                from datasets import load_dataset
+            except ImportError as exc:
+                raise ImportError("datasets is required for SearchQA materialization") from exc
+            dataset = load_dataset(source, split=split, revision=revision)
+            for index, raw in enumerate(dataset):
+                if limit is not None and stats["materialized_rows"] >= limit:
+                    break
+                stats["source_rows"] += 1
+                try:
+                    row = materialize_row(raw, split=split, index=index)
+                except NoUsableSearchQASourcesError as exc:
+                    _record_dropped_row(stats, exc)
+                    continue
+                _accumulate_source_record_stats(stats["source_records"], row["source_filter_stats"])
+                stats["materialized_rows"] += 1
+                yield row
+        if stats["materialized_rows"] == 0:
+            raise ValueError(f"SearchQA split {split!r} produced zero rows")
+
+    return rows(), stats
+
+
+def load_searchqa_split_with_stats(source: str, split: str, *, revision: str, limit: int | None = None) -> tuple[list[dict], dict]:
+    rows, stats = stream_searchqa_split_with_stats(source, split, revision=revision, limit=limit)
+    materialized = list(rows)
+    return materialized, stream_stats_report(stats)
 
 
 def _load_official_searchqa_zip(split: str, revision: str, limit: int | None) -> tuple[list[dict], dict]:
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError as exc:
-        raise ImportError("huggingface_hub is required for the official SearchQA archive") from exc
-    filename = {"train": "data/train_test_val/train.zip", "validation": "data/train_test_val/val.zip", "test": "data/train_test_val/test.zip"}.get(split)
-    if filename is None:
-        raise ValueError("official SearchQA split must be train, validation, or test")
-    archive_path = hf_hub_download(repo_id="kyunghyuncho/search_qa", filename=filename, repo_type="dataset", revision=revision)
-    rows = []
-    source_rows = 0
-    dropped_rows = 0
-    drop_reasons: dict[str, int] = {}
-    source_record_stats = _empty_source_record_stats()
-    with zipfile.ZipFile(archive_path) as archive:
-        for index, member in enumerate(sorted(name for name in archive.namelist() if name.endswith(".json"))):
-            if limit is not None and len(rows) >= limit:
-                break
-            source_rows += 1
-            with archive.open(member) as handle:
-                raw = json.loads(io.TextIOWrapper(handle, encoding="utf-8").read())
-            try:
-                row = materialize_row(raw, split=split, index=index)
-                rows.append(row)
-                _accumulate_source_record_stats(source_record_stats, row["source_filter_stats"])
-            except NoUsableSearchQASourcesError as exc:
-                _accumulate_source_record_stats(source_record_stats, exc.source_filter_stats)
-                dropped_rows += 1
-                reason = "no_usable_evidence"
-                drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
-    return rows, _load_stats(source_rows, rows, dropped_rows, drop_reasons, source_record_stats)
+    rows, stats = stream_searchqa_split_with_stats("kyunghyuncho/search_qa", split, revision=revision, limit=limit)
+    materialized = list(rows)
+    return materialized, stream_stats_report(stats)
 
 
 def _empty_source_record_stats() -> dict:
