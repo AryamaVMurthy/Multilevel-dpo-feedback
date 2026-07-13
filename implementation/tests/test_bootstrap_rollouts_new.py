@@ -114,6 +114,9 @@ class BootstrapRolloutsTest(unittest.TestCase):
         self.assertIn("bootstrap-rollouts", script)
         self.assertIn("QUERY_MIN_NEW_TOKENS", script)
         self.assertIn("RESPONSE_MIN_NEW_TOKENS", script)
+        self.assertIn("MODEL_ARTIFACT_SHA256", script)
+        self.assertIn("--model-artifact-sha256", script)
+        self.assertIn("model.safetensors", script)
         self.assertNotIn('${QUERY_MIN_NEW_TOKENS:-', script)
         self.assertNotIn('${RESPONSE_MIN_NEW_TOKENS:-', script)
 

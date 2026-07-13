@@ -1,3 +1,4 @@
+import hashlib
 import unittest
 import json
 from argparse import Namespace
@@ -5,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from text_feedback_dpo.cli import build_parser
+from text_feedback_dpo.cli import _verified_local_model_artifact, build_parser
 from text_feedback_dpo.prompts import prompt_builder_identity
 
 
@@ -163,6 +164,19 @@ class CLITest(unittest.TestCase):
         self.assertEqual(parsed.query_min_new_tokens, 2)
         self.assertEqual(parsed.response_min_new_tokens, 8)
         self.assertEqual(parsed.func.__name__, "cmd_evaluate_sft_reproduction")
+
+    def test_local_rollout_model_requires_and_verifies_weight_hash(self):
+        with TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            model_file = checkpoint / "model.safetensors"
+            model_file.write_bytes(b"checkpoint weights")
+            expected = hashlib.sha256(model_file.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "requires --model-artifact-sha256"):
+                _verified_local_model_artifact(str(checkpoint), None)
+            with self.assertRaisesRegex(ValueError, "model artifact hash mismatch"):
+                _verified_local_model_artifact(str(checkpoint), "0" * 64)
+            self.assertEqual(_verified_local_model_artifact(str(checkpoint), expected), expected)
+        self.assertIsNone(_verified_local_model_artifact("Qwen/Qwen3-4B-Base", None))
 
     def test_sft_capability_cli_requires_all_hashed_lineage_artifacts(self):
         parsed = build_parser().parse_args([

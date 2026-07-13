@@ -64,6 +64,27 @@ def _sha256_file_streaming(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verified_local_model_artifact(model: str, expected_sha256: str | None) -> str | None:
+    model_path = Path(model)
+    if not model_path.exists():
+        if expected_sha256 is not None:
+            raise ValueError("--model-artifact-sha256 is only valid for an existing local model directory")
+        return None
+    if not model_path.is_dir():
+        raise ValueError(f"local rollout model must be a directory: {model_path}")
+    model_file = model_path / "model.safetensors"
+    if not model_file.is_file():
+        raise FileNotFoundError(f"local rollout model artifact is missing: {model_file}")
+    if expected_sha256 is None:
+        raise ValueError("local rollout model requires --model-artifact-sha256")
+    actual_sha256 = _sha256_file_streaming(model_file)
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"local rollout model artifact hash mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
+    return actual_sha256
+
+
 def _identity_hash(value: dict) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -677,6 +698,7 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
         raise ValueError("response_min_new_tokens must be between 0 and response_max_new_tokens")
     if len(args.policy_hash) != 64 or any(character not in "0123456789abcdef" for character in args.policy_hash):
         raise ValueError("bootstrap policy_hash must be a lowercase SHA-256")
+    model_artifact_sha256 = _verified_local_model_artifact(args.model, args.model_artifact_sha256)
     rows = read_jsonl(args.data)
     _validate_rows(rows)
     tokenizer = load_tokenizer(args.model, revision=args.model_revision)
@@ -726,7 +748,12 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
         "rows": len(results),
         "candidates": len(results) * len(args.seeds),
         "seeds": list(args.seeds),
-        "model": {"identity": args.model, "revision": args.model_revision, "policy_hash": args.policy_hash},
+        "model": {
+            "identity": args.model,
+            "revision": args.model_revision,
+            "policy_hash": args.policy_hash,
+            "artifact_sha256": model_artifact_sha256,
+        },
         "dataset": {
             "source": args.dataset_source,
             "revision": args.dataset_revision,
@@ -1198,6 +1225,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--output", required=True, type=Path)
     bootstrap.add_argument("--model", required=True)
     bootstrap.add_argument("--model-revision", required=True)
+    bootstrap.add_argument("--model-artifact-sha256")
     bootstrap.add_argument("--dataset-source", required=True)
     bootstrap.add_argument("--dataset-revision", required=True)
     bootstrap.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
