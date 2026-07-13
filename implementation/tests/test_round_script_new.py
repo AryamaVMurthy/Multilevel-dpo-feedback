@@ -10,12 +10,13 @@ class RoundScriptTest(unittest.TestCase):
             self.assertIn(stage, text)
         self.assertNotIn("|| true", text)
 
-    def test_primary_round_separates_two_gpu_collection_from_four_gpu_training(self):
+    def test_primary_round_separates_collection_from_frozen_scale_training(self):
         text = Path("scripts/turing_primary_round.sh").read_text(encoding="utf-8")
         self.assertIn("COLLECTION_SCRIPT", text)
         self.assertIn("sbatch", text)
         self.assertIn("--gres=gpu:2", text)
-        self.assertIn("TRAIN_GPUS=4", text)
+        self.assertIn("SCALE_DECISION", text)
+        self.assertIn('TRAIN_GPUS="$SELECTED_TRAIN_GPUS"', text)
         self.assertIn("--nodes=1", text)
         self.assertIn("SHARD_INDEX", text)
         self.assertIn("MERGE_ID", text)

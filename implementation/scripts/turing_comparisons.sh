@@ -20,6 +20,7 @@ allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is r
 
 required=(TURING_ACCOUNT PROJECT_DIR CONFIG BASE_MODEL BASE_REVISION RL_START_MODEL RL_START_REVISION SFT_TRAIN SFT_EVAL RL_DATA RL_EVAL VAL_DATA OUTPUT_ROOT TRAIN_GPUS DATASET_SOURCE DATASET_REVISION PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH POLICY_HASH LEARNING_RATE EPOCHS SAVE_STEPS EVAL_STEPS
   SFT_TRAIN_DECISION SFT_TRAIN_DECISION_SHA256 GRPO_TRAIN_DECISION GRPO_TRAIN_DECISION_SHA256 DAPO_TRAIN_DECISION DAPO_TRAIN_DECISION_SHA256
+  SFT_SCALE_DECISION SFT_SCALE_DECISION_SHA256 GRPO_SCALE_DECISION GRPO_SCALE_DECISION_SHA256 DAPO_SCALE_DECISION DAPO_SCALE_DECISION_SHA256
   SFT_GENERATION_DECISION SFT_GENERATION_DECISION_SHA256 GRPO_GENERATION_DECISION GRPO_GENERATION_DECISION_SHA256 DAPO_GENERATION_DECISION DAPO_GENERATION_DECISION_SHA256
   SFT_SMOKE_MANIFEST SFT_SMOKE_MANIFEST_SHA256 GRPO_SMOKE_MANIFEST GRPO_SMOKE_MANIFEST_SHA256 DAPO_SMOKE_MANIFEST DAPO_SMOKE_MANIFEST_SHA256
   SFT_OUTPUT_REVISION GRPO_OUTPUT_REVISION DAPO_OUTPUT_REVISION STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B)
@@ -27,7 +28,8 @@ for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || fail "$name must be su
 : "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == 1 ]] || fail "local torchrun requires one node; got $SLURM_NNODES" multi_node_training_forbidden
 : "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == 1 ]] || fail "local torchrun requires one task; got $SLURM_NTASKS" multi_task_training_forbidden
 ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
-[[ "$TRAIN_GPUS" == 4 && "$ALLOCATED_GPU_COUNT" == "$TRAIN_GPUS" ]] || fail "comparison requires exactly four allocated GPUs and TRAIN_GPUS=4" gpu_allocation_mismatch
+[[ "$TRAIN_GPUS" == 4 || "$TRAIN_GPUS" == 8 ]] || fail "comparison TRAIN_GPUS must be frozen to 4 or 8" gpu_allocation_mismatch
+[[ "$ALLOCATED_GPU_COUNT" == "$TRAIN_GPUS" ]] || fail "comparison allocation=$ALLOCATED_GPU_COUNT differs from TRAIN_GPUS=$TRAIN_GPUS" gpu_allocation_mismatch
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
@@ -48,25 +50,34 @@ PY
 ARTIFACT_PATHS="$OUTPUT_ROOT|$CONFIG|$SFT_TRAIN|$SFT_EVAL|$RL_DATA|$RL_EVAL|$VAL_DATA|$SFT_TRAIN_DECISION|$GRPO_TRAIN_DECISION|$DAPO_TRAIN_DECISION|$SFT_GENERATION_DECISION|$GRPO_GENERATION_DECISION|$DAPO_GENERATION_DECISION|$SFT_SMOKE_MANIFEST|$GRPO_SMOKE_MANIFEST|$DAPO_SMOKE_MANIFEST"
 
 validate_training() {
-  local method="$1" decision="$2" decision_sha="$3" model="$4" revision="$5" data="$6" eval="$7" smoke="$8" smoke_sha="$9"
+  local method="$1" decision="$2" decision_sha="$3" model="$4" revision="$5" data="$6" eval="$7" smoke="$8" smoke_sha="$9" scale="${10}" scale_sha="${11}"
   local data_sha eval_dataset_sha256 help
   data_sha="$(hash_file "$data")"
   eval_dataset_sha256="$(hash_file "$eval")"
-  IFS=$'\t' read -r TRAIN_ATTENTION TRAIN_MICROBATCH TRAIN_ACCUM TRAIN_WORKERS TRAIN_FALLBACK TRAIN_DECISION_SHA < <(
+  IFS=$'\t' read -r TRAIN_ATTENTION TRAIN_MICROBATCH TRAIN_ACCUM TRAIN_WORKERS TRAIN_EVAL_MICROBATCH TRAIN_MAX_STEPS TRAIN_MAX_LENGTH TRAIN_GRADIENT_CHECKPOINTING TRAIN_PACKING TRAIN_PADDING_FREE TRAIN_USE_LIGER TRAIN_LEARNING_RATE TRAIN_EPOCHS TRAIN_SAVE_STEPS TRAIN_EVAL_STEPS TRAIN_NUM_GENERATIONS TRAIN_GENERATION_BATCH_SIZE TRAIN_MAX_COMPLETION_LENGTH TRAIN_FALLBACK TRAIN_DECISION_SHA < <(
     run_probe_runner validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose training --output-format training-tsv \
+      --training-method "$method" \
       --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
       --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
       --eval-dataset-sha256 "$eval_dataset_sha256" \
       --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
   ) || fail "$method training decision validation failed" optimization_decision_invalid
+  awk -v expected="$LEARNING_RATE" -v frozen="$TRAIN_LEARNING_RATE" 'BEGIN { exit !(expected == frozen) }' || fail "$method learning rate differs from frozen decision" training_control_mismatch
+  awk -v expected="$EPOCHS" -v frozen="$TRAIN_EPOCHS" 'BEGIN { exit !(expected == frozen) }' || fail "$method epochs differs from frozen decision" training_control_mismatch
+  [[ "$SAVE_STEPS" == "$TRAIN_SAVE_STEPS" && "$EVAL_STEPS" == "$TRAIN_EVAL_STEPS" ]] || fail "$method cadence differs from frozen decision" training_control_mismatch
+  run_probe_runner validate-scale-decision --decision "$scale" --expected-sha256 "$scale_sha" --train-gpus "$TRAIN_GPUS" --training-method "$method" \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
+    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" >/dev/null \
+    || fail "$method scale decision validation failed" scale_decision_invalid
   run_probe_runner validate-checkpoints --smoke-manifest "$smoke" --expected-sha256 "$smoke_sha" \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
     --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
     --eval-dataset-sha256 "$eval_dataset_sha256" \
     --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
-    --optimization-decision-sha256 "$decision_sha" --method "$method" >/dev/null || fail "$method checkpoint smoke validation failed" checkpoint_smoke_invalid
+    --optimization-decision-sha256 "$decision_sha" --scale-decision-sha256 "$scale_sha" --method "$method" >/dev/null || fail "$method checkpoint smoke validation failed" checkpoint_smoke_invalid
   help="$(uv run --frozen python -m text_feedback_dpo.cli "train-$method" --help)" || fail "cannot inspect train-$method CLI" task7_train_cli_help_failed
-  for flag in --eval --dataloader-workers --per-device-train-batch-size; do [[ "$help" == *"$flag"* ]] || fail "Task 7 train-$method lacks $flag" task7_training_eval_cli_missing; done
+  for flag in --eval --max-steps --max-length --dataloader-num-workers --per-device-train-batch-size --per-device-eval-batch-size --gradient-accumulation-steps --attention-implementation --gradient-checkpointing --packing --padding-free --use-liger-kernel; do [[ "$help" == *"$flag"* ]] || fail "Task 7 train-$method lacks $flag" task7_training_eval_cli_missing; done
 }
 
 validate_generation() {
@@ -83,12 +94,12 @@ validate_generation() {
 }
 
 SFT_MODEL="$OUTPUT_ROOT/sft/final"; GRPO_MODEL="$OUTPUT_ROOT/grpo/final"; DAPO_MODEL="$OUTPUT_ROOT/dapo/final"
-validate_training sft "$SFT_TRAIN_DECISION" "$SFT_TRAIN_DECISION_SHA256" "$BASE_MODEL" "$BASE_REVISION" "$SFT_TRAIN" "$SFT_EVAL" "$SFT_SMOKE_MANIFEST" "$SFT_SMOKE_MANIFEST_SHA256"
-SFT_MICROBATCH="$TRAIN_MICROBATCH"; SFT_ACCUM="$TRAIN_ACCUM"; SFT_WORKERS="$TRAIN_WORKERS"
-validate_training grpo "$GRPO_TRAIN_DECISION" "$GRPO_TRAIN_DECISION_SHA256" "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$GRPO_SMOKE_MANIFEST" "$GRPO_SMOKE_MANIFEST_SHA256"
-GRPO_MICROBATCH="$TRAIN_MICROBATCH"; GRPO_ACCUM="$TRAIN_ACCUM"; GRPO_WORKERS="$TRAIN_WORKERS"
-validate_training dapo "$DAPO_TRAIN_DECISION" "$DAPO_TRAIN_DECISION_SHA256" "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$DAPO_SMOKE_MANIFEST" "$DAPO_SMOKE_MANIFEST_SHA256"
-DAPO_MICROBATCH="$TRAIN_MICROBATCH"; DAPO_ACCUM="$TRAIN_ACCUM"; DAPO_WORKERS="$TRAIN_WORKERS"
+validate_training sft "$SFT_TRAIN_DECISION" "$SFT_TRAIN_DECISION_SHA256" "$BASE_MODEL" "$BASE_REVISION" "$SFT_TRAIN" "$SFT_EVAL" "$SFT_SMOKE_MANIFEST" "$SFT_SMOKE_MANIFEST_SHA256" "$SFT_SCALE_DECISION" "$SFT_SCALE_DECISION_SHA256"
+SFT_CONTROLS=("$TRAIN_MICROBATCH" "$TRAIN_ACCUM" "$TRAIN_WORKERS" "$TRAIN_EVAL_MICROBATCH" "$TRAIN_MAX_STEPS" "$TRAIN_MAX_LENGTH" "$TRAIN_ATTENTION" "$TRAIN_GRADIENT_CHECKPOINTING" "$TRAIN_PACKING" "$TRAIN_PADDING_FREE" "$TRAIN_USE_LIGER" "$TRAIN_LEARNING_RATE" "$TRAIN_EPOCHS" "$TRAIN_SAVE_STEPS" "$TRAIN_EVAL_STEPS" "$TRAIN_NUM_GENERATIONS" "$TRAIN_GENERATION_BATCH_SIZE" "$TRAIN_MAX_COMPLETION_LENGTH")
+validate_training grpo "$GRPO_TRAIN_DECISION" "$GRPO_TRAIN_DECISION_SHA256" "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$GRPO_SMOKE_MANIFEST" "$GRPO_SMOKE_MANIFEST_SHA256" "$GRPO_SCALE_DECISION" "$GRPO_SCALE_DECISION_SHA256"
+GRPO_CONTROLS=("$TRAIN_MICROBATCH" "$TRAIN_ACCUM" "$TRAIN_WORKERS" "$TRAIN_EVAL_MICROBATCH" "$TRAIN_MAX_STEPS" "$TRAIN_MAX_LENGTH" "$TRAIN_ATTENTION" "$TRAIN_GRADIENT_CHECKPOINTING" "$TRAIN_PACKING" "$TRAIN_PADDING_FREE" "$TRAIN_USE_LIGER" "$TRAIN_LEARNING_RATE" "$TRAIN_EPOCHS" "$TRAIN_SAVE_STEPS" "$TRAIN_EVAL_STEPS" "$TRAIN_NUM_GENERATIONS" "$TRAIN_GENERATION_BATCH_SIZE" "$TRAIN_MAX_COMPLETION_LENGTH")
+validate_training dapo "$DAPO_TRAIN_DECISION" "$DAPO_TRAIN_DECISION_SHA256" "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$DAPO_SMOKE_MANIFEST" "$DAPO_SMOKE_MANIFEST_SHA256" "$DAPO_SCALE_DECISION" "$DAPO_SCALE_DECISION_SHA256"
+DAPO_CONTROLS=("$TRAIN_MICROBATCH" "$TRAIN_ACCUM" "$TRAIN_WORKERS" "$TRAIN_EVAL_MICROBATCH" "$TRAIN_MAX_STEPS" "$TRAIN_MAX_LENGTH" "$TRAIN_ATTENTION" "$TRAIN_GRADIENT_CHECKPOINTING" "$TRAIN_PACKING" "$TRAIN_PADDING_FREE" "$TRAIN_USE_LIGER" "$TRAIN_LEARNING_RATE" "$TRAIN_EPOCHS" "$TRAIN_SAVE_STEPS" "$TRAIN_EVAL_STEPS" "$TRAIN_NUM_GENERATIONS" "$TRAIN_GENERATION_BATCH_SIZE" "$TRAIN_MAX_COMPLETION_LENGTH")
 validate_generation sft "$SFT_GENERATION_DECISION" "$SFT_GENERATION_DECISION_SHA256" "$SFT_MODEL" "$SFT_OUTPUT_REVISION"
 validate_generation grpo "$GRPO_GENERATION_DECISION" "$GRPO_GENERATION_DECISION_SHA256" "$GRPO_MODEL" "$GRPO_OUTPUT_REVISION"
 validate_generation dapo "$DAPO_GENERATION_DECISION" "$DAPO_GENERATION_DECISION_SHA256" "$DAPO_MODEL" "$DAPO_OUTPUT_REVISION"
@@ -100,16 +111,20 @@ cleanup() { if kill -0 "$GPU_MONITOR_PID" 2>/dev/null; then kill "$GPU_MONITOR_P
 trap cleanup EXIT
 
 train_arm() {
-  local method="$1" model="$2" revision="$3" train="$4" eval="$5" output="$6" microbatch="$7" accum="$8" workers="$9"; shift 9
+  local method="$1" model="$2" revision="$3" train="$4" eval="$5" output="$6"; shift 6
+  local -a controls=("$@"); local microbatch="${controls[0]}" accum="${controls[1]}" workers="${controls[2]}" eval_microbatch="${controls[3]}" max_steps="${controls[4]}" max_length="${controls[5]}" attention="${controls[6]}" learning_rate="${controls[11]}" epochs="${controls[12]}" save_steps="${controls[13]}" eval_steps="${controls[14]}" num_generations="${controls[15]}" generation_batch_size="${controls[16]}" max_completion_length="${controls[17]}"
+  local -a booleans=(); [[ "${controls[7]}" == True ]] && booleans+=(--gradient-checkpointing) || booleans+=(--no-gradient-checkpointing); [[ "${controls[8]}" == True ]] && booleans+=(--packing) || booleans+=(--no-packing); [[ "${controls[9]}" == True ]] && booleans+=(--padding-free) || booleans+=(--no-padding-free); [[ "${controls[10]}" == True ]] && booleans+=(--use-liger-kernel) || booleans+=(--no-use-liger-kernel)
   uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node="$ALLOCATED_GPU_COUNT" -m text_feedback_dpo.cli "train-$method" \
     --config "$CONFIG" --train "$train" --eval "$eval" --output "$output" --model "$model" --model-revision "$revision" \
-    --deepspeed-config configs/deepspeed_zero3.json --save-steps "$SAVE_STEPS" --eval-steps "$EVAL_STEPS" --gradient-accumulation-steps "$accum" \
-    --learning-rate "$LEARNING_RATE" --epochs "$EPOCHS" \
-    --per-device-train-batch-size "$microbatch" --dataloader-workers "$workers" "$@"
+    --deepspeed-config configs/deepspeed_zero3.json --save-steps "$save_steps" --eval-steps "$eval_steps" --gradient-accumulation-steps "$accum" \
+    --learning-rate "$learning_rate" --epochs "$epochs" \
+    --per-device-train-batch-size "$microbatch" --per-device-eval-batch-size "$eval_microbatch" --dataloader-num-workers "$workers" \
+    --max-steps "$max_steps" --max-length "$max_length" --attention-implementation "$attention" \
+    --num-generations "$num_generations" --generation-batch-size "$generation_batch_size" --max-completion-length "$max_completion_length" "${booleans[@]}"
 }
-train_arm sft "$BASE_MODEL" "$BASE_REVISION" "$SFT_TRAIN" "$SFT_EVAL" "$OUTPUT_ROOT/sft" "$SFT_MICROBATCH" "$SFT_ACCUM" "$SFT_WORKERS"
-train_arm grpo "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$OUTPUT_ROOT/grpo" "$GRPO_MICROBATCH" "$GRPO_ACCUM" "$GRPO_WORKERS"
-train_arm dapo "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$OUTPUT_ROOT/dapo" "$DAPO_MICROBATCH" "$DAPO_ACCUM" "$DAPO_WORKERS"
+train_arm sft "$BASE_MODEL" "$BASE_REVISION" "$SFT_TRAIN" "$SFT_EVAL" "$OUTPUT_ROOT/sft" "${SFT_CONTROLS[@]}"
+train_arm grpo "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$OUTPUT_ROOT/grpo" "${GRPO_CONTROLS[@]}"
+train_arm dapo "$RL_START_MODEL" "$RL_START_REVISION" "$RL_DATA" "$RL_EVAL" "$OUTPUT_ROOT/dapo" "${DAPO_CONTROLS[@]}"
 
 for method in sft grpo dapo; do
   case "$method" in

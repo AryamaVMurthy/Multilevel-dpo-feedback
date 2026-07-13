@@ -35,7 +35,7 @@ manifest = {
     "fallback_reason": os.environ["ATTENTION_FALLBACK_REASON"], "shard": {k: os.environ[k] for k in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "SHARD_INPUT_SHA256", "MERGE_ID")},
     "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
     "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
-    "collection": {"teacher_device": "cuda:0", "student_device": "cuda:1", "teacher_quantization": os.environ["TEACHER_QUANTIZATION"], "teacher_temperature": os.environ["TEACHER_TEMPERATURE"], "teacher_top_p": os.environ["TEACHER_TOP_P"], "sibling_count": os.environ["SIBLING_COUNT"], "sibling_seeds": os.environ["SIBLING_SEEDS"].split(), "max_length": 4096},
+    "collection": {"teacher_device": os.environ["TEACHER_DEVICE"], "student_device": os.environ["STUDENT_DEVICE"], "device_decision": {"path": os.environ["COLLECTION_DECISION"], "sha256": os.environ["COLLECTION_DECISION_SHA256"]}, "teacher_quantization": os.environ["TEACHER_QUANTIZATION"], "teacher_temperature": os.environ["TEACHER_TEMPERATURE"], "teacher_top_p": os.environ["TEACHER_TOP_P"], "sibling_count": os.environ["SIBLING_COUNT"], "sibling_seeds": os.environ["SIBLING_SEEDS"].split(), "max_length": 4096},
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle: json.dump(manifest, handle, sort_keys=True, indent=2); handle.write("\n")
 PY
@@ -66,6 +66,8 @@ PY
 : "${POLICY_VERSION:?POLICY_VERSION must be supplied with --export}"
 : "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied}"
 : "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied}"
+: "${COLLECTION_DECISION:?COLLECTION_DECISION must freeze teacher/student devices and VRAM evidence}"
+: "${COLLECTION_DECISION_SHA256:?COLLECTION_DECISION_SHA256 must be supplied}"
 : "${TEACHER_BATCH_SIZE:?TEACHER_BATCH_SIZE must be supplied}"
 : "${TEACHER_MAX_NEW_TOKENS:?TEACHER_MAX_NEW_TOKENS must be supplied}"
 : "${TEACHER_TEMPERATURE:?TEACHER_TEMPERATURE must be supplied}"
@@ -82,7 +84,7 @@ if [[ "$SLURM_NNODES" != "1" ]]; then fail "collection requires one node; got $S
 : "${SLURM_NTASKS:?SLURM_NTASKS is required inside the allocation}"
 if [[ "$SLURM_NTASKS" != "1" ]]; then fail "collection requires one Slurm task; got $SLURM_NTASKS" "multi_task_collection_forbidden"; fi
 ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
-if [[ "$ALLOCATED_GPU_COUNT" != "2" ]]; then fail "collection requires exactly two allocated GPUs; got $ALLOCATED_GPU_COUNT" "collection_gpu_count"; fi
+if [[ "$ALLOCATED_GPU_COUNT" -lt "2" ]]; then fail "collection requires at least two allocated GPUs; got $ALLOCATED_GPU_COUNT" "collection_gpu_count"; fi
 [[ "$SHARD_INDEX" =~ ^[0-9]+$ && "$SHARD_COUNT" =~ ^[1-9][0-9]*$ && "$SHARD_INDEX" -lt "$SHARD_COUNT" ]] || fail "invalid shard contract index=$SHARD_INDEX count=$SHARD_COUNT" shard_contract_invalid
 ACTUAL_SHARD_INPUT_SHA256="$(sha256sum "$DATA" | awk '{print $1}')"
 [[ "$ACTUAL_SHARD_INPUT_SHA256" == "$SHARD_INPUT_SHA256" ]] || fail "SHARD_INPUT_SHA256=$SHARD_INPUT_SHA256 differs from actual=$ACTUAL_SHARD_INPUT_SHA256" shard_input_identity_mismatch
@@ -95,10 +97,16 @@ export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1
 export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
 
-RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" ARTIFACT_PATHS="$OUTPUT|$TRAJECTORY_CACHE|$DATA"
+RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" ARTIFACT_PATHS="$OUTPUT|$TRAJECTORY_CACHE|$DATA|$OPTIMIZATION_DECISION|$COLLECTION_DECISION"
 COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "${CONFIG:?CONFIG must be supplied with --export}")" MODEL_HASH="$(hash_value "$STUDENT_MODEL@$STUDENT_REVISION|teacher=$TEACHER_MODEL@$TEACHER_REVISION")" DATASET_HASH="$ACTUAL_SHARD_INPUT_SHA256"
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
+IFS=$'\t' read -r TEACHER_DEVICE STUDENT_DEVICE VALIDATED_COLLECTION_DECISION_SHA256 COLLECTION_FALLBACK_REASON < <(
+  run_probe_runner validate-collection-decision --decision "$COLLECTION_DECISION" --expected-sha256 "$COLLECTION_DECISION_SHA256" \
+    --teacher-model "$TEACHER_MODEL" --teacher-revision "$TEACHER_REVISION" --student-model "$STUDENT_MODEL" \
+    --student-revision "$STUDENT_REVISION" --allocated-gpus "$ALLOCATED_GPU_COUNT"
+) || fail "frozen collection device decision validation failed" collection_decision_invalid
+[[ "$TEACHER_DEVICE" != "$STUDENT_DEVICE" ]] || fail "teacher and student devices must differ" collection_device_collision
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
   run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$STUDENT_MODEL" --model-revision "$STUDENT_REVISION" \
@@ -123,7 +131,7 @@ print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transf
 PY
 )"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
+export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" shard_index="$SHARD_INDEX" shard_count="$SHARD_COUNT" merge_id="$MERGE_ID" allocated_gpus="$ALLOCATED_GPU_COUNT"
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu --format=csv -l 10 > "$GPU_TELEMETRY" &
@@ -135,7 +143,7 @@ COLLECT_ARGS=(
   --data "$DATA" --output "$OUTPUT" --student-model "$STUDENT_MODEL" --student-revision "$STUDENT_REVISION"
   --teacher-model "$TEACHER_MODEL" --teacher-revision "$TEACHER_REVISION" --dataset-revision "$DATASET_REVISION"
   --prompt-version "$PROMPT_VERSION" --policy-version "$POLICY_VERSION" --seed "$SHARD_SEED" --teacher-quantization "$TEACHER_QUANTIZATION"
-  --attention-implementation "$ATTENTION_IMPLEMENTATION" --student-device cuda:1 --teacher-device cuda:0
+  --attention-implementation "$ATTENTION_IMPLEMENTATION" --student-device "$STUDENT_DEVICE" --teacher-device "$TEACHER_DEVICE"
   --trajectory-cache "$TRAJECTORY_CACHE" --policy-hash "$POLICY_HASH" --max-interventions "$MAX_INTERVENTIONS"
   --student-batch-size "$QUERY_BATCH_SIZE" --teacher-batch-size "$TEACHER_BATCH_SIZE"
   --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS"
@@ -145,7 +153,7 @@ COLLECT_ARGS=(
 )
 if [[ "$TEACHER_THINKING" == true ]]; then COLLECT_ARGS+=(--teacher-thinking); else COLLECT_ARGS+=(--no-teacher-thinking); fi
 if [[ "$TEACHER_FALLBACK_REASON" != none ]]; then COLLECT_ARGS+=(--teacher-fallback-reason "$TEACHER_FALLBACK_REASON"); fi
-log_event collection_launch teacher_device=cuda:0 student_device=cuda:1 teacher_batch_size="$TEACHER_BATCH_SIZE" student_batch_size="$QUERY_BATCH_SIZE" max_length=4096 decision_sha256="$VALIDATED_DECISION_SHA256" fallback_reason="$ATTENTION_FALLBACK_REASON"
+log_event collection_launch teacher_device="$TEACHER_DEVICE" student_device="$STUDENT_DEVICE" allocated_gpus="$ALLOCATED_GPU_COUNT" unused_gpus="$((ALLOCATED_GPU_COUNT - 2))" teacher_batch_size="$TEACHER_BATCH_SIZE" student_batch_size="$QUERY_BATCH_SIZE" max_length=4096 decision_sha256="$VALIDATED_DECISION_SHA256" collection_decision_sha256="$VALIDATED_COLLECTION_DECISION_SHA256" fallback_reason="$ATTENTION_FALLBACK_REASON"
 uv run --frozen python -m text_feedback_dpo.cli collect "${COLLECT_ARGS[@]}"
 log_event collection_complete artifact="$OUTPUT" merge_id="$MERGE_ID"
 write_manifest complete

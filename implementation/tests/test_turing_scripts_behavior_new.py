@@ -16,7 +16,7 @@ SCRIPTS = ROOT / "scripts"
 PROBE_RUNNER = SCRIPTS / "turing_probe_runner.py"
 
 
-def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False) -> dict:
+def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False, gpu_count: int = 1) -> dict:
     token_ids = [[1, 2, 3]]
     decoded_outputs = ["decoded"]
     return {
@@ -32,7 +32,11 @@ def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False) -> d
         "tokens_per_second": throughput,
         "peak_gpu_memory_mb": 1024.0,
         "gpu_utilization": {
-            "sample_count": 3,
+            "sample_count": 30,
+            "monitor_interval_seconds": 0.2,
+            "measured_duration_seconds": 6.0,
+            "coverage_ratio": 1.0,
+            "monitored_uuids": [f"GPU-{index:032x}" for index in range(gpu_count)],
             "utilization_mean_percent": 70.0,
             "utilization_peak_percent": 90.0,
             "nvidia_smi_peak_memory_mb": 1100.0,
@@ -40,21 +44,22 @@ def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False) -> d
             "temperature_peak_c": 70.0,
         },
         "gpu_hardware": {
-            "count": 1,
+            "count": gpu_count,
             "devices": [{
-                "index": 0,
-                "name": "nvidia rtx 6000 ada generation",
-                "uuid": "GPU-11111111-2222-3333-4444-555555555555",
-                "total_memory_bytes": 51527024640,
-                "compute_capability": "8.9",
-            }],
+                "index": index,
+                "name": "nvidia a100-sxm4-80gb",
+                "uuid": f"GPU-{index:032x}",
+                "total_memory_bytes": 85899345920,
+                "free_memory_bytes": 81604378624,
+                "compute_capability": "8.0",
+            } for index in range(gpu_count)],
         },
         "package_versions": {
             "torch": "2.13.0+cu126",
             "transformers": "5.13.0",
             "trl": "1.8.0",
             "deepspeed": "0.19.2",
-            "bitsandbytes": "0.49.0",
+            "bitsandbytes": "0.49.2",
             "flash-attn": "missing",
             "liger-kernel": "missing",
         },
@@ -70,6 +75,14 @@ def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False) -> d
             "packing": False,
             "padding_free": False,
             "use_liger_kernel": False,
+            "per_device_eval_batch_size": 1,
+            "max_steps": 4,
+            "max_length": 4096,
+            "gradient_checkpointing": True,
+            "num_generations": 8,
+            "rl_generation_batch_size": 8,
+            "max_completion_length": 512,
+            "training_method": "sft",
         },
         "identities": {
             "commit_hash": "commit",
@@ -86,12 +99,24 @@ def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False) -> d
     }
 
 
+def valid_training_probe(*, throughput: float, gpu_count: int, loss: float = 1.0) -> dict:
+    result = valid_probe_result(throughput=throughput, gpu_count=gpu_count)
+    result["config"]["probe_kind"] = "training"
+    result["finite_metrics"] = {"train_loss": loss, "eval_loss": loss + 0.1}
+    result["global_examples_per_second"] = throughput / 2
+    result["global_tokens_per_second"] = throughput
+    result["correctness_hash"] = "c" * 64
+    return result
+
+
 def freeze_probe(tmp_path: Path, baseline_data: dict, candidate_data: dict | None = None):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     baseline = tmp_path / "baseline.json"
     baseline.write_text(json.dumps(baseline_data), encoding="utf-8")
     command = [
         sys.executable, str(PROBE_RUNNER), "freeze-decision", "--baseline", str(baseline),
-        "--output", str(tmp_path / "decision.json"), "--query-max-new-tokens", "32",
+        "--output", str(tmp_path / "decision.json"), "--launch-max-steps", "100", "--launch-learning-rate", "1e-6",
+        "--launch-epochs", "1", "--launch-save-steps", "10", "--launch-eval-steps", "10", "--query-max-new-tokens", "32",
         "--response-max-new-tokens", "256", "--student-thinking-mode", "direct",
         "--scratchpad-max-new-tokens", "128", "--query-temperature", "0",
         "--response-temperature", "0", "--top-p", "1", "--top-k", "8",
@@ -110,7 +135,22 @@ def write_realistic_checkpoint(path: Path, step: int) -> None:
         json.dumps({"global_step": step, "max_steps": step + 1, "log_history": [{"step": step, "loss": 1.0}]}),
         encoding="utf-8",
     )
-    torch.save({"model.embed_tokens.weight": torch.ones(4, 4)}, path / "pytorch_model.bin")
+    (path / "config.json").write_text(json.dumps({
+        "model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"], "hidden_size": 8,
+        "num_hidden_layers": 2, "num_attention_heads": 2, "vocab_size": 16,
+    }), encoding="utf-8")
+    torch.save({
+        "model.embed_tokens.weight": torch.ones(16, 8),
+        "model.layers.0.self_attn.q_proj.weight": torch.ones(8, 8),
+        "model.layers.0.self_attn.k_proj.weight": torch.ones(8, 8),
+        "model.layers.0.self_attn.v_proj.weight": torch.ones(8, 8),
+        "model.layers.0.self_attn.o_proj.weight": torch.ones(8, 8),
+        "model.layers.0.mlp.gate_proj.weight": torch.ones(16, 8),
+        "model.layers.0.mlp.up_proj.weight": torch.ones(16, 8),
+        "model.layers.0.mlp.down_proj.weight": torch.ones(8, 16),
+        "model.norm.weight": torch.ones(8),
+        "lm_head.weight": torch.ones(16, 8),
+    }, path / "pytorch_model.bin")
     torch.save({
         "state": {0: {"step": torch.tensor(step), "exp_avg": torch.ones(4), "exp_avg_sq": torch.ones(4)}},
         "param_groups": [{"params": [0], "lr": 1e-6, "step": step}],
@@ -118,18 +158,37 @@ def write_realistic_checkpoint(path: Path, step: int) -> None:
     torch.save({"last_epoch": step, "_step_count": step + 1}, path / "scheduler.pt")
     torch.save({
         "python": random.getstate(), "numpy": np.random.get_state(), "cpu": torch.arange(16, dtype=torch.uint8),
+        "cuda": [torch.arange(16, dtype=torch.uint8)],
     }, path / "rng_state.pth")
 
 
-def write_identity_decision(path: Path, identities: dict[str, str]) -> str:
+def write_identity_decision(path: Path, identities: dict[str, str], training_method: str = "sft") -> str:
     write_decision(path)
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["identities"] = identities
+    payload["selected"]["training"]["method"] = training_method
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def write_smoke_manifest(tmp_path: Path, name: str, identities: dict[str, str], decision_sha: str, method: str) -> tuple[Path, str]:
+def write_scale_decision(path: Path, identities: dict[str, str], train_gpus: int = 4, training_method: str = "sft") -> str:
+    measured = valid_training_probe(throughput=100.0, gpu_count=train_gpus)
+    measured["config"]["training_method"] = training_method
+    payload = {
+        "schema_version": 1, "status": "frozen", "decision_kind": "gpu_scaling", "fallback_reason": "none",
+        "compared_gpu_counts": [4, 8], "selected_train_gpus": train_gpus, "identities": identities,
+        "package_versions": measured["package_versions"], "hardware_profile": {
+            "name": "nvidia a100-sxm4-80gb", "total_memory_bytes": 85899345920, "compute_capability": "8.0",
+        },
+        "selected_gpu_hardware": measured["gpu_hardware"], "selected_global_examples_per_second": 50.0,
+        "selected_global_tokens_per_second": 100.0, "training_controls": measured["config"],
+        "results": [{"gpu_count": 4}, {"gpu_count": 8}],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_smoke_manifest(tmp_path: Path, name: str, identities: dict[str, str], decision_sha: str, method: str, scale_sha: str = "scale") -> tuple[Path, str]:
     initial = tmp_path / f"{name}-initial" / "checkpoint-1"
     resumed = tmp_path / f"{name}-resumed" / "checkpoint-2"
     write_realistic_checkpoint(initial, 1)
@@ -144,6 +203,7 @@ def write_smoke_manifest(tmp_path: Path, name: str, identities: dict[str, str], 
          "--eval-dataset-sha256", identities.get("eval_dataset_sha256", "not-applicable"),
          "--prompt-sha256", identities["prompt_sha256"], "--retrieval-sha256", identities["retrieval_sha256"],
          "--source-schema-sha256", identities["source_schema_sha256"], "--optimization-decision-sha256", decision_sha,
+         "--scale-decision-sha256", scale_sha,
          "--method", method],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
@@ -228,6 +288,18 @@ def write_decision(path: Path) -> str:
                 "microbatch": 1,
                 "gradient_accumulation_steps": 32,
                 "dataloader_workers": 0,
+                "per_device_eval_batch_size": 1,
+                "max_steps": 4,
+                "max_length": 4096,
+                "gradient_checkpointing": True,
+                "learning_rate": 1e-6,
+                "epochs": 1.0,
+                "save_steps": 10,
+                "eval_steps": 10,
+                "num_generations": 8,
+                "generation_batch_size": 8,
+                "max_completion_length": 512,
+                "method": "sft",
                 "packing": False,
                 "padding_free": False,
                 "use_liger_kernel": False,
@@ -247,6 +319,8 @@ def write_decision(path: Path) -> str:
         },
         "baseline_result_sha256": "a" * 64,
         "selected_result_sha256": "a" * 64,
+        "package_versions": valid_probe_result()["package_versions"],
+        "gpu_hardware": valid_probe_result()["gpu_hardware"],
     }
     path.write_text(json.dumps(decision, sort_keys=True) + "\n", encoding="utf-8")
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -347,7 +421,8 @@ def test_freeze_excludes_faster_candidate_that_launch_validator_rejects(tmp_path
     decision = tmp_path / "decision.json"
     result = subprocess.run(
         [sys.executable, str(PROBE_RUNNER), "freeze-decision", "--baseline", str(baseline), "--candidate", str(unsupported),
-         "--output", str(decision), "--query-max-new-tokens", "32", "--response-max-new-tokens", "256",
+         "--output", str(decision), "--launch-max-steps", "100", "--launch-learning-rate", "1e-6", "--launch-epochs", "1",
+         "--launch-save-steps", "10", "--launch-eval-steps", "10", "--query-max-new-tokens", "32", "--response-max-new-tokens", "256",
          "--student-thinking-mode", "direct", "--scratchpad-max-new-tokens", "128", "--query-temperature", "0",
          "--response-temperature", "0", "--top-p", "1", "--top-k", "8", "--k1", "1.2", "--b", "0.75"],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -402,11 +477,145 @@ def test_freeze_never_accepts_candidate_with_baseline_parity_mismatch(tmp_path: 
             candidate["identities"]["config_sha256"] = "other-config"
         else:
             candidate["gpu_hardware"]["devices"][0]["uuid"] = "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            candidate["gpu_utilization"]["monitored_uuids"] = ["GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"]
     result = freeze_probe(tmp_path, baseline, candidate)
     assert result.returncode == 0, result.stderr
     decision = json.loads((tmp_path / "decision.json").read_text(encoding="utf-8"))
     assert decision["selected_result"] == str((tmp_path / "baseline.json").resolve())
     assert "parity_mismatch" in decision["rejected_candidates"][0]["fallback_reason"]
+
+
+def test_ordinary_probe_rejects_one_sample_or_uuid_coverage_mismatch(tmp_path: Path):
+    baseline = valid_probe_result()
+    candidate = valid_probe_result(throughput=20.0)
+    candidate["gpu_utilization"]["sample_count"] = 1
+    candidate["gpu_utilization"]["coverage_ratio"] = 0.03
+    result = freeze_probe(tmp_path, baseline, candidate)
+    assert result.returncode == 0, result.stderr
+    frozen = json.loads((tmp_path / "decision.json").read_text(encoding="utf-8"))
+    assert frozen["rejected_candidates"][0]["fallback_reason"] == "candidate_probe_gpu_telemetry_invalid"
+
+    candidate = valid_probe_result(throughput=20.0)
+    candidate["gpu_utilization"]["monitored_uuids"] = ["GPU-not-allocated"]
+    result = freeze_probe(tmp_path / "uuid", baseline, candidate)
+    assert result.returncode == 0, result.stderr
+    frozen = json.loads((tmp_path / "uuid/decision.json").read_text(encoding="utf-8"))
+    assert frozen["rejected_candidates"][0]["fallback_reason"] == "candidate_probe_gpu_telemetry_invalid"
+
+
+@pytest.mark.parametrize("package", ("torch", "transformers", "trl", "deepspeed", "bitsandbytes"))
+def test_probe_rejects_missing_required_package(tmp_path: Path, package: str):
+    baseline = valid_probe_result()
+    baseline["package_versions"][package] = "missing"
+    result = freeze_probe(tmp_path, baseline)
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] == "baseline_probe_invalid"
+
+
+def test_optional_packages_may_be_missing_only_when_feature_disabled(tmp_path: Path):
+    baseline = valid_probe_result()
+    baseline["config"]["attention_implementation"] = "flash_attention_2"
+    result = freeze_probe(tmp_path, baseline)
+    assert result.returncode == 2
+    assert "package" in result.stderr
+
+    baseline = valid_probe_result()
+    baseline["config"]["use_liger_kernel"] = True
+    result = freeze_probe(tmp_path / "liger", baseline)
+    assert result.returncode == 2
+    assert "package" in result.stderr
+
+
+def test_scale_decision_intentionally_compares_four_and_eight_identical_a100s(tmp_path: Path):
+    four = tmp_path / "four.json"
+    eight = tmp_path / "eight.json"
+    four.write_text(json.dumps(valid_training_probe(throughput=100.0, gpu_count=4)), encoding="utf-8")
+    eight.write_text(json.dumps(valid_training_probe(throughput=90.0, gpu_count=8)), encoding="utf-8")
+    decision = tmp_path / "scale.json"
+    result = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "freeze-scale-decision", "--result", str(four),
+        "--result", str(eight), "--output", str(decision), "--loss-relative-tolerance", "0.01",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(decision.read_text(encoding="utf-8"))
+    assert payload["selected_train_gpus"] == 4
+    assert payload["selected_global_tokens_per_second"] == 100.0
+    assert payload["compared_gpu_counts"] == [4, 8]
+
+
+def test_scale_decision_rejects_non_a100_or_non_count_hardware_drift(tmp_path: Path):
+    four = valid_training_probe(throughput=100.0, gpu_count=4)
+    eight = valid_training_probe(throughput=120.0, gpu_count=8)
+    for device in eight["gpu_hardware"]["devices"]:
+        device["total_memory_bytes"] -= 1
+    paths = []
+    for name, payload in (("four", four), ("eight", eight)):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        paths.append(path)
+    result = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "freeze-scale-decision", "--result", str(paths[0]),
+        "--result", str(paths[1]), "--output", str(tmp_path / "scale.json"),
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] == "scale_hardware_profile_mismatch"
+
+
+def test_collection_decision_freezes_largest_vram_teacher_and_distinct_student(tmp_path: Path):
+    hardware = valid_probe_result(gpu_count=3)
+    hardware["gpu_hardware"]["devices"][1]["free_memory_bytes"] += 1024
+    result_path = tmp_path / "hardware.json"
+    result_path.write_text(json.dumps(hardware), encoding="utf-8")
+    decision = tmp_path / "collection.json"
+    freeze = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "freeze-collection-decision", "--hardware-result", str(result_path),
+        "--output", str(decision), "--teacher-model", "teacher", "--teacher-revision", "teacher-rev",
+        "--student-model", "student", "--student-revision", "student-rev", "--teacher-device-index", "1",
+        "--student-device-index", "2",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert freeze.returncode == 0, freeze.stderr
+    digest = hashlib.sha256(decision.read_bytes()).hexdigest()
+    validate = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "validate-collection-decision", "--decision", str(decision),
+        "--expected-sha256", digest, "--teacher-model", "teacher", "--teacher-revision", "teacher-rev",
+        "--student-model", "student", "--student-revision", "student-rev", "--allocated-gpus", "3",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert validate.returncode == 0, validate.stderr
+    assert validate.stdout.split("\t")[:2] == ["cuda:1", "cuda:2"]
+
+
+def test_collection_decision_rejects_non_largest_or_same_device(tmp_path: Path):
+    hardware = valid_probe_result(gpu_count=2)
+    hardware["gpu_hardware"]["devices"][1]["free_memory_bytes"] -= 1024
+    result_path = tmp_path / "hardware.json"
+    result_path.write_text(json.dumps(hardware), encoding="utf-8")
+    common = [
+        sys.executable, str(PROBE_RUNNER), "freeze-collection-decision", "--hardware-result", str(result_path),
+        "--output", str(tmp_path / "collection.json"), "--teacher-model", "teacher", "--teacher-revision", "rev",
+        "--student-model", "student", "--student-revision", "rev",
+    ]
+    non_largest = subprocess.run([*common, "--teacher-device-index", "1", "--student-device-index", "0"], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert non_largest.returncode == 2
+    assert json.loads(non_largest.stderr)["fallback_reason"] == "teacher_not_largest_fit_device"
+    same = subprocess.run([*common, "--teacher-device-index", "0", "--student-device-index", "0"], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert same.returncode == 2
+    assert json.loads(same.stderr)["fallback_reason"] == "collection_device_collision"
+
+
+def test_checkpoint_rejects_exact_padding_weight_attack(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint-1"
+    write_realistic_checkpoint(checkpoint, 1)
+    torch.save({"padding.weight": torch.ones(4096, 4096)}, checkpoint / "pytorch_model.bin")
+    result = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "create-smoke-manifest", "--initial-checkpoint", str(checkpoint),
+        "--resumed-checkpoint", str(checkpoint), "--output", str(tmp_path / "manifest.json"),
+        "--commit-hash", "commit", "--config-sha256", "config", "--model", "model",
+        "--model-revision", "revision", "--dataset-source", "source", "--dataset-revision", "revision",
+        "--dataset-sha256", "data", "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval",
+        "--source-schema-sha256", "schema", "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "sft",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] == "checkpoint_model_semantics_invalid"
 
 
 def test_generation_missing_explicit_thinking_mode_fails_before_launch(tmp_path: Path):
@@ -469,7 +678,7 @@ def test_fake_step_only_checkpoints_are_rejected(tmp_path: Path):
             "--model", "model", "--model-revision", "revision", "--dataset-source", "source",
             "--dataset-revision", "dataset-revision", "--dataset-sha256", "dataset",
             "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
-            "--optimization-decision-sha256", "decision", "--method", "dpo",
+            "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "dpo",
         ],
         cwd=ROOT,
         text=True,
@@ -477,13 +686,13 @@ def test_fake_step_only_checkpoints_are_rejected(tmp_path: Path):
         check=False,
     )
     assert result.returncode == 2
-    assert json.loads(result.stderr)["fallback_reason"] == "checkpoint_model_state_missing"
+    assert json.loads(result.stderr)["fallback_reason"] == "checkpoint_model_config_missing"
 
 
 def test_checkpoint_smoke_script_has_real_bounded_save_resume_contract():
     text = (SCRIPTS / "turing_checkpoint_smoke.sh").read_text(encoding="utf-8")
     assert "--max-steps" in text
-    assert "--dataloader-workers" in text
+    assert "--dataloader-num-workers" in text
     assert "--per-device-train-batch-size" in text
     assert "task7_checkpoint_smoke_cli_missing" in text
     assert "fallback_reason" in text
@@ -503,7 +712,7 @@ def test_smoke_manifest_requires_checkpoint_lineage_and_matching_identity(tmp_pa
         "--model-revision", "revision", "--dataset-source", "source", "--dataset-revision", "dataset-revision",
         "--dataset-sha256", "dataset", "--prompt-sha256", "prompt",
         "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
-        "--optimization-decision-sha256", "decision", "--method", "dpo",
+        "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "dpo",
     ]
     create = subprocess.run(
         [sys.executable, str(PROBE_RUNNER), "create-smoke-manifest", "--initial-checkpoint", str(initial),
@@ -548,7 +757,7 @@ def test_smoke_validation_rejects_package_identity_tampering(tmp_path: Path):
          "--dataset-source", "source", "--dataset-revision", "dataset-revision", "--dataset-sha256", "dataset",
          "--eval-dataset-sha256", "not-applicable",
          "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
-         "--optimization-decision-sha256", "decision", "--method", "dpo"],
+         "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "dpo"],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert result.returncode == 2
@@ -558,6 +767,10 @@ def test_smoke_validation_rejects_package_identity_tampering(tmp_path: Path):
 def test_checkpoint_gate_rejects_large_padded_arbitrary_mappings(tmp_path: Path):
     for root, step in ((tmp_path / "checkpoint-1", 1), (tmp_path / "checkpoint-2", 2)):
         root.mkdir()
+        (root / "config.json").write_text(json.dumps({
+            "model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"], "hidden_size": 8,
+            "num_hidden_layers": 2, "num_attention_heads": 2, "vocab_size": 16,
+        }), encoding="utf-8")
         (root / "trainer_state.json").write_text(
             json.dumps({"global_step": step, "max_steps": step + 1, "log_history": [{"step": step, "loss": 1.0}]}),
             encoding="utf-8",
@@ -572,7 +785,7 @@ def test_checkpoint_gate_rejects_large_padded_arbitrary_mappings(tmp_path: Path)
          "--commit-hash", "commit", "--config-sha256", "config", "--model", "model", "--model-revision", "revision",
          "--dataset-source", "source", "--dataset-revision", "dataset-revision", "--dataset-sha256", "dataset",
          "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
-         "--optimization-decision-sha256", "decision", "--method", "dpo"],
+         "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "dpo"],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert result.returncode == 2
@@ -593,11 +806,11 @@ def test_checkpoint_gate_rejects_tiny_named_placeholders(tmp_path: Path):
          "--commit-hash", "commit", "--config-sha256", "config", "--model", "model",
          "--model-revision", "revision", "--dataset-source", "source", "--dataset-revision", "dataset-revision",
          "--dataset-sha256", "dataset", "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval",
-         "--source-schema-sha256", "schema", "--optimization-decision-sha256", "decision", "--method", "dpo"],
+         "--source-schema-sha256", "schema", "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "dpo"],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert result.returncode == 2
-    assert json.loads(result.stderr)["fallback_reason"] in {"trainer_state_invalid", "checkpoint_state_too_small"}
+    assert json.loads(result.stderr)["fallback_reason"] in {"trainer_state_invalid", "checkpoint_state_too_small", "checkpoint_model_config_missing"}
 
 
 def test_owned_checkpoint_gate_rejects_no_progress(tmp_path: Path):
@@ -618,7 +831,7 @@ def test_owned_checkpoint_gate_rejects_no_progress(tmp_path: Path):
             "--model", "model", "--model-revision", "revision", "--dataset-source", "source",
             "--dataset-revision", "dataset-revision", "--dataset-sha256", "dataset",
             "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
-            "--optimization-decision-sha256", "decision", "--method", "dpo",
+            "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "dpo",
         ],
         cwd=ROOT,
         text=True,
@@ -661,19 +874,24 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
         if eval_data is not None:
             identities["eval_dataset_sha256"] = hashlib.sha256(eval_data.read_bytes()).hexdigest()
         decision = tmp_path / f"{name.lower()}-decision.json"
-        decision_sha = write_identity_decision(decision, identities)
+        decision_sha = write_identity_decision(decision, identities, method or "sft")
         env[f"{name}_DECISION"] = str(decision)
         env[f"{name}_DECISION_SHA256"] = decision_sha
         if method:
-            manifest, manifest_sha = write_smoke_manifest(tmp_path, name.lower(), identities, decision_sha, method)
+            scale = tmp_path / f"{name.lower()}-scale.json"
+            scale_sha = write_scale_decision(scale, identities, training_method=method)
+            env[f"{name.split('_')[0]}_SCALE_DECISION"] = str(scale)
+            env[f"{name.split('_')[0]}_SCALE_DECISION_SHA256"] = scale_sha
+            manifest, manifest_sha = write_smoke_manifest(tmp_path, name.lower(), identities, decision_sha, method, scale_sha)
             env[f"{name.split('_')[0]}_SMOKE_MANIFEST"] = str(manifest)
             env[f"{name.split('_')[0]}_SMOKE_MANIFEST_SHA256"] = manifest_sha
     fake_bin = tmp_path / "home/.local/bin"
     fake_bin.mkdir(parents=True)
     (fake_bin / "module").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     (fake_bin / "nvidia-smi").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    (fake_bin / "git").write_text(f"#!/bin/bash\n[[ \"${{1:-}}\" == rev-parse ]] && printf '%s\\n' '{commit}' && exit 0\nexec /usr/bin/git \"$@\"\n", encoding="utf-8")
     (fake_bin / "uv").write_text(
-        "#!/bin/bash\ncase \" $* \" in *\" --help \"*) echo '--eval --dataloader-workers --per-device-train-batch-size'; exit 0;; "
+        "#!/bin/bash\ncase \" $* \" in *\" --help \"*) echo '--eval --max-steps --max-length --dataloader-num-workers --per-device-train-batch-size --per-device-eval-batch-size --gradient-accumulation-steps --attention-implementation --gradient-checkpointing --packing --padding-free --use-liger-kernel'; exit 0;; "
         "*\" torch.distributed.run \"*) echo mocked-training-launch >&2; exit 91;; esac\n"
         f"if [[ \"${{1:-}}\" == run && \"${{2:-}}\" == --frozen && \"${{3:-}}\" == python && \"${{4:-}}\" == \"{PROBE_RUNNER}\" ]]; then exec \"{sys.executable}\" \"${{@:4}}\"; fi\n"
         "echo 'torch=x;transformers=x;trl=x;deepspeed=x;bitsandbytes=x'\n",
@@ -688,7 +906,7 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
         "SFT_EVAL": str(sft_eval), "RL_DATA": str(rl_data), "RL_EVAL": str(rl_eval), "VAL_DATA": str(val_data), "OUTPUT_ROOT": str(output_root),
         "TRAIN_GPUS": "4", "DATASET_SOURCE": "source", "DATASET_REVISION": "dataset-revision", "PROMPT_HASH": "prompt",
         "RETRIEVAL_HASH": "retrieval", "SOURCE_SCHEMA_HASH": "schema", "POLICY_HASH": "policy", "LEARNING_RATE": "1e-6",
-        "EPOCHS": "1", "SAVE_STEPS": "100", "EVAL_STEPS": "100", "SFT_OUTPUT_REVISION": "sft-output-revision",
+        "EPOCHS": "1", "SAVE_STEPS": "10", "EVAL_STEPS": "10", "SFT_OUTPUT_REVISION": "sft-output-revision",
         "GRPO_OUTPUT_REVISION": "grpo-output-revision", "DAPO_OUTPUT_REVISION": "dapo-output-revision",
         "STUDENT_THINKING_MODE": "direct", "SCRATCHPAD_MAX_NEW_TOKENS": "128", "QUERY_TEMPERATURE": "0",
         "RESPONSE_TEMPERATURE": "0", "TOP_P": "1", "TOP_K": "8", "BM25_K1": "1.2", "BM25_B": "0.75",

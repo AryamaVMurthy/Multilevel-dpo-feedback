@@ -1,5 +1,5 @@
 #!/bin/bash
-# Full Qwen3-4B training. Submit with one four-GPU Slurm allocation.
+# Full Qwen3-4B training. Submit with the frozen four- or eight-GPU Slurm allocation.
 # sbatch -A <account> --export=ALL,PROJECT_DIR=...,METHOD=dpo,... scripts/turing_train.sh
 #SBATCH -p u22
 #SBATCH --nodes=1
@@ -81,6 +81,7 @@ manifest = {
     "artifact_paths": values("ARTIFACT_PATHS"),
     "fallback_reason": os.environ.get("ATTENTION_FALLBACK_REASON", "none"),
     "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
+    "scale_decision": {"path": os.environ["SCALE_DECISION"], "sha256": os.environ["SCALE_DECISION_SHA256"]},
     "checkpoint_gate": {"path": os.environ["CHECKPOINT_SMOKE_MANIFEST"], "sha256": os.environ["CHECKPOINT_SMOKE_MANIFEST_SHA256"]},
     "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
     "training_contract": {
@@ -117,14 +118,16 @@ PY
 : "${START_REVISION:?START_REVISION must explicitly pin the full-training start revision}"
 : "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied}"
 : "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied}"
+: "${SCALE_DECISION:?SCALE_DECISION must be supplied}"
+: "${SCALE_DECISION_SHA256:?SCALE_DECISION_SHA256 must be supplied}"
 : "${DATASET_SOURCE:?DATASET_SOURCE must be supplied}"
 : "${DATASET_REVISION:?DATASET_REVISION must be supplied}"
 : "${PROMPT_HASH:?PROMPT_HASH must be supplied with --export}"
 : "${RETRIEVAL_HASH:?RETRIEVAL_HASH must be supplied with --export}"
 : "${SOURCE_SCHEMA_HASH:?SOURCE_SCHEMA_HASH must be supplied with --export}"
 
-if [[ "$TRAIN_GPUS" != "4" ]]; then
-  fail "full Qwen3-4B training requires TRAIN_GPUS=4; got $TRAIN_GPUS" "full_training_gpu_count"
+if [[ "$TRAIN_GPUS" != "4" && "$TRAIN_GPUS" != "8" ]]; then
+  fail "frozen scaling contract supports TRAIN_GPUS=4 or 8; got $TRAIN_GPUS" "full_training_gpu_count"
 fi
 : "${SLURM_NNODES:?SLURM_NNODES is required inside the allocation}"
 if [[ "$SLURM_NNODES" != "1" ]]; then
@@ -146,6 +149,12 @@ case "$METHOD" in
   sft|dpo|grpo|dapo) : ;;
   *) fail "unsupported METHOD=$METHOD" "method_validation" ;;
 esac
+if [[ "$METHOD" == dpo ]]; then
+  : "${REF_LOG_PROBS:?REF_LOG_PROBS must be supplied for DPO}"
+  : "${EVAL_REF_LOG_PROBS:?EVAL_REF_LOG_PROBS must be supplied for DPO}"
+  : "${REFERENCE_CHECKPOINT_HASH:?REFERENCE_CHECKPOINT_HASH must be supplied for DPO}"
+  : "${PROMPT_CONTEXT_SCHEMA:?PROMPT_CONTEXT_SCHEMA must be supplied for DPO}"
+fi
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
@@ -165,12 +174,22 @@ CONFIG_HASH="$(hash_path "$CONFIG")"
 DATASET_HASH="$(hash_path "$TRAIN")"
 EVAL_DATASET_HASH="$(hash_path "$EVAL")"
 COMMIT_HASH="$(git rev-parse HEAD)"
-IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
+IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS DECISION_EVAL_MICROBATCH DECISION_MAX_STEPS DECISION_MAX_LENGTH DECISION_GRADIENT_CHECKPOINTING DECISION_PACKING DECISION_PADDING_FREE DECISION_USE_LIGER DECISION_LEARNING_RATE DECISION_EPOCHS DECISION_SAVE_STEPS DECISION_EVAL_STEPS DECISION_NUM_GENERATIONS DECISION_GENERATION_BATCH_SIZE DECISION_MAX_COMPLETION_LENGTH ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
   run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose training --output-format training-tsv \
+    --training-method "$METHOD" \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" \
     --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
     --eval-dataset-sha256 "$EVAL_DATASET_HASH"
 ) || fail "frozen optimization decision validation failed" optimization_decision_invalid
+awk -v expected="$LEARNING_RATE" -v frozen="$DECISION_LEARNING_RATE" 'BEGIN { exit !(expected == frozen) }' || fail "LEARNING_RATE differs from frozen decision" training_control_mismatch
+awk -v expected="$EPOCHS" -v frozen="$DECISION_EPOCHS" 'BEGIN { exit !(expected == frozen) }' || fail "EPOCHS differs from frozen decision" training_control_mismatch
+[[ "$SAVE_STEPS" == "$DECISION_SAVE_STEPS" && "$EVAL_STEPS" == "$DECISION_EVAL_STEPS" ]] || fail "save/eval cadence differs from frozen decision" training_control_mismatch
+IFS=$'\t' read -r SELECTED_TRAIN_GPUS VALIDATED_SCALE_DECISION_SHA256 SCALE_FALLBACK_REASON < <(
+  run_probe_runner validate-scale-decision --decision "$SCALE_DECISION" --expected-sha256 "$SCALE_DECISION_SHA256" --train-gpus "$TRAIN_GPUS" --training-method "$METHOD" \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" \
+    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+) || fail "frozen GPU scaling decision validation failed" scale_decision_invalid
 export ATTENTION_IMPLEMENTATION ATTENTION_FALLBACK_REASON
 MODEL_HASH="$(hash_value "$START_MODEL|$START_REVISION")"
 RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT/run-manifest.json}"
@@ -184,9 +203,9 @@ print(";".join(f"{name}={importlib.metadata.version(name)}" for name in names))
 PY
 )"
 GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}"
-ARTIFACT_PATHS="$OUTPUT|$CONFIG|$TRAIN|${EVAL:-none}|$OPTIMIZATION_DECISION|$CHECKPOINT_SMOKE_MANIFEST"
+ARTIFACT_PATHS="$OUTPUT|$CONFIG|$TRAIN|${EVAL:-none}|$OPTIMIZATION_DECISION|$SCALE_DECISION|$CHECKPOINT_SMOKE_MANIFEST"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 CHECKPOINT_SMOKE_MANIFEST CHECKPOINT_SMOKE_MANIFEST_SHA256 DATASET_SOURCE DATASET_REVISION
+export COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 SCALE_DECISION SCALE_DECISION_SHA256 CHECKPOINT_SMOKE_MANIFEST CHECKPOINT_SMOKE_MANIFEST_SHA256 DATASET_SOURCE DATASET_REVISION
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" train_gpus="$TRAIN_GPUS" allocated_gpus="$ALLOCATED_GPU_COUNT" max_length=4096
 
 if [[ "${CLEANUP_TRAIN_INPUTS:-false}" == "true" ]]; then
@@ -210,26 +229,39 @@ run_probe_runner validate-checkpoints --smoke-manifest "$CHECKPOINT_SMOKE_MANIFE
   --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" \
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" \
   --eval-dataset-sha256 "$EVAL_DATASET_HASH" \
-  --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --method "$METHOD"
+  --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --scale-decision-sha256 "$SCALE_DECISION_SHA256" --method "$METHOD"
 log_event checkpoint_resume_gate_passed artifact="$CHECKPOINT_SMOKE_MANIFEST" checkpoint_gate_sha256="$CHECKPOINT_SMOKE_MANIFEST_SHA256" fallback_reason=none
 
 GRADIENT_ACCUMULATION_STEPS="$((EFFECTIVE_BATCH_SIZE / ALLOCATED_GPU_COUNT))"
 [[ "$DECISION_GRADIENT_ACCUMULATION_STEPS" == "$GRADIENT_ACCUMULATION_STEPS" ]] || fail "frozen gradient accumulation=$DECISION_GRADIENT_ACCUMULATION_STEPS differs from required=$GRADIENT_ACCUMULATION_STEPS" optimization_decision_batch_mismatch
 TRAIN_HELP="$(uv run --frozen python -m text_feedback_dpo.cli "train-$METHOD" --help)" || fail "cannot inspect Task 7 train-$METHOD CLI" task7_train_cli_help_failed
-for required_flag in --eval --dataloader-workers --per-device-train-batch-size; do
+for required_flag in --eval --max-steps --max-length --dataloader-num-workers --per-device-train-batch-size --per-device-eval-batch-size --gradient-accumulation-steps --attention-implementation --gradient-checkpointing --packing --padding-free --use-liger-kernel; do
   [[ "$TRAIN_HELP" == *"$required_flag"* ]] || fail "Task 7 train-$METHOD CLI does not expose $required_flag; cannot launch frozen worker settings" task7_training_worker_cli_missing
 done
 ARGS=(
   --config "$CONFIG" --train "$TRAIN" --output "$OUTPUT"
   --eval "$EVAL"
   --deepspeed-config configs/deepspeed_zero3.json
-  --save-steps "$SAVE_STEPS" --eval-steps "$EVAL_STEPS"
+  --save-steps "$DECISION_SAVE_STEPS" --eval-steps "$DECISION_EVAL_STEPS"
   --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"
   --per-device-train-batch-size "$DECISION_MICROBATCH"
-  --dataloader-workers "$DECISION_DATALOADER_WORKERS"
-  --learning-rate "$LEARNING_RATE" --epochs "$EPOCHS"
+  --per-device-eval-batch-size "$DECISION_EVAL_MICROBATCH"
+  --dataloader-num-workers "$DECISION_DATALOADER_WORKERS"
+  --max-steps "$DECISION_MAX_STEPS" --max-length "$DECISION_MAX_LENGTH"
+  --attention-implementation "$ATTENTION_IMPLEMENTATION"
+  --learning-rate "$DECISION_LEARNING_RATE" --epochs "$DECISION_EPOCHS"
+  --num-generations "$DECISION_NUM_GENERATIONS" --generation-batch-size "$DECISION_GENERATION_BATCH_SIZE"
+  --max-completion-length "$DECISION_MAX_COMPLETION_LENGTH"
 )
+if [[ "$DECISION_GRADIENT_CHECKPOINTING" == True ]]; then ARGS+=(--gradient-checkpointing); else ARGS+=(--no-gradient-checkpointing); fi
+if [[ "$DECISION_PACKING" == True ]]; then ARGS+=(--packing); else ARGS+=(--no-packing); fi
+if [[ "$DECISION_PADDING_FREE" == True ]]; then ARGS+=(--padding-free); else ARGS+=(--no-padding-free); fi
+if [[ "$DECISION_USE_LIGER" == True ]]; then ARGS+=(--use-liger-kernel); else ARGS+=(--no-use-liger-kernel); fi
 ARGS+=(--model "$START_MODEL" --model-revision "$START_REVISION")
+if [[ "$METHOD" == dpo ]]; then
+  ARGS+=(--ref-log-probs "$REF_LOG_PROBS" --eval-ref-log-probs "$EVAL_REF_LOG_PROBS" \
+    --reference-checkpoint-hash "$REFERENCE_CHECKPOINT_HASH" --prompt-context-schema "$PROMPT_CONTEXT_SCHEMA")
+fi
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
   ARGS+=(--resume-from-checkpoint "$RESUME_FROM_CHECKPOINT")
 fi

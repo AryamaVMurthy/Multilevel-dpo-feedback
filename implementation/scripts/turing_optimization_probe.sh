@@ -23,6 +23,18 @@ allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is r
 : "${MODEL:?MODEL must be supplied with --export}"
 : "${MODEL_REVISION:?MODEL_REVISION must be supplied with --export}"
 : "${DATA:?DATA must be supplied with --export}"
+: "${TRAIN_EVAL:?TRAIN_EVAL must be supplied for measured training probes}"
+: "${DEEPSPEED_CONFIG:?DEEPSPEED_CONFIG must be supplied for measured training probes}"
+: "${PROBE_MAX_STEPS:?PROBE_MAX_STEPS must be supplied}"
+: "${LAUNCH_MAX_STEPS:?LAUNCH_MAX_STEPS must be frozen explicitly}"
+: "${LEARNING_RATE:?LEARNING_RATE must be frozen explicitly}"
+: "${EPOCHS:?EPOCHS must be frozen explicitly}"
+: "${SAVE_STEPS:?SAVE_STEPS must be frozen explicitly}"
+: "${EVAL_STEPS:?EVAL_STEPS must be frozen explicitly}"
+: "${NUM_GENERATIONS:?NUM_GENERATIONS must be frozen explicitly}"
+: "${RL_GENERATION_BATCH_SIZE:?RL_GENERATION_BATCH_SIZE must be frozen explicitly}"
+: "${MAX_COMPLETION_LENGTH:?MAX_COMPLETION_LENGTH must be frozen explicitly}"
+: "${TRAINING_METHOD:?TRAINING_METHOD must be sft, dpo, grpo, or dapo}"
 : "${DATASET_SOURCE:?DATASET_SOURCE must be supplied with --export}"
 : "${DATASET_REVISION:?DATASET_REVISION must be supplied with --export}"
 : "${PROMPT_HASH:?PROMPT_HASH must be supplied with --export}"
@@ -60,7 +72,9 @@ mkdir -p "$OUTPUT_ROOT" logs
 
 REPORT="$OUTPUT_ROOT/optimization-probe.jsonl"
 BASELINE_RESULT="$OUTPUT_ROOT/baseline-sdpa.json"
-DECISION="$OUTPUT_ROOT/optimization-decision.json"
+DECISION="$OUTPUT_ROOT/generation-optimization-decision.json"
+TRAIN_DECISION="$OUTPUT_ROOT/training-optimization-decision.json"
+TRAIN_BASELINE_RESULT="$OUTPUT_ROOT/training-baseline-sdpa.json"
 PROBE_SAMPLE_SIZE="${PROBE_SAMPLE_SIZE:-16}"
 PROBE_WARMUP_REPEATS="${PROBE_WARMUP_REPEATS:-2}"
 PROBE_MEASURED_REPEATS="${PROBE_MEASURED_REPEATS:-5}"
@@ -74,14 +88,23 @@ PACKING="${PACKING:-false true}"
 PADDING_FREE="${PADDING_FREE:-false true}"
 LIGER="${LIGER:-false true}"
 : > "$REPORT"
-CANDIDATES=()
+GENERATION_CANDIDATES=()
+TRAINING_CANDIDATES=()
 
 COMMON_ARGS=(
   --commit-hash "$(git rev-parse HEAD)" --config "$CONFIG" --data "$DATA" --model "$MODEL" --model-revision "$MODEL_REVISION"
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION"
   --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
   --sample-size "$PROBE_SAMPLE_SIZE" --warmup-repeats "$PROBE_WARMUP_REPEATS" --measured-repeats "$PROBE_MEASURED_REPEATS"
+  --num-generations "$NUM_GENERATIONS" --rl-generation-batch-size "$RL_GENERATION_BATCH_SIZE" --max-completion-length "$MAX_COMPLETION_LENGTH"
+  --training-method "$TRAINING_METHOD"
 )
+if [[ "$TRAINING_METHOD" == dpo ]]; then
+  COMMON_ARGS+=(--ref-log-probs "${REF_LOG_PROBS:?REF_LOG_PROBS is required for DPO probes}" \
+    --eval-ref-log-probs "${EVAL_REF_LOG_PROBS:?EVAL_REF_LOG_PROBS is required for DPO probes}" \
+    --reference-checkpoint-hash "${REFERENCE_CHECKPOINT_HASH:?REFERENCE_CHECKPOINT_HASH is required for DPO probes}" \
+    --prompt-context-schema "${PROMPT_CONTEXT_SCHEMA:?PROMPT_CONTEXT_SCHEMA is required for DPO probes}")
+fi
 run_probe() {
   local name="$1" result="$2"; shift 2
   log_event probe_start probe_name="$name" fallback_reason=none
@@ -91,7 +114,19 @@ run_probe() {
   else
     log_event probe_rejected probe_name="$name" fallback_reason=parity_compatibility_or_throughput_gate
   fi
-  CANDIDATES+=(--candidate "$result")
+  GENERATION_CANDIDATES+=(--candidate "$result")
+}
+run_training_probe() {
+  local name="$1" result="$2"; shift 2
+  log_event probe_start probe_name="$name" probe_kind=training fallback_reason=none
+  run_probe_runner benchmark --probe-name "$name" --result "$result" "${COMMON_ARGS[@]}" --probe-kind training \
+    --eval-data "$TRAIN_EVAL" --output-dir "$OUTPUT_ROOT/runs/$name" --deepspeed-config "$DEEPSPEED_CONFIG" --max-steps "$PROBE_MAX_STEPS" "$@"
+  if run_probe_runner compare --baseline "$TRAIN_BASELINE_RESULT" --candidate "$result" >> "$REPORT"; then
+    log_event probe_accepted probe_name="$name" fallback_reason=none
+  else
+    log_event probe_rejected probe_name="$name" fallback_reason=parity_compatibility_or_throughput_gate
+  fi
+  TRAINING_CANDIDATES+=(--candidate "$result")
 }
 
 # The measured SDPA baseline is always first and is the only implicit safe decision.
@@ -107,13 +142,15 @@ if run_probe_runner compare --baseline "$BASELINE_RESULT" --candidate "$FA2_RESU
 for value in $GENERATION_BATCH_SIZES; do run_probe "generation-batch-$value" "$OUTPUT_ROOT/generation-batch-$value.json" --generation-batch-size "$value"; done
 for value in $STATIC_CACHE; do args=(); [[ "$value" == true ]] && args+=(--static-cache); run_probe "static-cache-$value" "$OUTPUT_ROOT/static-cache-$value.json" "${args[@]}"; done
 for value in $COMPILE; do args=(); [[ "$value" == true ]] && args+=(--compile); run_probe "compile-$value" "$OUTPUT_ROOT/compile-$value.json" "${args[@]}"; done
-for value in $TRAIN_MICROBATCHES; do run_probe "train-microbatch-$value" "$OUTPUT_ROOT/train-microbatch-$value.json" --probe-kind training --train-microbatch "$value"; done
-for value in $GRADIENT_ACCUMULATION_STEPS; do run_probe "grad-accum-$value" "$OUTPUT_ROOT/grad-accum-$value.json" --probe-kind training --gradient-accumulation-steps "$value"; done
-for value in $DATALOADER_WORKERS; do run_probe "workers-$value" "$OUTPUT_ROOT/workers-$value.json" --probe-kind training --dataloader-workers "$value"; done
+run_probe_runner benchmark --probe-name training-baseline-sdpa --result "$TRAIN_BASELINE_RESULT" "${COMMON_ARGS[@]}" --probe-kind training \
+  --eval-data "$TRAIN_EVAL" --output-dir "$OUTPUT_ROOT/runs/training-baseline-sdpa" --deepspeed-config "$DEEPSPEED_CONFIG" --max-steps "$PROBE_MAX_STEPS" --attention-implementation sdpa
+for value in $TRAIN_MICROBATCHES; do run_training_probe "train-microbatch-$value" "$OUTPUT_ROOT/train-microbatch-$value.json" --train-microbatch "$value"; done
+for value in $GRADIENT_ACCUMULATION_STEPS; do run_training_probe "grad-accum-$value" "$OUTPUT_ROOT/grad-accum-$value.json" --gradient-accumulation-steps "$value"; done
+for value in $DATALOADER_WORKERS; do run_training_probe "workers-$value" "$OUTPUT_ROOT/workers-$value.json" --dataloader-workers "$value"; done
 
 if [[ "$FA2_PARITY" == true ]]; then
-  for value in $PACKING; do args=(--probe-kind training --attention-implementation flash_attention_2); [[ "$value" == true ]] && args+=(--packing); run_probe "packing-$value" "$OUTPUT_ROOT/packing-$value.json" "${args[@]}"; done
-  for value in $PADDING_FREE; do args=(--probe-kind training --attention-implementation flash_attention_2); [[ "$value" == true ]] && args+=(--padding-free); run_probe "padding-free-$value" "$OUTPUT_ROOT/padding-free-$value.json" "${args[@]}"; done
+  for value in $PACKING; do args=(--attention-implementation flash_attention_2); [[ "$value" == true ]] && args+=(--packing); run_training_probe "packing-$value" "$OUTPUT_ROOT/packing-$value.json" "${args[@]}"; done
+  for value in $PADDING_FREE; do args=(--attention-implementation flash_attention_2); [[ "$value" == true ]] && args+=(--padding-free); run_training_probe "padding-free-$value" "$OUTPUT_ROOT/padding-free-$value.json" "${args[@]}"; done
 else
   printf '{"probe_name":"packing-padding-free","status":"rejected","accepted":false,"fallback_reason":"flash_attention_2_compatibility_or_parity_failed"}\n' >> "$REPORT"
 fi
@@ -121,14 +158,22 @@ fi
 for value in $LIGER; do
   if [[ "$value" == true ]]; then
     result="$OUTPUT_ROOT/liger-true.json"
-    run_probe liger-true "$result" --probe-kind training --use-liger-kernel
+    run_training_probe liger-true "$result" --use-liger-kernel
   fi
 done
 
-run_probe_runner freeze-decision --baseline "$BASELINE_RESULT" "${CANDIDATES[@]}" --output "$DECISION" \
+run_probe_runner freeze-decision --purpose generation --baseline "$BASELINE_RESULT" "${GENERATION_CANDIDATES[@]}" --output "$DECISION" --launch-max-steps "$LAUNCH_MAX_STEPS" \
+  --launch-learning-rate "$LEARNING_RATE" --launch-epochs "$EPOCHS" --launch-save-steps "$SAVE_STEPS" --launch-eval-steps "$EVAL_STEPS" \
+  --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" \
+  --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
+  --query-temperature "$QUERY_TEMPERATURE" --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" \
+  --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
+run_probe_runner freeze-decision --purpose training --baseline "$TRAIN_BASELINE_RESULT" "${TRAINING_CANDIDATES[@]}" --output "$TRAIN_DECISION" --launch-max-steps "$LAUNCH_MAX_STEPS" \
+  --launch-learning-rate "$LEARNING_RATE" --launch-epochs "$EPOCHS" --launch-save-steps "$SAVE_STEPS" --launch-eval-steps "$EVAL_STEPS" \
   --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" \
   --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
   --query-temperature "$QUERY_TEMPERATURE" --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" \
   --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
 DECISION_SHA256="$(sha256sum "$DECISION" | awk '{print $1}')"
-log_event probe_complete report="$REPORT" decision="$DECISION" decision_sha256="$DECISION_SHA256" fallback_reason=none
+TRAIN_DECISION_SHA256="$(sha256sum "$TRAIN_DECISION" | awk '{print $1}')"
+log_event probe_complete report="$REPORT" generation_decision="$DECISION" generation_decision_sha256="$DECISION_SHA256" training_decision="$TRAIN_DECISION" training_decision_sha256="$TRAIN_DECISION_SHA256" fallback_reason=none

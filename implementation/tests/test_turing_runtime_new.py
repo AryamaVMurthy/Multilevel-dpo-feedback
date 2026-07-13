@@ -95,7 +95,9 @@ class TuringRuntimeTest(unittest.TestCase):
 
     def test_training_uses_configurable_multi_gpu_with_fixed_effective_batch(self):
         text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
-        self.assertIn('TRAIN_GPUS" != "4"', text)
+        self.assertIn('TRAIN_GPUS" != "4" && "$TRAIN_GPUS" != "8"', text)
+        self.assertIn("SCALE_DECISION", text)
+        self.assertIn("validate-scale-decision", text)
         self.assertIn("SLURM_NNODES", text)
         self.assertIn('SLURM_NNODES" != "1"', text)
         self.assertIn("SLURM_GPUS_ON_NODE", text)
@@ -107,8 +109,8 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("uv run --frozen python -m torch.distributed.run", text)
         for setting in ("LEARNING_RATE", "EPOCHS", "SAVE_STEPS", "EVAL_STEPS"):
             self.assertIn(f'${{{setting}:?', text)
-        self.assertIn('--learning-rate "$LEARNING_RATE"', text)
-        self.assertIn('--epochs "$EPOCHS"', text)
+        self.assertIn('--learning-rate "$DECISION_LEARNING_RATE"', text)
+        self.assertIn('--epochs "$DECISION_EPOCHS"', text)
 
     def test_owned_scripts_have_single_node_headers_and_no_xml_status_lines(self):
         for name in self.OWNED_SCRIPTS:
@@ -118,17 +120,19 @@ class TuringRuntimeTest(unittest.TestCase):
             self.assertNotIn("<runtime", text, name)
             self.assertNotIn("<report", text, name)
 
-    def test_collection_is_exactly_two_gpu_single_allocation_with_deterministic_shard_identity(self):
+    def test_collection_uses_distinct_frozen_devices_in_single_allocation_with_deterministic_shard_identity(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         self.assertIn("#SBATCH --gres=gpu:2", text)
         self.assertIn('SLURM_NNODES" != "1"', text)
         self.assertIn('SLURM_NTASKS" != "1"', text)
         self.assertIn("ALLOCATED_GPU_COUNT", text)
-        self.assertIn('ALLOCATED_GPU_COUNT" != "2"', text)
+        self.assertIn('ALLOCATED_GPU_COUNT" -lt "2"', text)
+        self.assertIn("COLLECTION_DECISION", text)
+        self.assertIn("validate-collection-decision", text)
         for value in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "MERGE_ID"):
             self.assertIn(value, text)
-        self.assertIn("cuda:0", text)
-        self.assertIn("cuda:1", text)
+        self.assertIn("TEACHER_DEVICE", text)
+        self.assertIn("STUDENT_DEVICE", text)
         self.assertIn("--teacher-batch-size", text)
         self.assertIn("--student-batch-size", text)
         self.assertIn("--teacher-max-new-tokens", text)
@@ -202,6 +206,14 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn('hash_file "$RL_EVAL"', text)
         self.assertIn('--eval "$eval"', text)
         self.assertIn("eval_dataset_sha256", text)
+
+    def test_trainers_use_exact_current_task7_control_flags(self):
+        for name in ("turing_train.sh", "turing_checkpoint_smoke.sh", "turing_comparisons.sh"):
+            text = Path("scripts", name).read_text(encoding="utf-8")
+            self.assertIn("--dataloader-num-workers", text, name)
+            self.assertNotIn("--dataloader-workers", text, name)
+            for flag in ("--per-device-train-batch-size", "--per-device-eval-batch-size", "--max-steps", "--max-length", "--gradient-accumulation-steps", "--attention-implementation", "--gradient-checkpointing"):
+                self.assertIn(flag, text, name)
 
     def test_new_research_path_uses_explicit_active_search_protocol(self):
         evaluate = Path("scripts/turing_evaluate.sh").read_text(encoding="utf-8")
