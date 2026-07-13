@@ -32,15 +32,17 @@
 - Test: `implementation/tests/test_trajectory_audit_new.py`
 
 **Steps:**
-1. Validate sample decision SHA-256 `866369e355585c0a691aafcdb308847dcd04512fda5ce176c5314e4e539b6bdf` against the 32-row sample and commit.
-2. Submit `turing_collect.sh` on node10 with two GPUs, teacher batch 8, student batch 4, four interventions, two smoke siblings, direct student mode, temperature 0.7, top-p 0.9, and the authoritative source-schema hash.
-3. Monitor `squeue`, `sacct`, stdout, stderr, GPU telemetry, output cardinality, and cache artifacts until completion.
-4. Write a failing test requiring the audit command to emit per-attempt question, gold, query, top sources, raw response, error, teacher hint, retry, sibling, leakage, latency, and eligibility fields.
-5. Run `PYTHONPATH=src uv run pytest -q tests/test_trajectory_audit_new.py` and confirm the missing audit implementation fails.
-6. Implement `audit_trajectories.py` using canonical trajectory validation; do not infer or repair malformed output.
-7. Run the focused test, full suite, Ruff, `python -m py_compile`, shell syntax checks, and `git diff --check`.
-8. Generate JSONL, CSV, and HTML smoke audits and manually inspect all 32 rows.
-9. Commit with `git commit -m "feat: audit minimal intervention trajectories"`.
+1. Use bounded private teacher context only: compact retrieved records, gold answer, raw attempt, deterministic diagnostics, prior hints, and source count. Never duplicate all 6–99 complete source records and never truncate silently.
+2. Freeze teacher output at 96 tokens for the strict at-most-24-word JSON hint. Tokenize every rendered teacher prompt and fail before scale-up if any prompt plus output reserve exceeds 4,096 tokens.
+3. Regenerate the sample-bound measured generation decision after every prompt/config/commit change. Validate the 32-row sample, prompt SHA-256 `f76750c597c14f4358df2b3d8fcd60211caa7bf1baa000f3e26de998642fe1b3`, config SHA-256 `080375b466be3cd956f49babb173b011241720dc7946039e96ada975cd41f95b`, and canonical raw-base policy digest.
+4. Submit `turing_collect.sh` on node10 with two GPUs, teacher batch 8, student batch 4, four interventions, two smoke siblings, direct student mode, temperature 0.7, top-p 0.9, and the authoritative source-schema hash.
+5. Monitor `squeue`, `sacct`, stdout, stderr, GPU telemetry, output cardinality, and cache artifacts until completion.
+6. Write a failing test requiring the audit command to emit per-attempt question, gold, query, top sources, raw response, error, teacher hint, retry, sibling, leakage, latency, prompt token count, and eligibility fields.
+7. Run `PYTHONPATH=src uv run pytest -q tests/test_trajectory_audit_new.py` and confirm the missing audit implementation fails.
+8. Implement `audit_trajectories.py` using canonical trajectory validation; do not infer or repair malformed output.
+9. Run the focused test, full suite, Ruff, `python -m py_compile`, shell syntax checks, and `git diff --check`.
+10. Generate JSONL, CSV, and HTML smoke audits and manually inspect all 32 rows.
+11. Commit with `git commit -m "feat: audit minimal intervention trajectories"`.
 
 ### Task 3: Add no-hint bootstrap rollout collection
 
@@ -239,4 +241,3 @@
 6. Audit every design invariant against authoritative artifacts.
 7. Remove obsolete artifacts only after preservation/hash checks; retain the reproducible best models and reports.
 8. Run the full verification suite and mark the research goal complete only when every required artifact exists.
-

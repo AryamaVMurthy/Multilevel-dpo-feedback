@@ -2,7 +2,9 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Verified remote commit:** `bf9bac061dbf42e41cbf5aeac7658ff56e012534`
+**Last observed remote commit:** `909d9f319d4ec1d2ef0ae968fafd774b6e8e6da3`
+
+**Verified teacher-budget fix commit:** `d9e909e` (pending deployment at this snapshot)
 
 ## Executive status
 
@@ -27,7 +29,8 @@ Important identities:
 - Audited 32-row sample SHA-256: `c3e59f4f5a0c551cb276f614553b88562f66d771118bd9442fcdaf6fdf48f75a`
 - Retrieval identity SHA-256: `dbcbff5eeba529cb51361191378791b4e2afc371bdaee98ecac19140d83df97d`
 - Source-schema identity SHA-256: `59fe2f48bbbc35395d689c16f5aabf41103e78a6511afeeeabfc5bde20a939dc`
-- Active prompt identity SHA-256: `7b17e0c27641ea46f57afe38044c78c660a7be051e850c5b5f0eed09e34a90e8`
+- Active bounded prompt identity SHA-256: `f76750c597c14f4358df2b3d8fcd60211caa7bf1baa000f3e26de998642fe1b3`
+- Active config SHA-256: `080375b466be3cd956f49babb173b011241720dc7946039e96ada975cd41f95b`
 
 ## Model and hardware evidence
 
@@ -37,7 +40,8 @@ Important identities:
 - Generation baseline on node10: SDPA, batch 4, approximately 22.1 generated tokens/second, approximately 10.5 GiB framework peak memory, approximately 97.6% mean measured GPU utilization.
 - Flash Attention 2 and Liger are absent in the pinned environment. The explicit current decision is `sdpa_baseline_selected`; no hidden kernel fallback is active.
 - Two-GPU collection decision: teacher `cuda:0`, student `cuda:1`, both A100-SXM4-40GB.
-- Sample-bound generation decision SHA-256: `866369e355585c0a691aafcdb308847dcd04512fda5ce176c5314e4e539b6bdf`.
+- Job `13773` remeasured the sample-bound SDPA baseline at commit `909d9f3`: 22.126 tokens/second, 97.56% mean GPU utilization, and 10.47 GiB framework peak memory. Its decision SHA-256 was `73bfd5404097e5da42b3164642bed56f218ad0d6a9c5ba5094b7df48953ffd84`.
+- That decision is now intentionally stale because the bounded teacher prompt changes the prompt identity and config. A fresh commit-bound decision is required before rerunning collection.
 
 ## Storage evidence
 
@@ -109,7 +113,10 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 
 - No complete teacher-guided trajectory JSONL exists yet.
 - The first smoke launch, job `13761`, stopped before model collection because its optimization decision was bound to the full validation hash while the input was the 32-row sample hash. The fail-fast identity check worked as intended.
-- A measured sample-bound generation decision now exists and is ready for a corrected smoke launch.
+- Job `13764` then failed before model loading because `POLICY_HASH` was a human-readable label instead of a SHA-256. The cache contract now computes and verifies a canonical student-policy identity from model, revision/checkpoint identity, and policy version; malformed or mismatched hashes fail before model loading.
+- Job `13774` passed all provenance and hardware gates, loaded the Qwen3-4B student on GPU 1 and the Qwen3-32B 4-bit teacher on GPU 0 without OOM or fallback, and generated the first student batch. It then failed safely before teacher generation because teacher prompt 0 contained 18,837 tokens while only 3,584 input tokens fit the 4,096 total-token budget with a 512-token teacher reserve.
+- The root cause was unbounded duplication of every materialized SearchQA source inside the private teacher prompt. The audited sample has 6–99 complete source records per row and up to about 61 KB of source JSON. The teacher already receives the retrieved top records, private gold answer, raw attempt, deterministic diagnostics, and escalation history; duplicating all nonretrieved records was unnecessary.
+- Commit `d9e909e` removes complete-source duplication, retains only compact retrieved `source_id`/title/snippet records plus `available_source_count`, and reserves 96 tokens for the strict at-most-24-word JSON hint. This is deterministic context selection, not hidden truncation. The focused and full suites pass.
 - Because the audited base set has zero fully correct continuations, the existing SFT builder would currently produce zero rows for this sample.
 - No optimizer step has run for SFT, DPO, GRPO, or DAPO.
 
@@ -128,6 +135,7 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 The next stage is complete only when all of the following exist:
 
 - A corrected 32-row teacher-guided trajectory file with exact row parity.
+- A tokenizer-measured teacher-prompt budget report proving every rendered smoke prompt fits the 4,096 total-token contract before scaling.
 - A per-attempt table showing question, gold answer (audit-only), query, top retrieved records, raw response, parser/score diagnostics, teacher hint, retry, and sibling outcomes.
 - Zero teacher-answer leakage and zero hidden parser repair.
 - Measured resolution rate, hint-level curve, no-hint sibling success rate, SFT eligibility, preference eligibility, latency, throughput, and GPU utilization.
