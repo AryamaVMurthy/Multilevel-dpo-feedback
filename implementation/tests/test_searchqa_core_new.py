@@ -95,6 +95,7 @@ class SearchQACoreContractTest(unittest.TestCase):
                         "teacher_model": "Qwen/Qwen3-14B",
                         "student_revision": "student-rev",
                         "teacher_revision": "teacher-rev",
+                        "retrieval": {"backend": "fixed_bm25", "top_k": 8, "k1": 1.5, "b": 0.75, "schema_version": 1},
                         "dataset": {"name": "searchqa", "source": "kyunghyuncho/search_qa", "revision": "data-rev", "max_length": 4096},
                         "training": {"full_finetuning": True, "method": "dpo"},
                         "slurm": {"partition": "u22", "gpus": 2},

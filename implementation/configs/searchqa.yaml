@@ -4,6 +4,13 @@ teacher_model: Qwen/Qwen3-32B
 student_revision: 906bfd4b4dc7f14ee4320094d8b41684abff8539
 teacher_revision: 9216db5781bf21249d130ec9da846c4624c16137
 
+retrieval:
+  backend: fixed_bm25
+  top_k: 8
+  k1: 1.5
+  b: 0.75
+  schema_version: 1
+
 dataset:
   name: searchqa
   source: kyunghyuncho/search_qa

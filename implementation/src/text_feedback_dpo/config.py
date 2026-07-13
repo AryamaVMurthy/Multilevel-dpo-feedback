@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
 
-REQUIRED_KEYS = {"run_id", "student_model", "teacher_model", "student_revision", "teacher_revision", "dataset", "training", "slurm"}
+REQUIRED_KEYS = {"run_id", "student_model", "teacher_model", "student_revision", "teacher_revision", "dataset", "training", "slurm", "retrieval"}
 ALLOWED_KEYS = REQUIRED_KEYS | {"generation", "teacher_generation", "evaluation", "storage", "seeds"}
+RETRIEVAL_KEYS = {"backend", "top_k", "k1", "b", "schema_version"}
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -37,4 +39,23 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("training.method must be sft, dpo, grpo, or dapo")
     if not isinstance(slurm, dict) or not slurm.get("partition") or not isinstance(slurm.get("gpus"), int) or slurm["gpus"] < 1:
         raise ValueError("slurm.partition and positive slurm.gpus are required")
+    retrieval = data["retrieval"]
+    if not isinstance(retrieval, dict):
+        raise ValueError("retrieval must be a mapping")
+    unknown_retrieval = sorted(set(retrieval) - RETRIEVAL_KEYS)
+    if unknown_retrieval:
+        raise ValueError(f"unknown retrieval config keys: {', '.join(unknown_retrieval)}")
+    missing_retrieval = sorted(RETRIEVAL_KEYS - set(retrieval))
+    if missing_retrieval:
+        raise ValueError(f"missing retrieval config keys: {', '.join(missing_retrieval)}")
+    if retrieval["backend"] != "fixed_bm25":
+        raise ValueError(f"unknown retrieval backend: {retrieval['backend']!r}")
+    if isinstance(retrieval["top_k"], bool) or not isinstance(retrieval["top_k"], int) or retrieval["top_k"] < 1:
+        raise ValueError("retrieval.top_k must be a positive integer")
+    if isinstance(retrieval["k1"], bool) or not isinstance(retrieval["k1"], Real) or retrieval["k1"] <= 0:
+        raise ValueError("retrieval.k1 must be greater than zero")
+    if isinstance(retrieval["b"], bool) or not isinstance(retrieval["b"], Real) or not 0 <= retrieval["b"] <= 1:
+        raise ValueError("retrieval.b must be between zero and one")
+    if retrieval["schema_version"] != 1:
+        raise ValueError("retrieval.schema_version must be 1")
     return data
