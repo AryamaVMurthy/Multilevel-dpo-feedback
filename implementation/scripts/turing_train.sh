@@ -160,11 +160,12 @@ mkdir -p "$HF_HOME" logs "$OUTPUT"
 
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 [[ -x "$PROBE_RUNNER" ]] || fail "repository probe runner is not executable: $PROBE_RUNNER" probe_runner_missing
+run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 CONFIG_HASH="$(hash_path "$CONFIG")"
 DATASET_HASH="$(hash_path "$TRAIN")"
 COMMIT_HASH="$(git rev-parse HEAD)"
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
-  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose training --output-format training-tsv \
+  run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose training --output-format training-tsv \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" \
     --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
 ) || fail "frozen optimization decision validation failed" optimization_decision_invalid
@@ -203,7 +204,7 @@ cleanup() {
 trap cleanup EXIT
 
 log_event checkpoint_gate_started smoke_manifest="$CHECKPOINT_SMOKE_MANIFEST" fallback_reason=none
-"$PROBE_RUNNER" validate-checkpoints --smoke-manifest "$CHECKPOINT_SMOKE_MANIFEST" --expected-sha256 "$CHECKPOINT_SMOKE_MANIFEST_SHA256" \
+run_probe_runner validate-checkpoints --smoke-manifest "$CHECKPOINT_SMOKE_MANIFEST" --expected-sha256 "$CHECKPOINT_SMOKE_MANIFEST_SHA256" \
   --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$START_MODEL" --model-revision "$START_REVISION" \
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" \
   --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" --method "$METHOD"

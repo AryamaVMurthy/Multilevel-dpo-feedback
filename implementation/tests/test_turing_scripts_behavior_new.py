@@ -593,6 +593,7 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
     (fake_bin / "uv").write_text(
         "#!/bin/bash\ncase \" $* \" in *\" --help \"*) echo '--dataloader-workers --per-device-train-batch-size'; exit 0;; "
         "*\" torch.distributed.run \"*) echo mocked-training-launch >&2; exit 91;; esac\n"
+        f"if [[ \"${{1:-}}\" == run && \"${{2:-}}\" == --frozen && \"${{3:-}}\" == python && \"${{4:-}}\" == \"{PROBE_RUNNER}\" ]]; then exec \"{sys.executable}\" \"${{@:4}}\"; fi\n"
         "echo 'torch=x;transformers=x;trl=x;deepspeed=x;bitsandbytes=x'\n",
         encoding="utf-8",
     )

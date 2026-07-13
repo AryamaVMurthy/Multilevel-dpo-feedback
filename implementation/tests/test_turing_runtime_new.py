@@ -183,6 +183,14 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertNotIn("RESUME_SMOKE_COMMAND", comparisons)
         self.assertIn("validate-checkpoints", comparisons)
 
+    def test_all_probe_runner_calls_use_the_frozen_project_python(self):
+        for path in Path("scripts").glob("turing*.sh"):
+            text = path.read_text(encoding="utf-8")
+            if "PROBE_RUNNER" not in text:
+                continue
+            self.assertIn('uv run --frozen python "$PROBE_RUNNER"', text, path.name)
+            self.assertNotRegex(text, re.compile(r'^\s*"\$PROBE_RUNNER"\s+(?:validate|create|benchmark|compare|freeze)', re.MULTILINE), path.name)
+
     def test_no_unsafe_hard_coded_two_process_training_remains(self):
         for name in ("turing_train.sh", "turing_primary_round.sh", "turing_comparisons.sh"):
             text = Path("scripts", name).read_text(encoding="utf-8")

@@ -51,6 +51,7 @@ if [[ -n "${PROBE_RUNNER:-}" && "$PROBE_RUNNER" != "$DEFAULT_PROBE_RUNNER" && "$
 fi
 PROBE_RUNNER="${PROBE_RUNNER:-$DEFAULT_PROBE_RUNNER}"
 [[ -x "$PROBE_RUNNER" ]] || fail "PROBE_RUNNER is not executable: $PROBE_RUNNER" probe_runner_missing
+run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
@@ -84,8 +85,8 @@ COMMON_ARGS=(
 run_probe() {
   local name="$1" result="$2"; shift 2
   log_event probe_start probe_name="$name" fallback_reason=none
-  "$PROBE_RUNNER" benchmark --probe-name "$name" --result "$result" "${COMMON_ARGS[@]}" "$@"
-  if "$PROBE_RUNNER" compare --baseline "$BASELINE_RESULT" --candidate "$result" >> "$REPORT"; then
+  run_probe_runner benchmark --probe-name "$name" --result "$result" "${COMMON_ARGS[@]}" "$@"
+  if run_probe_runner compare --baseline "$BASELINE_RESULT" --candidate "$result" >> "$REPORT"; then
     log_event probe_accepted probe_name="$name" fallback_reason=none
   else
     log_event probe_rejected probe_name="$name" fallback_reason=parity_compatibility_or_throughput_gate
@@ -95,13 +96,13 @@ run_probe() {
 
 # The measured SDPA baseline is always first and is the only implicit safe decision.
 log_event probe_start probe_name=baseline-sdpa fallback_reason=none
-"$PROBE_RUNNER" benchmark --probe-name baseline-sdpa --result "$BASELINE_RESULT" "${COMMON_ARGS[@]}" --attention-implementation sdpa --generation-batch-size 4
+run_probe_runner benchmark --probe-name baseline-sdpa --result "$BASELINE_RESULT" "${COMMON_ARGS[@]}" --attention-implementation sdpa --generation-batch-size 4
 printf '{"probe_name":"baseline-sdpa","status":"baseline","accepted":true,"fallback_reason":"none"}\n' >> "$REPORT"
 
 FA2_RESULT="$OUTPUT_ROOT/attention-flash_attention_2.json"
 run_probe attention-flash_attention_2 "$FA2_RESULT" --attention-implementation flash_attention_2 --generation-batch-size 4
 FA2_PARITY=false
-if "$PROBE_RUNNER" compare --baseline "$BASELINE_RESULT" --candidate "$FA2_RESULT" >/dev/null; then FA2_PARITY=true; fi
+if run_probe_runner compare --baseline "$BASELINE_RESULT" --candidate "$FA2_RESULT" >/dev/null; then FA2_PARITY=true; fi
 
 for value in $GENERATION_BATCH_SIZES; do run_probe "generation-batch-$value" "$OUTPUT_ROOT/generation-batch-$value.json" --generation-batch-size "$value"; done
 for value in $STATIC_CACHE; do args=(); [[ "$value" == true ]] && args+=(--static-cache); run_probe "static-cache-$value" "$OUTPUT_ROOT/static-cache-$value.json" "${args[@]}"; done
@@ -124,7 +125,7 @@ for value in $LIGER; do
   fi
 done
 
-"$PROBE_RUNNER" freeze-decision --baseline "$BASELINE_RESULT" "${CANDIDATES[@]}" --output "$DECISION" \
+run_probe_runner freeze-decision --baseline "$BASELINE_RESULT" "${CANDIDATES[@]}" --output "$DECISION" \
   --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" \
   --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
   --query-temperature "$QUERY_TEMPERATURE" --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" \

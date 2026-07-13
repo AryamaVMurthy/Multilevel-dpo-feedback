@@ -50,9 +50,10 @@ CURRENT_COMMIT_HASH="$(git rev-parse HEAD)"
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTORCH_TF32_CUBLAS_OVERRIDE=1
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
+run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 CONFIG_SHA256="$(sha256sum "$CONFIG" | awk '{print $1}')"
 DATASET_SHA256="$(sha256sum "$TRAIN" | awk '{print $1}')"
-IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <("$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" \
+IFS=$'\t' read -r ATTENTION_IMPLEMENTATION DECISION_MICROBATCH DECISION_GRADIENT_ACCUMULATION_STEPS DECISION_DATALOADER_WORKERS ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" \
   --purpose training --commit-hash "$CURRENT_COMMIT_HASH" --config-sha256 "$CONFIG_SHA256" --model "$START_MODEL" --model-revision "$START_REVISION" \
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_SHA256" \
   --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --output-format training-tsv) \
@@ -85,7 +86,7 @@ uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=4 
 RESUMED_CHECKPOINT="$SMOKE_ROOT/checkpoint-$RESUMED_MAX_STEPS"
 [[ -d "$RESUMED_CHECKPOINT" ]] || fail "resumed checkpoint missing: $RESUMED_CHECKPOINT" checkpoint_resume_missing
 
-"$PROBE_RUNNER" create-smoke-manifest --initial-checkpoint "$INITIAL_CHECKPOINT" --resumed-checkpoint "$RESUMED_CHECKPOINT" \
+run_probe_runner create-smoke-manifest --initial-checkpoint "$INITIAL_CHECKPOINT" --resumed-checkpoint "$RESUMED_CHECKPOINT" \
   --output "$SMOKE_MANIFEST" --commit-hash "$CURRENT_COMMIT_HASH" --config-sha256 "$CONFIG_SHA256" --model "$START_MODEL" \
   --model-revision "$START_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_SHA256" --prompt-sha256 "$PROMPT_HASH" \
   --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \

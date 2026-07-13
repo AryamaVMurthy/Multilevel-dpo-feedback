@@ -35,6 +35,7 @@ cd "$PROJECT_DIR"
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy PYTORCH_TF32_CUBLAS_OVERRIDE=1
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"; [[ -x "$PROBE_RUNNER" ]] || fail "probe runner missing" probe_runner_missing
+run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 COMMIT_HASH="$(git rev-parse HEAD)"; CONFIG_HASH="$(hash_file "$CONFIG")"; mkdir -p "$OUTPUT_ROOT" logs
 MODEL_HASH="$(printf '%s' "$BASE_MODEL@$BASE_REVISION|$RL_START_MODEL@$RL_START_REVISION" | sha256sum | awk '{print $1}')"
 DATASET_HASH="$(printf '%s' "$(hash_file "$SFT_TRAIN")|$(hash_file "$RL_DATA")|$(hash_file "$VAL_DATA")" | sha256sum | awk '{print $1}')"
@@ -51,12 +52,12 @@ validate_training() {
   local data_sha help
   data_sha="$(hash_file "$data")"
   IFS=$'\t' read -r TRAIN_ATTENTION TRAIN_MICROBATCH TRAIN_ACCUM TRAIN_WORKERS TRAIN_FALLBACK TRAIN_DECISION_SHA < <(
-    "$PROBE_RUNNER" validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose training --output-format training-tsv \
+    run_probe_runner validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose training --output-format training-tsv \
       --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
       --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
       --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
   ) || fail "$method training decision validation failed" optimization_decision_invalid
-  "$PROBE_RUNNER" validate-checkpoints --smoke-manifest "$smoke" --expected-sha256 "$smoke_sha" \
+  run_probe_runner validate-checkpoints --smoke-manifest "$smoke" --expected-sha256 "$smoke_sha" \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
     --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
     --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
@@ -69,7 +70,7 @@ validate_generation() {
   local method="$1" decision="$2" decision_sha="$3" model="$4" revision="$5" data_sha
   data_sha="$(hash_file "$VAL_DATA")"
   IFS=$'\t' read -r GEN_ATTENTION GEN_QUERY_BATCH GEN_RESPONSE_BATCH GEN_QUERY_TOKENS GEN_RESPONSE_TOKENS GEN_THINKING GEN_SCRATCH GEN_QUERY_TEMP GEN_RESPONSE_TEMP GEN_TOP_P GEN_TOP_K GEN_K1 GEN_B GEN_FALLBACK GEN_DECISION_SHA < <(
-    "$PROBE_RUNNER" validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose generation --output-format generation-tsv \
+    run_probe_runner validate-decision --decision "$decision" --expected-sha256 "$decision_sha" --purpose generation --output-format generation-tsv \
       --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$model" --model-revision "$revision" \
       --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$data_sha" \
       --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \

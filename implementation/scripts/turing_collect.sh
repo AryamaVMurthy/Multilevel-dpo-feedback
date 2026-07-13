@@ -98,8 +98,9 @@ mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
 RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" ARTIFACT_PATHS="$OUTPUT|$TRAJECTORY_CACHE|$DATA"
 COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "${CONFIG:?CONFIG must be supplied with --export}")" MODEL_HASH="$(hash_value "$STUDENT_MODEL@$STUDENT_REVISION|teacher=$TEACHER_MODEL@$TEACHER_REVISION")" DATASET_HASH="$ACTUAL_SHARD_INPUT_SHA256"
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
+run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
-  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
+  run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$STUDENT_MODEL" --model-revision "$STUDENT_REVISION" \
     --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" \
     --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \

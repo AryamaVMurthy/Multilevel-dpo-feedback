@@ -81,10 +81,11 @@ ACTUAL_SHARD_INPUT_SHA256="$(sha256sum "$DATA" | awk '{print $1}')"
 
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 [[ -x "$PROBE_RUNNER" ]] || fail "repository probe runner is not executable: $PROBE_RUNNER" probe_runner_missing
+run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 CONFIG_IDENTITY="$(hash_path "$CONFIG")"
 COMMIT_HASH="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS FROZEN_THINKING_MODE FROZEN_SCRATCHPAD_MAX_NEW_TOKENS FROZEN_QUERY_TEMPERATURE FROZEN_RESPONSE_TEMPERATURE FROZEN_TOP_P FROZEN_TOP_K FROZEN_BM25_K1 FROZEN_BM25_B ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
-  "$PROBE_RUNNER" validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
+  run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_IDENTITY" --model "$MODEL" --model-revision "$MODEL_REVISION" --dataset-source "$DATASET_SOURCE" \
     --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$ACTUAL_SHARD_INPUT_SHA256" --prompt-sha256 "$PROMPT_HASH" \
     --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --student-thinking-mode "$STUDENT_THINKING_MODE" \
