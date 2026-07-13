@@ -7,6 +7,13 @@ from text_feedback_dpo.sharding import merge_prediction_shards, shard_jsonl
 
 
 class ShardingTest(unittest.TestCase):
+    def test_sharding_rejects_blank_records_with_input_path_and_line(self):
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "data.jsonl"
+            source.write_text('{"id":"a"}\n \t\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, rf"blank JSONL record.*{source}:2"):
+                shard_jsonl(source, Path(tmp) / "shards", shard_count=1)
+
     def test_sharding_is_deterministic_and_preserves_every_id_once(self):
         with TemporaryDirectory() as tmp:
             source = Path(tmp) / "data.jsonl"
@@ -27,6 +34,17 @@ class ShardingTest(unittest.TestCase):
             (root / "predictions-0.jsonl").write_text('{"id":"a","response":"A"}\n{"id":"wrong","response":"B"}\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "ID mismatch"):
                 merge_prediction_shards(root, root / "merged.jsonl", shard_count=1)
+
+    def test_merge_rejects_blank_records_with_exact_artifact_path_and_line(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "shard-0.jsonl"
+            predictions = root / "predictions-0.jsonl"
+            source.write_text('{"id":"a"}\n', encoding="utf-8")
+            predictions.write_text(" \t\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, rf"blank JSONL record.*{predictions}:1"):
+                merge_prediction_shards(root, root / "merged.jsonl", shard_count=1)
+            self.assertFalse((root / "merged.jsonl.tmp").exists())
 
     def test_merge_publishes_all_predictions_after_validation(self):
         with TemporaryDirectory() as tmp:

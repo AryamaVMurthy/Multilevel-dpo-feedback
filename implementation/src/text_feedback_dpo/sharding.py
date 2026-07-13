@@ -6,6 +6,8 @@ import os
 from itertools import zip_longest
 from pathlib import Path
 
+from text_feedback_dpo.io import parse_jsonl_record
+
 
 def shard_jsonl(source: Path, output_dir: Path, *, shard_count: int) -> dict:
     if shard_count <= 0:
@@ -23,9 +25,7 @@ def shard_jsonl(source: Path, output_dir: Path, *, shard_count: int) -> dict:
     try:
         with source.open(encoding="utf-8") as input_handle:
             for line_number, line in enumerate(input_handle, start=1):
-                if not line.strip():
-                    continue
-                row = json.loads(line)
+                row = parse_jsonl_record(line, path=source, line_number=line_number)
                 example_id = str(row.get("id", ""))
                 if not example_id or example_id in seen:
                     raise ValueError(f"input requires unique non-empty id at line {line_number}: {example_id!r}")
@@ -62,8 +62,10 @@ def merge_prediction_shards(shard_dir: Path, output: Path, *, shard_count: int) 
                         source_line, prediction_line = pair
                         if source_line is None or prediction_line is None:
                             raise ValueError(f"cardinality mismatch in shard {shard_index} at line {line_number}")
-                        source_row = json.loads(source_line)
-                        prediction_row = json.loads(prediction_line)
+                        source_row = parse_jsonl_record(source_line, path=source_path, line_number=line_number)
+                        prediction_row = parse_jsonl_record(
+                            prediction_line, path=prediction_path, line_number=line_number
+                        )
                         source_id = str(source_row.get("id", ""))
                         prediction_id = str(prediction_row.get("id", ""))
                         if source_id != prediction_id:

@@ -7,20 +7,12 @@ from pathlib import Path
 
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.dataset import attach_evidence, build_sft_rows_from_trajectories, load_searchqa_split_with_stats, write_jsonl
+from text_feedback_dpo.io import iter_jsonl as _iter_jsonl
 from text_feedback_dpo.scoring import score_searchqa
 
 
 def iter_jsonl(path: Path):
-    if not path.exists():
-        raise FileNotFoundError(f"JSONL input does not exist: {path}")
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"invalid JSONL at {path}:{line_number}: {exc}") from exc
+    yield from _iter_jsonl(path)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -59,11 +51,17 @@ def _identity_hash(value: dict) -> str:
 
 
 def cmd_prepare(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.retrieval import canonicalize_materialized_source_records
     from text_feedback_dpo.runtime import load_tokenizer
 
     tokenizer = load_tokenizer(args.tokenizer_model, revision=args.tokenizer_revision)
     rows, load_stats = load_searchqa_split_with_stats(args.source, args.split, revision=args.revision, limit=args.limit)
     rows = attach_evidence(rows, max_evidence_tokens=args.max_evidence_tokens, token_count=lambda text: len(tokenizer.encode(text, add_special_tokens=False)))
+    for row_index, row in enumerate(rows, start=1):
+        try:
+            row["sources"] = canonicalize_materialized_source_records(row.get("sources"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid materialized sources in row {row_index}: {exc}") from exc
     write_jsonl(rows, args.output)
     manifest = {"source": args.source, "split": args.split, "rows": len(rows), "max_length": 4096, "load_stats": load_stats, "required_files": [args.output.name]}
     write_json(args.output.with_suffix(".manifest.json"), manifest)
@@ -328,7 +326,8 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 def cmd_generate_searchqa(args: argparse.Namespace) -> None:
     """Generate structured SearchQA query/search/cited-response trajectories."""
-    from text_feedback_dpo.batch_generation import RESPONSE_SCHEMA_VERSION, run_fixed_retrieval_pipeline
+    from text_feedback_dpo.batch_generation import RESPONSE_SCHEMA_VERSION, _validate_rows, run_fixed_retrieval_pipeline
+    from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import generate_batch_records, generate_student_batch, load_student, load_tokenizer
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
@@ -339,6 +338,7 @@ def cmd_generate_searchqa(args: argparse.Namespace) -> None:
     if args.query_max_new_tokens <= 0 or args.response_max_new_tokens <= 0:
         raise ValueError("query and response max_new_tokens must be positive")
     rows = read_jsonl(args.data)
+    _validate_rows(rows)
     tokenizer = load_tokenizer(args.model, revision=args.model_revision)
     model = load_student(args.model, revision=args.model_revision, attention_implementation=args.attention_implementation, device=args.device)
 
@@ -398,7 +398,7 @@ def cmd_generate_searchqa(args: argparse.Namespace) -> None:
         prompt_version=args.prompt_version,
     )
     write_jsonl(results, args.output)
-    prompt_identity = {"identity": args.prompt_version, "query_builder": "build_search_query_prompt", "response_builder": "build_cited_response_prompt"}
+    prompt_identity = {"identity": args.prompt_version, "builders": prompt_builder_identity()}
     response_identity = {"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION, "parser": "parse_cited_response", "renderer": "render_cited_response"}
     source_identity = {"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}
     pipeline_wall_ms = float(results[0]["timings_ms"]["pipeline_wall_ms"]) if results else 0.0

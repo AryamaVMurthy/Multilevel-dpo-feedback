@@ -7,6 +7,8 @@ import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from text_feedback_dpo.io import iter_jsonl
+
 
 PRIMARY_STUDENT_MODEL = "Qwen/Qwen3-4B-Base"
 PRIMARY_STUDENT_REVISION = "906bfd4b4dc7f14ee4320094d8b41684abff8539"
@@ -135,12 +137,7 @@ def load_precomputed_reference_log_probs(path: Path, expected_manifest: Mapping[
     if actual_manifest.get("artifact_sha256") != actual_hash:
         raise ValueError("reference-log-probability artifact hash mismatch")
     rows: list[dict[str, object]] = []
-    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise ValueError(f"reference-log-probability row {index} must be a mapping")
+    for index, row in enumerate(iter_jsonl(path)):
         _validate_ref_row(row, index)
         rows.append(row)
     if not rows or actual_manifest.get("rows") != len(rows):

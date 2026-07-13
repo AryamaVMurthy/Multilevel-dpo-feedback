@@ -257,6 +257,8 @@ def revalidate_cached_trajectory(
     siblings = trajectory.get("no_hint_siblings")
     if not isinstance(attempts, list) or not isinstance(interventions, list) or not isinstance(siblings, list):
         raise TrajectoryError(f"cached trajectory {example_id} requires attempts, interventions, and no_hint_siblings lists")
+    if not attempts:
+        raise TrajectoryError(f"cached trajectory {example_id} requires nonempty attempts with canonical attempt 0")
     intervention_by_attempt: dict[int, Mapping[str, object]] = {}
     for level, intervention in enumerate(interventions, start=1):
         if not isinstance(intervention, Mapping):

@@ -15,7 +15,8 @@ from text_feedback_dpo.scoring import normalize_answer
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _SOURCE_ID_PATTERN = re.compile(r"S\d{3}\Z")
-_CANONICAL_SOURCE_FIELDS = ("source_id", "original_rank", "title", "url", "snippet", "related_links")
+_CANONICAL_SOURCE_FIELDS = ("source_id", "original_rank", "title", "url", "snippet")
+_MATERIALIZED_SOURCE_FIELDS = (*_CANONICAL_SOURCE_FIELDS, "related_links")
 
 
 def tokenize_query(text: str) -> tuple[str, ...]:
@@ -44,9 +45,12 @@ def validate_source_records(sources: Sequence[Mapping[str, Any]]) -> list[dict[s
     for index, source in enumerate(sources, start=1):
         if not isinstance(source, Mapping):
             raise TypeError(f"source {index} must be a mapping")
-        missing = [field for field in ("source_id", "original_rank", "title", "url", "snippet") if field not in source]
+        missing = [field for field in _CANONICAL_SOURCE_FIELDS if field not in source]
         if missing:
             raise ValueError(f"source {index} is missing required fields: {', '.join(missing)}")
+        unknown = sorted((field for field in source if field not in _CANONICAL_SOURCE_FIELDS), key=repr)
+        if unknown:
+            raise ValueError(f"source {index} has unknown fields: {', '.join(map(str, unknown))}")
         source_id = source["source_id"]
         original_rank = source["original_rank"]
         if not isinstance(source_id, str) or _SOURCE_ID_PATTERN.fullmatch(source_id.strip()) is None:
@@ -62,22 +66,11 @@ def validate_source_records(sources: Sequence[Mapping[str, Any]]) -> list[dict[s
             value = source[field]
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"source {index} requires a non-empty {field}")
-        related_links = source.get("related_links")
-        if related_links is not None and not isinstance(related_links, (str, list)):
-            raise ValueError(f"source {index} related_links must be null, a string, or an array of strings")
-        if isinstance(related_links, list) and not all(isinstance(link, str) for link in related_links):
-            raise ValueError(f"source {index} related_links array must contain only strings")
-        source_copy = dict(source)
+        source_copy = {field: source[field] for field in _CANONICAL_SOURCE_FIELDS}
         source_copy["source_id"] = source_id
         source_copy["title"] = source["title"].strip()
         source_copy["url"] = source["url"].strip()
         source_copy["snippet"] = source["snippet"].strip()
-        if isinstance(related_links, str):
-            source_copy["related_links"] = related_links.strip()
-        elif isinstance(related_links, list):
-            source_copy["related_links"] = [link.strip() for link in related_links]
-        else:
-            source_copy["related_links"] = None
         if not tokenize_query(source_copy["snippet"]):
             raise ValueError(f"source {index} snippet must contain at least one token")
         normalized.append(source_copy)
@@ -86,9 +79,28 @@ def validate_source_records(sources: Sequence[Mapping[str, Any]]) -> list[dict[s
     return normalized
 
 
+def canonicalize_materialized_source_records(
+    sources: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project the official SearchQA materializer schema into the active exact schema."""
+    if isinstance(sources, (str, bytes)) or not isinstance(sources, (list, tuple)):
+        raise TypeError("materialized sources must be a list of source mappings")
+    projected: list[dict[str, Any]] = []
+    for index, source in enumerate(sources, start=1):
+        if not isinstance(source, Mapping):
+            raise TypeError(f"materialized source {index} must be a mapping")
+        unknown = sorted((field for field in source if field not in _MATERIALIZED_SOURCE_FIELDS), key=repr)
+        if unknown:
+            raise ValueError(
+                f"materialized source {index} has unknown fields: {', '.join(map(str, unknown))}"
+            )
+        projected.append({field: source[field] for field in _CANONICAL_SOURCE_FIELDS if field in source})
+    return validate_source_records(projected)
+
+
 def _canonical_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     ordered = sorted(sources, key=lambda source: (source["original_rank"], source["source_id"]))
-    return [{field: source.get(field) for field in _CANONICAL_SOURCE_FIELDS} for source in ordered]
+    return [{field: source[field] for field in _CANONICAL_SOURCE_FIELDS} for source in ordered]
 
 
 def _validate_top_k(top_k: int) -> None:

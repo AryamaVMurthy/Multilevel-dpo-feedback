@@ -15,13 +15,11 @@ class ArtifactTest(unittest.TestCase):
         payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def test_sft_rows_use_plain_completion_and_teacher_free_prompt(self):
-        rows = build_sft_rows([{"id": "1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada evidence"}])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["completion"], " Ada")
-        self.assertTrue(rows[0]["prompt"].endswith("Answer:"))
-        self.assertNotIn("<response>", rows[0]["prompt"] + rows[0]["completion"])
-        self.assertNotIn("gold_answer", rows[0]["prompt"])
+    def test_legacy_gold_answer_sft_builder_is_removed(self):
+        with self.assertRaisesRegex(RuntimeError, "removed unsafe SFT path"):
+            build_sft_rows([
+                {"id": "1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada evidence"}
+            ])
 
     def test_active_preference_builder_rejects_archival_plain_answer_schema(self):
         with self.assertRaisesRegex(ValueError, "active trajectory"):

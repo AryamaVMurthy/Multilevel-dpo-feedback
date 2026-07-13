@@ -23,7 +23,6 @@ def source_records() -> list[dict]:
             "title": f"Ada source {index}",
             "url": f"https://example.test/ada/{index}",
             "snippet": f"Ada Lovelace wrote the first algorithm source {index}.",
-            "related_links": None,
         }
         for index in range(1, 9)
     ]

@@ -112,6 +112,13 @@ class CollectionBatchTest(unittest.TestCase):
         for attempt in row["attempts"]:
             self.assertRegex(attempt["supervision_hash"], r"^[0-9a-f]{64}$")
 
+        no_attempts = copy.deepcopy(row)
+        no_attempts["attempts"] = []
+        with self.assertRaisesRegex(ValueError, "nonempty.*attempt 0"):
+            revalidate_cached_trajectory(
+                no_attempts, example=_example(), expected_sibling_seeds=(101, 102)
+            )
+
         forged = copy.deepcopy(row)
         forged["interventions"][0]["raw_teacher_response"] = '{"hint":"Inspect the chronology."}'
         with self.assertRaisesRegex(ValueError, "teacher feedback|hint"):

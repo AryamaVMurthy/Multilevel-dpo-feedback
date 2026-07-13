@@ -6,9 +6,42 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from text_feedback_dpo.cli import build_parser
+from text_feedback_dpo.prompts import prompt_builder_identity
 
 
 class CLITest(unittest.TestCase):
+    def test_prepare_searchqa_emits_exact_active_source_schema(self):
+        class Tokenizer:
+            @staticmethod
+            def encode(text, *, add_special_tokens):
+                self.assertFalse(add_special_tokens)
+                return text.split()
+
+        prepared_row = {
+            "id": "train-0", "question": "Who?", "gold_answer": "Ada",
+            "snippets": ["Ada evidence"],
+            "sources": [{
+                "source_id": "S001", "original_rank": 1, "title": "Ada",
+                "url": "https://example.test/ada", "snippet": "Ada evidence",
+                "related_links": ["https://example.test/related"],
+            }],
+        }
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "prepared.jsonl"
+            args = build_parser().parse_args([
+                "prepare-searchqa", "--source", "source", "--split", "train",
+                "--tokenizer-model", "model", "--tokenizer-revision", "tok-rev",
+                "--revision", "data-rev", "--output", str(output), "--max-evidence-tokens", "100",
+            ])
+            with patch("text_feedback_dpo.runtime.load_tokenizer", return_value=Tokenizer()), patch(
+                "text_feedback_dpo.cli.load_searchqa_split_with_stats",
+                return_value=([prepared_row], {"loaded": 1}),
+            ):
+                args.func(args)
+
+            source = json.loads(output.read_text(encoding="utf-8"))["sources"][0]
+            self.assertEqual(set(source), {"source_id", "original_rank", "title", "url", "snippet"})
+
     def test_exposes_only_searchqa_training_commands(self):
         parser = build_parser()
         for command in ("prepare-searchqa", "shard-jsonl", "merge-predictions", "probe-model", "collect", "build-preferences", "build-sft-data", "precompute-dpo-ref-log-probs", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
@@ -153,6 +186,8 @@ class CLITest(unittest.TestCase):
             self.assertEqual(manifest["dataset"]["revision"], "data-rev")
             self.assertEqual(manifest["source_schema"]["identity"], "searchqa.search_results.v1")
             self.assertEqual(manifest["retrieval"]["requested_top_k"], 8)
+            self.assertEqual(manifest["prompt"]["builders"], prompt_builder_identity())
+            self.assertNotIn("query_builder", manifest["prompt"])
             self.assertEqual(manifest["artifacts"][0]["path"], output.name)
             self.assertIn("sha256", manifest["artifacts"][0])
             validated = root / "validated.json"
@@ -185,6 +220,58 @@ class CLITest(unittest.TestCase):
             self.assertEqual(preflight_summary["retrieval_recall@8"], 1.0)
             self.assertIn("https://example.test/ada/1", sample["rendered_visible_response"])
             self.assertEqual(sample["ranked_search_results"], row["ranked_search_results"])
+
+    def test_generate_searchqa_validates_every_source_before_model_or_tokenizer_load(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data.jsonl"
+            malformed_source = {
+                "source_id": "S001", "original_rank": 1, "title": "Ada",
+                "url": "https://example.test/ada", "snippet": "Ada evidence",
+                "unknown": "must fail",
+            }
+            valid_source = {key: value for key, value in malformed_source.items() if key != "unknown"}
+            rows = [
+                {"id": "row-1", "question": "Who?", "gold_answer": "Ada", "sources": [valid_source]},
+                {"id": "row-2", "question": "Who else?", "gold_answer": "Ada", "sources": [malformed_source]},
+            ]
+            data.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            args = build_parser().parse_args([
+                "generate-searchqa", "--data", str(data), "--output", str(root / "out.jsonl"),
+                "--model", "model", "--model-revision", "model-rev", "--dataset-source", "searchqa",
+                "--dataset-revision", "data-rev", "--attention-implementation", "sdpa", "--policy-hash", "policy-v1",
+            ])
+            with patch("text_feedback_dpo.runtime.load_tokenizer") as load_tokenizer, patch(
+                "text_feedback_dpo.runtime.load_student"
+            ) as load_student, self.assertRaisesRegex(ValueError, "unknown fields"):
+                args.func(args)
+            load_tokenizer.assert_not_called()
+            load_student.assert_not_called()
+
+    def test_generate_searchqa_validates_all_row_fields_before_runtime_load(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = {
+                "source_id": "S001", "original_rank": 1, "title": "Ada",
+                "url": "https://example.test/ada", "snippet": "Ada evidence",
+            }
+            rows = [
+                {"id": "row-1", "question": "Who?", "gold_answer": "Ada", "sources": [source]},
+                {"id": "row-2", "question": " ", "gold_answer": "Ada", "sources": [source]},
+            ]
+            data = root / "data.jsonl"
+            data.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            args = build_parser().parse_args([
+                "generate-searchqa", "--data", str(data), "--output", str(root / "out.jsonl"),
+                "--model", "model", "--model-revision", "model-rev", "--dataset-source", "searchqa",
+                "--dataset-revision", "data-rev", "--attention-implementation", "sdpa", "--policy-hash", "policy-v1",
+            ])
+            with patch("text_feedback_dpo.runtime.load_tokenizer") as load_tokenizer, patch(
+                "text_feedback_dpo.runtime.load_student"
+            ) as load_student, self.assertRaisesRegex(ValueError, "non-empty question"):
+                args.func(args)
+            load_tokenizer.assert_not_called()
+            load_student.assert_not_called()
 
     @staticmethod
     def _required_args(command):

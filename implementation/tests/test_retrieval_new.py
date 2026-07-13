@@ -21,33 +21,21 @@ def source(source_id: str, original_rank: int, snippet: str, *, title: str | Non
         "title": title or f"Title {source_id}",
         "url": f"https://example.test/{source_id}",
         "snippet": snippet,
-        "related_links": None,
     }
 
 
 class FixedBM25RetrievalTest(unittest.TestCase):
-    def test_related_links_accept_real_searchqa_shapes_and_affect_canonical_hash(self):
-        shaped = [
-            {**source("S001", 1, "alpha evidence"), "related_links": None},
-            {**source("S002", 2, "beta evidence"), "related_links": " https://related.test/one "},
-            {**source("S003", 3, "gamma evidence"), "related_links": [" https://related.test/two ", ""]},
-        ]
+    def test_dataset_sources_use_exact_allowlist_while_ranked_results_have_separate_schema(self):
+        extra = {**source("S001", 1, "alpha evidence"), "related_links": None}
+        with self.assertRaisesRegex(ValueError, "unknown fields: related_links"):
+            FixedBM25Retriever([extra])
 
-        results = FixedBM25Retriever(shaped).search("evidence", top_k=8)
-
-        self.assertEqual(results[0]["related_links"], None)
-        self.assertEqual(results[1]["related_links"], "https://related.test/one")
-        self.assertEqual(results[2]["related_links"], ["https://related.test/two", ""])
-        changed = copy.deepcopy(shaped)
-        changed[2]["related_links"] = ["https://related.test/different"]
-        self.assertNotEqual(
-            results[0]["corpus_hash"],
-            FixedBM25Retriever(changed).search("evidence", top_k=8)[0]["corpus_hash"],
+        ranked = FixedBM25Retriever([source("S001", 1, "alpha evidence")]).search(
+            "evidence", top_k=8
         )
-        malformed = copy.deepcopy(shaped)
-        malformed[2]["related_links"] = ["valid", 3]
-        with self.assertRaisesRegex(ValueError, "only strings"):
-            FixedBM25Retriever(malformed)
+        self.assertNotEqual(set(ranked[0]), set(source("S001", 1, "alpha evidence")))
+        self.assertIn("retrieval_rank", ranked[0])
+        self.assertNotIn("related_links", ranked[0])
 
     def test_default_k1_is_frozen_at_one_point_two(self):
         self.assertEqual(FixedBM25Retriever([source("S001", 1, "evidence")]).k1, 1.2)

@@ -175,18 +175,18 @@ class BatchGenerationTest(unittest.TestCase):
         self.assertTrue(all(item["effective_top_k"] == 3 for item in ranked))
         self.assertTrue(all(item["source_count"] == 3 for item in ranked))
 
-    def test_active_pipeline_accepts_real_related_links_shape(self):
+    def test_active_pipeline_rejects_noncanonical_related_links_before_generation(self):
         sources = source_records("real")[:3]
         sources[0]["related_links"] = None
-        sources[1]["related_links"] = "https://related.test/one"
-        sources[2]["related_links"] = ["https://related.test/two"]
-        result = run_fixed_retrieval_pipeline(
-            [{"id": "real", "question": "What is real?", "gold_answer": "real", "sources": sources}],
-            query_generate_batch=lambda _prompts: [GeneratedText("real evidence", False)],
-            response_generate_batch=lambda _prompts: [GeneratedText("Answer: real\nReasoning: Source says real [S001].\nSources: S001", False)],
-            policy_hash="policy-v1",
-        )[0]
-        self.assertEqual(result["ranked_search_results"][2]["related_links"], ["https://related.test/two"])
+        calls = []
+        with self.assertRaisesRegex(ValueError, "unknown fields: related_links"):
+            run_fixed_retrieval_pipeline(
+                [{"id": "real", "question": "What is real?", "gold_answer": "real", "sources": sources}],
+                query_generate_batch=lambda prompts: calls.append(prompts),
+                response_generate_batch=lambda prompts: calls.append(prompts),
+                policy_hash="policy-v1",
+            )
+        self.assertEqual(calls, [])
 
     def test_active_search_compacts_invalid_query_examples_without_reordering_outputs(self):
         rows = [

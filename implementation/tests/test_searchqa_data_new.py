@@ -315,19 +315,15 @@ class SearchQADataTest(unittest.TestCase):
         packed = pack_evidence(snippets, max_tokens=4, token_count=lambda text: len(text.split()))
         self.assertEqual(packed, "one two\nthree four")
 
-    def test_sft_target_is_plain_prompt_completion(self):
+    def test_legacy_gold_answer_sft_target_is_rejected(self):
         row = {
             "id": "train-0",
             "question": "Who?",
             "gold_answer": "Ada",
             "packed_evidence": "prefix " * 500 + "Ada evidence near the answer " + "suffix " * 500,
         }
-        result = build_sft_rows([row])[0]
-        self.assertEqual(result["id"], "train-0")
-        self.assertEqual(result["completion"], " Ada")
-        self.assertTrue(result["prompt"].endswith("Answer:"))
-        self.assertIn("Ada evidence near the answer", result["prompt"])
-        self.assertNotIn("<response>", result["prompt"] + result["completion"])
+        with self.assertRaisesRegex(RuntimeError, "removed unsafe SFT path"):
+            build_sft_rows([row])
 
 
 if __name__ == "__main__":

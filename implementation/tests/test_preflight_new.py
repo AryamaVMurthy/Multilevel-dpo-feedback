@@ -11,8 +11,7 @@ class PreflightQualityTest(unittest.TestCase):
     def _active_fixture():
         sources = [
             {"source_id": f"S{index:03d}", "original_rank": index, "title": f"Ada {index}",
-             "url": f"https://example.test/{index}", "snippet": f"Ada evidence {index}",
-             "related_links": [f"https://related.test/{index}"] if index == 1 else None}
+             "url": f"https://example.test/{index}", "snippet": f"Ada evidence {index}"}
             for index in range(1, 4)
         ]
         example = {"id": "1", "question": "Who?", "gold_answer": "Ada", "sources": sources}
