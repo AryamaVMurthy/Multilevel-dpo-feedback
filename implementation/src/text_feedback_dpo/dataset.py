@@ -5,7 +5,13 @@ import json
 import io
 import zipfile
 from pathlib import Path
-from text_feedback_dpo.searchqa import materialize_row, pack_evidence
+from text_feedback_dpo.searchqa import (
+    SOURCE_SCHEMA,
+    SOURCE_SCHEMA_VERSION,
+    NoUsableSearchQASourcesError,
+    materialize_row,
+    pack_evidence,
+)
 from text_feedback_dpo.prompts import build_student_prompt
 
 
@@ -31,12 +37,20 @@ def load_searchqa_split_with_stats(source: str, split: str, *, revision: str, li
             raise ImportError("datasets is required for SearchQA materialization") from exc
         dataset = load_dataset(source, split=split, revision=revision)
         rows = []
+        source_rows = 0
         dropped_rows = 0
+        drop_reasons: dict[str, int] = {}
         for index, raw in enumerate(dataset):
-            if limit is not None and index >= limit:
+            if limit is not None and len(rows) >= limit:
                 break
-            rows.append(materialize_row(raw, split=split, index=index))
-        stats = {"source_rows": len(rows), "materialized_rows": len(rows), "dropped_rows": dropped_rows, "drop_reasons": {}}
+            source_rows += 1
+            try:
+                rows.append(materialize_row(raw, split=split, index=index))
+            except NoUsableSearchQASourcesError:
+                dropped_rows += 1
+                reason = "no_usable_evidence"
+                drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
+        stats = _load_stats(source_rows, rows, dropped_rows, drop_reasons)
     if not rows:
         raise ValueError(f"SearchQA split {split!r} produced zero rows")
     return rows, stats
@@ -64,13 +78,22 @@ def _load_official_searchqa_zip(split: str, revision: str, limit: int | None) ->
                 raw = json.loads(io.TextIOWrapper(handle, encoding="utf-8").read())
             try:
                 rows.append(materialize_row(raw, split=split, index=index))
-            except ValueError as exc:
-                if "no usable non-empty evidence snippets" not in str(exc):
-                    raise
+            except NoUsableSearchQASourcesError:
                 dropped_rows += 1
                 reason = "no_usable_evidence"
                 drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
-    return rows, {"source_rows": source_rows, "materialized_rows": len(rows), "dropped_rows": dropped_rows, "drop_reasons": drop_reasons}
+    return rows, _load_stats(source_rows, rows, dropped_rows, drop_reasons)
+
+
+def _load_stats(source_rows: int, rows: list[dict], dropped_rows: int, drop_reasons: dict[str, int]) -> dict:
+    return {
+        "source_schema": SOURCE_SCHEMA,
+        "source_schema_version": SOURCE_SCHEMA_VERSION,
+        "source_rows": source_rows,
+        "materialized_rows": len(rows),
+        "dropped_rows": dropped_rows,
+        "drop_reasons": drop_reasons,
+    }
 
 
 def attach_evidence(rows: list[dict], *, max_evidence_tokens: int, token_count) -> list[dict]:

@@ -3,33 +3,93 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 
-def _snippets(row: dict) -> list[str]:
-    """Normalize official SearchQA result records without fabricating evidence.
+SOURCE_SCHEMA = "searchqa.search_results.v1"
+SOURCE_SCHEMA_VERSION = 1
 
-    The official archive contains a sequence of result records, and individual
-    records may have an empty snippet. Empty records are excluded; a row with
-    no usable snippet fails explicitly below.
-    """
-    value = row.get("search_results", row.get("snippets"))
-    if value is None and isinstance(row.get("context"), str):
-        value = [row["context"]]
-    if isinstance(value, dict):
-        value = value.get("snippets")
-    if not isinstance(value, list) or not value:
-        raise ValueError("SearchQA row requires a non-empty snippets/search_results list")
-    normalized = []
-    for item in value:
-        if isinstance(item, str) and item.strip():
-            normalized.append(item.strip())
-        elif isinstance(item, dict) and isinstance(item.get("snippet"), str) and item["snippet"].strip():
-            normalized.append(item["snippet"].strip())
-        elif item in (None, "") or isinstance(item, dict):
-            continue
+
+class NoUsableSearchQASourcesError(ValueError):
+    """Raised when a valid SearchQA source schema contains no usable source."""
+
+
+def _source_arrays(search_results: object) -> tuple[list[object], list[object], list[object], list[object]]:
+    if isinstance(search_results, dict):
+        required = ("snippets", "titles", "urls")
+        missing = [field for field in required if field not in search_results]
+        if missing:
+            raise ValueError(f"SearchQA source provenance mapping is missing: {', '.join(missing)}")
+        arrays = {field: search_results[field] for field in required}
+        related_links = search_results.get("related_links")
+        if related_links is not None:
+            arrays["related_links"] = related_links
         else:
-            raise ValueError(f"unsupported SearchQA snippet record type: {type(item).__name__}")
-    if not normalized:
-        raise ValueError("SearchQA row has no usable non-empty evidence snippets")
-    return normalized
+            arrays["related_links"] = [None] * len(arrays["snippets"]) if isinstance(arrays["snippets"], list) else None
+    elif isinstance(search_results, list):
+        if not search_results:
+            raise NoUsableSearchQASourcesError("SearchQA row has no usable source records")
+        if not all(isinstance(record, dict) for record in search_results):
+            raise ValueError("unsupported SearchQA source provenance schema: expected mapping or records with metadata")
+        arrays = {"snippets": [], "titles": [], "urls": [], "related_links": []}
+        for record in search_results:
+            if "snippet" not in record:
+                raise ValueError("unsupported SearchQA source provenance schema: record is missing snippet")
+            arrays["snippets"].append(record["snippet"])
+            arrays["titles"].append(record.get("title"))
+            arrays["urls"].append(record.get("url"))
+            arrays["related_links"].append(record.get("related_links"))
+    else:
+        raise ValueError("unsupported SearchQA source provenance schema: expected search_results mapping or records")
+
+    for field in ("snippets", "titles", "urls", "related_links"):
+        values = arrays[field]
+        if not isinstance(values, list):
+            raise ValueError(f"unsupported SearchQA source provenance schema: {field} must be an array")
+    lengths = {field: len(arrays[field]) for field in ("snippets", "titles", "urls", "related_links")}
+    if len(set(lengths.values())) != 1:
+        details = ", ".join(f"{field}={length}" for field, length in lengths.items())
+        raise ValueError(f"SearchQA source array length mismatch: {details}")
+    return arrays["snippets"], arrays["titles"], arrays["urls"], arrays["related_links"]
+
+
+def _text_value(value: object, *, field: str, original_rank: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"unsupported SearchQA source provenance schema: {field} at original rank {original_rank} must be a string")
+    return value.strip()
+
+
+def _sources(row: dict) -> list[dict]:
+    if "search_results" not in row:
+        raise ValueError("SearchQA row requires search_results source provenance")
+    snippets, titles, urls, related_links = _source_arrays(row["search_results"])
+    sources = []
+    for original_index, (snippet_value, title_value, url_value, related_links_value) in enumerate(
+        zip(snippets, titles, urls, related_links, strict=True),
+        start=1,
+    ):
+        snippet = _text_value(snippet_value, field="snippet", original_rank=original_index)
+        title = _text_value(title_value, field="title", original_rank=original_index)
+        url = _text_value(url_value, field="url", original_rank=original_index)
+        related = _text_value(related_links_value, field="related_links", original_rank=original_index)
+        if not snippet:
+            continue
+        if not title:
+            raise ValueError(f"SearchQA source title is missing or blank for nonempty snippet at original rank {original_index}")
+        if not url:
+            raise ValueError(f"SearchQA source url is missing or blank for nonempty snippet at original rank {original_index}")
+        sources.append(
+            {
+                "source_id": f"S{original_index:03d}",
+                "original_rank": original_index,
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "related_links": related,
+            }
+        )
+    if not sources:
+        raise NoUsableSearchQASourcesError("SearchQA row has no usable non-empty evidence snippets")
+    return sources
 
 
 def materialize_row(row: dict, *, split: str, index: int) -> dict:
@@ -41,8 +101,14 @@ def materialize_row(row: dict, *, split: str, index: int) -> dict:
         raise ValueError("SearchQA row requires non-empty question")
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("SearchQA row requires non-empty answer")
-    snippets = _snippets(row)
-    return {"id": f"{split}-{index}", "question": question.strip(), "gold_answer": answer.strip(), "snippets": snippets}
+    sources = _sources(row)
+    return {
+        "id": f"{split}-{index}",
+        "question": question.strip(),
+        "gold_answer": answer.strip(),
+        "sources": sources,
+        "snippets": [source["snippet"] for source in sources],
+    }
 
 
 def pack_evidence(snippets: Iterable[str], *, max_tokens: int, token_count: Callable[[str], int]) -> str:
