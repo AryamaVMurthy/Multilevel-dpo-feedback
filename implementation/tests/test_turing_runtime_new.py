@@ -42,6 +42,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("EXPECTED_INVALID_RUN_ROOT", text)
         self.assertIn("realpath", text)
         self.assertIn("ARCHIVE_DIR", text)
+        self.assertIn('$actual/baseline/shards', text)
         self.assertNotIn("rm -rf", text)
 
     def test_prompt_preflight_compares_direct_and_two_pass(self):

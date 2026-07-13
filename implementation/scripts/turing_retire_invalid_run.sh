@@ -21,5 +21,9 @@ find "$actual" -type f \( -name '*manifest*.json' -o -name '*metrics*.json' -o -
 find "$actual" -type f -name '*predictions*.jsonl' -exec sh -c 'for file do sed -n "1,3p" "$file"; done' sh {} + > "$ARCHIVE_DIR/representative-predictions.jsonl"
 
 find "$actual" -type f \( -name '*predictions*.jsonl' -o -name '*trajectories*.jsonl' -o -name '*preferences*.jsonl' -o -name '*sft*.jsonl' \) -delete
+if [[ -d "$actual/baseline/shards" ]]; then
+  find "$actual/baseline/shards" -type f -delete
+  find "$actual/baseline/shards" -depth -type d -empty -delete
+fi
 find "$actual" -mindepth 1 -depth -type d -empty -delete
 du -sh "$actual" > "$ARCHIVE_DIR/disk-after.txt"
