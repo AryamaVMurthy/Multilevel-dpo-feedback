@@ -1040,6 +1040,9 @@ def cmd_collect(args: argparse.Namespace) -> None:
                         "explicit teacher recovery requires a private gold field to redact"
                     )
                 payload["private_gold_answer"] = "[redacted for explicit recovery]"
+                for field in ("question", "query", "failed_response", "prior_hints", "retrieved_records"):
+                    if field in payload:
+                        payload[field] = "[redacted for explicit recovery]"
                 return prefix + marker + json.dumps(
                     payload, ensure_ascii=False, sort_keys=True, indent=2
                 ) + """
@@ -1077,7 +1080,7 @@ about checking the responsible region, in at most 12 words. Return the JSON obje
                     "prompt_token_counts": fallback_prompt_counts,
                     "max_new_tokens": legal_max_new_tokens,
                     "gold_redacted": True,
-                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted_generic_hint",
+                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_context_redacted_generic_hint",
                 }, sort_keys=True), file=sys.stderr, flush=True)
                 return batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
@@ -1106,7 +1109,7 @@ about checking the responsible region, in at most 12 words. Return the JSON obje
                 ],
                 fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
                 fallback_reason=(
-                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted_generic_hint"
+                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_context_redacted_generic_hint"
                     if args.teacher_thinking else None
                 ),
             )
