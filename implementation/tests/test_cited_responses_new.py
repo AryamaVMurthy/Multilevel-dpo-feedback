@@ -50,6 +50,17 @@ class CitedResponseParserTest(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(CitedResponseFormatError):
                 parse_cited_response(output, SOURCES)
 
+    def test_rejects_incomplete_or_stray_angle_markup(self):
+        outputs = [
+            "Answer: <answer Ada\nReasoning: claim [S001]\nSources: S001",
+            "Answer: Ada >\nReasoning: claim [S001]\nSources: S001",
+            "Answer: Ada\nReasoning: claim < [S001]\nSources: S001",
+            "Answer: Ada\nReasoning: claim [S001] >\nSources: S001",
+        ]
+        for output in outputs:
+            with self.subTest(output=output), self.assertRaisesRegex(CitedResponseFormatError, "angle|markup|XML"):
+                parse_cited_response(output, SOURCES)
+
     def test_rejects_residual_brackets_after_valid_citations_are_removed(self):
         outputs = [
             "Answer: Ada [unexpected]\nReasoning: claim [S001]\nSources: S001",
@@ -66,6 +77,18 @@ class CitedResponseParserTest(unittest.TestCase):
             output = f"Answer: Ada\nReasoning: claim [S001] see {url}\nSources: S001"
             with self.subTest(url=url), self.assertRaisesRegex(CitedResponseFormatError, "URL"):
                 parse_cited_response(output, SOURCES)
+
+    def test_titles_are_allowed_and_bare_ipv4_answers_are_not_urls(self):
+        titled = parse_cited_response(
+            "Answer: Ada Lovelace\nReasoning: Ada biography identifies the author [S001].\nSources: S001",
+            SOURCES,
+        )
+        self.assertEqual(titled.source_ids, ("S001",))
+        factual_ip = parse_cited_response(
+            "Answer: 192.168.0.1\nReasoning: The address is stated in the source [S001].\nSources: S001",
+            SOURCES,
+        )
+        self.assertEqual(factual_ip.answer, "192.168.0.1")
 
     def test_rejects_length_limits_and_missing_citations(self):
         too_long_answer = "Answer: " + "word " * 17 + "\nReasoning: claim [S001]\nSources: S001"
@@ -143,11 +166,17 @@ class CitedResponseScoringTest(unittest.TestCase):
         self.assertEqual(result["citation_count"], 2)
         self.assertEqual(result["citation_precision"], 0.5)
         self.assertEqual(result["citation_recall"], 1.0)
-        self.assertEqual(result["cited_answer_support"], 1.0)
+        self.assertEqual(result["lexical_cited_answer_support"], 1.0)
         self.assertEqual(result["unsupported_source_rate"], 0.5)
         self.assertTrue(result["correct"])
         self.assertEqual(result["answer_words"], 2)
         self.assertEqual(result["reasoning_words"], 11)
+        self.assertEqual(result["valid_citation_rate"], 1.0)
+        self.assertEqual(result["citation_coverage"], 1.0)
+        self.assertFalse(result["duplicate_citation"])
+        self.assertEqual(result["duplicate_citation_rate"], 0.0)
+        self.assertFalse(result["malformed_response"])
+        self.assertFalse(result["truncated"])
 
     def test_malformed_explanation_does_not_corrupt_answer_em(self):
         result = score_cited_response(
@@ -161,9 +190,26 @@ class CitedResponseScoringTest(unittest.TestCase):
         self.assertEqual(result["f1"], 1.0)
         self.assertTrue(result["answer_correct"])
         self.assertFalse(result["correct"])
-        self.assertEqual(result["citation_count"], 0)
+        self.assertEqual(result["citation_count"], 1)
 
-    def test_correct_requires_parse_valid_exact_answer_and_cited_support(self):
+    def test_malformed_duplicate_output_exposes_structural_and_truncation_metrics(self):
+        result = score_cited_response(
+            "Answer: Ada Lovelace\n"
+            "Reasoning: The source names Ada Lovelace [S001] and repeats it [S001].\n"
+            "Sources: S001, S001",
+            "Ada Lovelace",
+            SOURCES,
+            truncated=True,
+        )
+        self.assertTrue(result["malformed_response"])
+        self.assertFalse(result["correct"])
+        self.assertTrue(result["duplicate_citation"])
+        self.assertEqual(result["duplicate_citation_rate"], 0.5)
+        self.assertEqual(result["valid_citation_rate"], 1.0)
+        self.assertEqual(result["citation_coverage"], 1.0)
+        self.assertTrue(result["truncated"])
+
+    def test_correct_requires_parse_valid_exact_answer_not_lexical_support(self):
         unsupported = score_cited_response(
             "Answer: Ada Lovelace\nReasoning: History supports the context [S003].\nSources: S003",
             "Ada Lovelace",
@@ -172,8 +218,8 @@ class CitedResponseScoringTest(unittest.TestCase):
         self.assertTrue(unsupported["parse_valid"])
         self.assertTrue(unsupported["answer_correct"])
         self.assertEqual(unsupported["exact_match"], 1.0)
-        self.assertFalse(unsupported["cited_answer_support"])
-        self.assertFalse(unsupported["correct"])
+        self.assertFalse(unsupported["lexical_cited_answer_support"])
+        self.assertTrue(unsupported["correct"])
 
     def test_malformed_label_order_does_not_extract_an_answer_for_em(self):
         result = score_cited_response(

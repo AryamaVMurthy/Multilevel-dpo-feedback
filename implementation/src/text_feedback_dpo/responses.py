@@ -89,8 +89,8 @@ def parse_cited_response(text: str, retrieved_sources: Sequence[Mapping[str, Any
         raise _format_error("not_text", "student response must be text")
     if _URL_PATTERN.search(text):
         raise _format_error("url_forbidden", "student response must not contain URLs")
-    if "```" in text or "{" in text or "}" in text or _XML_PATTERN.search(text):
-        raise _format_error("markup_forbidden", "student response must not contain XML, JSON, or code fences")
+    if "```" in text or "{" in text or "}" in text or "<" in text or ">" in text or _XML_PATTERN.search(text):
+        raise _format_error("markup_forbidden", "student response must not contain XML, JSON, code fences, or angle markup")
 
     lines = text.splitlines()
     if len(lines) != 3 or any(not line.strip() for line in lines):
