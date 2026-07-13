@@ -1,9 +1,24 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from text_feedback_dpo.trainers import _common_args, _dpo_args, _rl_args, _sft_args, searchqa_rl_reward
+from text_feedback_dpo.trainers import _common_args, _dpo_args, _rl_args, _save_final, _sft_args, searchqa_rl_reward
 
 
 class TrainerContractTest(unittest.TestCase):
+    def test_final_save_keeps_resumable_checkpoints(self):
+        class Trainer:
+            def save_model(self, path):
+                Path(path).mkdir(parents=True)
+
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            checkpoint = output / "checkpoint-10"
+            checkpoint.mkdir()
+            (checkpoint / "optimizer.pt").write_text("state", encoding="utf-8")
+            _save_final(Trainer(), output)
+            self.assertTrue((checkpoint / "optimizer.pt").is_file())
+            self.assertTrue((output / "final").is_dir())
     def test_common_training_args_enable_measured_ada_optimizations(self):
         args = _common_args({}, "out")
         self.assertTrue(args["tf32"])

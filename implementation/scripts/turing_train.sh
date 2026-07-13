@@ -17,6 +17,11 @@ set -euo pipefail
 : "${TRAIN:?TRAIN must be supplied with --export}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
 : "${TRAIN_GPUS:?TRAIN_GPUS must be supplied with --export}"
+: "${EFFECTIVE_BATCH_SIZE:?EFFECTIVE_BATCH_SIZE must be supplied with --export}"
+: "${LEARNING_RATE:?LEARNING_RATE must be supplied with --export}"
+: "${EPOCHS:?EPOCHS must be supplied with --export}"
+: "${SAVE_STEPS:?SAVE_STEPS must be supplied with --export}"
+: "${EVAL_STEPS:?EVAL_STEPS must be supplied with --export}"
 if [[ "$TRAIN_GPUS" != "2" && "$TRAIN_GPUS" != "4" ]]; then
   echo "ERROR: TRAIN_GPUS must be 2 or 4; got $TRAIN_GPUS" >&2
   exit 2
@@ -26,7 +31,6 @@ if [[ "$SLURM_GPUS_ON_NODE" != "$TRAIN_GPUS" ]]; then
   echo "ERROR: requested training workers ($TRAIN_GPUS) do not match allocated GPUs ($SLURM_GPUS_ON_NODE)" >&2
   exit 2
 fi
-EFFECTIVE_BATCH_SIZE="${EFFECTIVE_BATCH_SIZE:-128}"
 if (( EFFECTIVE_BATCH_SIZE % TRAIN_GPUS != 0 )); then
   echo "ERROR: EFFECTIVE_BATCH_SIZE=$EFFECTIVE_BATCH_SIZE must be divisible by TRAIN_GPUS=$TRAIN_GPUS" >&2
   exit 2
@@ -65,7 +69,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ARGS=(--config "$CONFIG" --train "$TRAIN" --output "$OUTPUT" --deepspeed-config configs/deepspeed_zero3.json --save-steps 100 --eval-steps 100 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS")
+ARGS=(--config "$CONFIG" --train "$TRAIN" --output "$OUTPUT" --deepspeed-config configs/deepspeed_zero3.json --save-steps "$SAVE_STEPS" --eval-steps "$EVAL_STEPS" --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS" --learning-rate "$LEARNING_RATE" --epochs "$EPOCHS")
 if [[ "$METHOD" == sft || "$METHOD" == dpo ]]; then
   ARGS+=(--eval "$EVAL")
 fi

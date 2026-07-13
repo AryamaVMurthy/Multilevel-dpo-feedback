@@ -70,6 +70,10 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("GRADIENT_ACCUMULATION_STEPS", text)
         self.assertIn('--gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"', text)
         self.assertIn('--nproc_per_node="$TRAIN_GPUS"', text)
+        for setting in ("LEARNING_RATE", "EPOCHS", "SAVE_STEPS", "EVAL_STEPS"):
+            self.assertIn(f'${{{setting}:?', text)
+        self.assertIn('--learning-rate "$LEARNING_RATE"', text)
+        self.assertIn('--epochs "$EPOCHS"', text)
 
 
 if __name__ == "__main__":

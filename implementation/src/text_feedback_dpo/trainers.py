@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
-import shutil
 
 from text_feedback_dpo.training import build_method_config
 
@@ -58,9 +57,6 @@ def _tokenizer(config: dict, model_id: str):
 
 
 def _save_final(trainer, output_dir: Path) -> None:
-    for checkpoint in output_dir.glob("checkpoint-*"):
-        if checkpoint.is_dir():
-            shutil.rmtree(checkpoint)
     trainer.save_model(str(output_dir / "final"))
 
 
