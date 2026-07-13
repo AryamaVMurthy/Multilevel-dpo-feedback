@@ -131,6 +131,7 @@ class TuringRuntimeTest(unittest.TestCase):
             self.assertIn(f'require_env "{required}"', text)
         self.assertIn("evaluate-sft-capability", text)
         self.assertIn("fallback_reason=none", text)
+        self.assertIn("#SBATCH --cpus-per-task=2", text)
         self.assertNotIn("#SBATCH --gres=gpu:", text)
         self.assertNotIn("|| true", text)
 

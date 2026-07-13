@@ -2,7 +2,7 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `f46913e712f510476824f4eaa0a1018190b8171c`
+**Last observed remote commit:** `2b8c7e37ac210b421f031973bb5d97ce14f830c5`
 
 **Current local implementation commit:** `f46913e712f510476824f4eaa0a1018190b8171c`
 
@@ -142,11 +142,14 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - Job `13801` ran actual full-parameter Qwen3-4B BF16 SFT on four A100 GPUs with ZeRO-3, max length 4,096, and a real resume from step 5 through step 20. The 64-row overfit evaluation moved from loss `0.2633` / token accuracy `0.9140` at step 5 to loss `0.1116` / token accuracy `0.9700` at step 20. Checkpoint 20 model SHA-256: `919dff1363d5827728497479e30dc8a767aa67f50ef2bbec938978a559b2355e`.
 - Slurm marked job `13801` failed only after training. `save_total_limit=3` correctly retired checkpoint 5 after checkpoints 10, 15, and 20 existed, but post-training manifest code then attempted to hash the retired directory and emitted `checkpoint has no files: .../checkpoint-5`. Resume and all 20 optimizer steps had already succeeded. The launcher now records the initial checkpoint hash before resume and records whether the directory remains retained after training.
 - Job `13806` generated one deterministic no-hint candidate for each row of the untouched 32-row validation sample from checkpoint 20. All 32 queries and 32 responses are nonempty; all responses parse into the exact cited three-line schema; no query or response truncates. Retrieval recall@8 is 25/32, canonical answer correctness is 18/32, and 10/32 also satisfy the stricter lexical cited-answer-support SFT rule. Every output was inspected. Errors are substantive answer/target-selection or retrieval errors, not empty-output or protocol collapse.
-- No optimizer step has run for DPO, GRPO, or DAPO. Full-scale SFT has not started; the exact training-target reproduction audit is the remaining overfit promotion gate.
+- Job `13808` deterministically regenerated all 64 balanced training prompts from checkpoint 20, with hashes bound to both the model and SFT data. Exact decoded-text reproduction is 33/64: 18/32 query and 15/32 response. There are zero empty outputs, zero response truncations, and one query truncation. Exact-text reproduction is intentionally not treated as the capability score because correct responses may paraphrase reasoning or cite another valid retrieved source.
+- Job `13810` canonically revalidated every generated continuation against its original example, seed-selected bootstrap artifact, fixed retrieval context, and hashes with no repair. Generated queries retrieve answer-bearing evidence for 29/32 targets; one query repeats `cotton` to the 32-token cap and two valid queries miss answer-bearing evidence. All 32 generated responses parse; 31/32 have the exact canonical answer and 30/32 also cite a source with lexical answer support. The canonical answer miss is `Madeleine K. Albright` versus `Madeleine Albright` (F1 `0.8`), which remains a visible strict-metric miss rather than being normalized away.
+- Turing automatically added one GPU to job `13810` because its CPU-only launcher requested four CPU cores. The audit finished in three seconds and did not execute CUDA work. The launcher is reduced to two cores so future capability audits remain CPU-only under the observed cluster billing rule.
+- No optimizer step has run for DPO, GRPO, or DAPO. Full-scale SFT has not started; larger checkpoint-20 student-only rollout collection is now the active data gate.
 
 ## Verification state
 
-- Local verification: 254 unit tests passed; targeted CLI/runtime/reproduction suite passed 42 tests. One expected upstream Torch deprecation warning remains.
+- Local verification: 258 unit tests passed. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. One expected upstream Torch deprecation warning remains.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
@@ -164,13 +167,14 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 
 ## Immediate next evidence gate
 
-The SFT overfit promotion gate is complete only when all of the following exist:
+The SFT overfit promotion gate has passed: the manifest fix, deterministic reproduction, canonical capability scoring, held-out generation, exact response inspection, and save/resume evidence all exist. The next full-SFT data gate requires:
 
-- The checkpoint-5 manifest ordering fix passes the full local suite and is deployed at an exact commit.
-- Checkpoint 20 deterministically regenerates every one of the 64 balanced verified SFT prompts in batched inference, with exact decoded target-match, empty-output, and truncation metrics persisted by task. This is separate from teacher-forced token accuracy.
-- Exact training-target generations and all 32 held-out validation generations are manually inspected, with canonical and human-audited outcomes kept separate.
-- A checkpoint-retention decision preserves the verified final model and required resume evidence while removing only confirmed redundant scratch artifacts.
-- Full SFT data scale, learning rate, checkpoint interval, held-out generation interval, and stop/promotion criteria are frozen from the measured overfit evidence before launching the longer four-GPU run.
+- Select a larger train-only bootstrap pool at a frozen seed and hash; validation and official test remain excluded.
+- Shard it deterministically and run checkpoint-20 student-only, no-hint rollouts in parallel across available GPUs with batched query/response generation and explicit per-shard manifests.
+- Merge only exact shard IDs with duplicate/missing detection, then canonically revalidate every candidate before SFT selection.
+- Require nonempty, untruncated, answer-bearing query targets and fully parse-valid, answer-correct, cited, lexically supported response targets. Do not repair or synthesize rejected outputs.
+- Freeze full-SFT train/eval splits by trajectory ID, learning rate, checkpoint interval, generation-validation interval, and stop/promotion criteria before launching the longer four-GPU full-parameter run.
+- Preserve checkpoint 20 and the recorded checkpoint-5 resume hash; remove redundant scratch checkpoints only after the retention manifest is written and verified.
 
 The independent teacher gate still requires:
 

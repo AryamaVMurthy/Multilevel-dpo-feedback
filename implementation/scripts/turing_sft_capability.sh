@@ -3,7 +3,7 @@
 #SBATCH -p u22
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=00:30:00
 #SBATCH --output=logs/slurm-%x-%j.out
