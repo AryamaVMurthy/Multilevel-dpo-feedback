@@ -201,6 +201,17 @@ class CLITest(unittest.TestCase):
         self.assertEqual(parsed.min_train_pairs, 1000)
         self.assertEqual(parsed.func.__name__, "cmd_split_paired_sft")
 
+    def test_sft_training_cli_accepts_explicit_hash_bound_initial_checkpoint(self):
+        parsed = build_parser().parse_args([
+            "train-sft", "--config", "config.yaml", "--train", "train.jsonl",
+            "--eval", "eval.jsonl", "--output", "run", "--model", "checkpoint",
+            "--model-revision", "revision", "--initial-checkpoint-sha256", "a" * 64,
+            "--max-steps", "-1", "--max-length", "4096", "--per-device-train-batch-size", "1",
+            "--per-device-eval-batch-size", "1", "--dataloader-num-workers", "2",
+            "--gradient-accumulation-steps", "4", "--attention-implementation", "sdpa",
+        ])
+        self.assertEqual(parsed.initial_checkpoint_sha256, "a" * 64)
+
     def test_teacher_probe_supplies_bounded_retrieved_context_to_private_prompt(self):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "teacher-probe.json"

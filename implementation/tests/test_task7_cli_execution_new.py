@@ -40,7 +40,12 @@ class Task7CLIExecutionTest(unittest.TestCase):
                     return_value=(config["student_model"], config["student_revision"]),
                 ) as validate, patch(target) as run:
                     args.func(args)
-                validate.assert_called_once_with(config, requested_model=None, requested_revision=None)
+                validate.assert_called_once_with(
+                    config,
+                    requested_model=None,
+                    requested_revision=None,
+                    initial_checkpoint_sha256=None,
+                )
                 kwargs = run.call_args.kwargs
                 self.assertEqual(kwargs["eval_path"], Path("eval.jsonl"))
                 forwarded = kwargs["config"]

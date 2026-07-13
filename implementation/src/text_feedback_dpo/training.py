@@ -187,6 +187,7 @@ def validate_student_model_selection(
     *,
     requested_model: str | None = None,
     requested_revision: str | None = None,
+    initial_checkpoint_sha256: str | None = None,
 ) -> tuple[str, str]:
     configured_model = config.get("student_model")
     configured_revision = config.get("student_revision")
@@ -195,9 +196,35 @@ def validate_student_model_selection(
     if (requested_model is None) != (requested_revision is None):
         raise ValueError("model override requires both --model and --model-revision")
     if requested_model is None:
+        if initial_checkpoint_sha256 is not None:
+            raise ValueError("initial checkpoint SHA-256 requires a local model override")
         return PRIMARY_STUDENT_MODEL, PRIMARY_STUDENT_REVISION
     if requested_model == PRIMARY_STUDENT_MODEL and requested_revision == PRIMARY_STUDENT_REVISION:
+        if initial_checkpoint_sha256 is not None:
+            raise ValueError("initial checkpoint SHA-256 is invalid for the remote primary model")
         return requested_model, requested_revision
+    checkpoint = Path(requested_model)
+    if checkpoint.is_dir():
+        if requested_revision != PRIMARY_STUDENT_REVISION:
+            raise ValueError("local full-finetune checkpoint must retain the approved Qwen3-4B base revision")
+        if not isinstance(initial_checkpoint_sha256, str) or len(initial_checkpoint_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in initial_checkpoint_sha256
+        ):
+            raise ValueError("local full-finetune model requires a lowercase initial checkpoint SHA-256")
+        model_file = checkpoint / "model.safetensors"
+        if not model_file.is_file():
+            raise FileNotFoundError(f"local full-finetune checkpoint model is missing: {model_file}")
+        digest = hashlib.sha256()
+        with model_file.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        actual_sha256 = digest.hexdigest()
+        if actual_sha256 != initial_checkpoint_sha256:
+            raise ValueError(
+                f"local full-finetune checkpoint hash mismatch: expected {initial_checkpoint_sha256}, "
+                f"got {actual_sha256}"
+            )
+        return str(checkpoint), requested_revision
     training = config.get("training")
     if not isinstance(training, Mapping) or requested_model != training.get("student_fallback_model") or requested_revision != training.get("student_fallback_revision"):
         raise ValueError("model override is not the pinned primary or configured fallback")

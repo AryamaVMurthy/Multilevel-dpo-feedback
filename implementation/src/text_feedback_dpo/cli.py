@@ -410,7 +410,10 @@ def cmd_precompute_dpo_refs(args: argparse.Namespace) -> None:
 
     config = load_config(args.config)
     model_id, revision = validate_student_model_selection(
-        config, requested_model=args.model, requested_revision=args.model_revision,
+        config,
+        requested_model=args.model,
+        requested_revision=args.model_revision,
+        initial_checkpoint_sha256=args.initial_checkpoint_sha256,
     )
     rows = read_unique_jsonl(args.data, label="DPO reference precompute")
     tokenizer = load_tokenizer(model_id, revision=revision)
@@ -1117,7 +1120,10 @@ def cmd_train(args: argparse.Namespace) -> None:
     if args.method != "sft" and (args.packing or args.padding_free):
         raise ValueError("packing and padding-free controls are supported only for SFT")
     model_id, revision = validate_student_model_selection(
-        config, requested_model=args.model, requested_revision=args.model_revision,
+        config,
+        requested_model=args.model,
+        requested_revision=args.model_revision,
+        initial_checkpoint_sha256=args.initial_checkpoint_sha256,
     )
     common = {
         "learning_rate": args.learning_rate, "epochs": args.epochs,
@@ -1354,6 +1360,7 @@ def build_parser() -> argparse.ArgumentParser:
     refs.add_argument("--output", required=True, type=Path)
     refs.add_argument("--model")
     refs.add_argument("--model-revision")
+    refs.add_argument("--initial-checkpoint-sha256")
     refs.add_argument("--reference-checkpoint-hash", required=True)
     refs.add_argument("--prompt-context-schema", required=True, type=Path)
     refs.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
@@ -1415,6 +1422,7 @@ def build_parser() -> argparse.ArgumentParser:
         train.add_argument("--output", required=True, type=Path)
         train.add_argument("--model")
         train.add_argument("--model-revision")
+        train.add_argument("--initial-checkpoint-sha256")
         train.add_argument("--learning-rate", type=float, default=1e-6)
         train.add_argument("--epochs", type=float, default=1.0)
         train.add_argument("--max-steps", required=True, type=int)

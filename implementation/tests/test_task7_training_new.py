@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 from types import SimpleNamespace
@@ -388,6 +389,34 @@ class Task7TrainingTest(unittest.TestCase):
         self.assertEqual(validate_student_model_selection(config), ("Qwen/Qwen3-4B-Base", config["student_revision"]))
         with self.assertRaisesRegex(ValueError, "model override"):
             validate_student_model_selection(config, requested_model="other", requested_revision="other-rev")
+
+    def test_full_finetune_may_start_from_exact_hash_bound_local_4b_checkpoint(self):
+        config = {
+            "student_model": "Qwen/Qwen3-4B-Base",
+            "student_revision": "906bfd4b4dc7f14ee4320094d8b41684abff8539",
+            "training": {},
+        }
+        with TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            model_file = checkpoint / "model.safetensors"
+            model_file.write_bytes(b"full 4b checkpoint weights")
+            expected = hashlib.sha256(model_file.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "initial checkpoint SHA-256"):
+                validate_student_model_selection(
+                    config, requested_model=str(checkpoint), requested_revision=config["student_revision"]
+                )
+            with self.assertRaisesRegex(ValueError, "checkpoint hash mismatch"):
+                validate_student_model_selection(
+                    config, requested_model=str(checkpoint), requested_revision=config["student_revision"],
+                    initial_checkpoint_sha256="0" * 64,
+                )
+            self.assertEqual(
+                validate_student_model_selection(
+                    config, requested_model=str(checkpoint), requested_revision=config["student_revision"],
+                    initial_checkpoint_sha256=expected,
+                ),
+                (str(checkpoint), config["student_revision"]),
+            )
 
     def test_fallback_requires_persisted_intended_config_cuda_oom_evidence(self):
         with TemporaryDirectory() as directory:

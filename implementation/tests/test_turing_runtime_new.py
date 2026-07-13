@@ -105,6 +105,33 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertNotIn("OPTIMIZATION_DECISION", text)
         self.assertNotIn("SCALE_DECISION", text)
 
+    def test_full_sft_launcher_is_hash_bound_fresh_optimizer_full_run(self):
+        text = Path("scripts/turing_full_sft.sh").read_text(encoding="utf-8")
+        for required in (
+            "PROJECT_DIR", "EXPECTED_COMMIT", "CONFIG", "CONFIG_SHA256", "TRAIN",
+            "TRAIN_SHA256", "EVAL", "EVAL_SHA256", "SPLIT_REPORT",
+            "SPLIT_REPORT_SHA256", "OUTPUT", "START_MODEL", "START_MODEL_SHA256",
+            "START_REVISION", "LEARNING_RATE", "EPOCHS", "SAVE_STEPS", "EVAL_STEPS",
+            "GRADIENT_ACCUMULATION_STEPS", "EXPECTED_TRAIN_PAIRS", "EXPECTED_EVAL_PAIRS",
+        ):
+            self.assertIn(f'require_env "{required}"', text)
+        self.assertIn("#SBATCH --gres=gpu:4", text)
+        self.assertIn('train-sft', text)
+        self.assertIn('--initial-checkpoint-sha256 "$START_MODEL_SHA256"', text)
+        self.assertIn('--max-steps -1', text)
+        self.assertIn('--max-length 4096', text)
+        self.assertIn('--deepspeed-config configs/deepspeed_zero3.json', text)
+        self.assertIn('--gradient-checkpointing', text)
+        self.assertIn('--no-packing', text)
+        self.assertIn('--no-padding-free', text)
+        self.assertIn('--no-use-liger-kernel', text)
+        self.assertNotIn("--resume-from-checkpoint", text)
+        self.assertIn("optimizer_state=fresh", text)
+        self.assertIn("nvidia-smi --query-gpu", text)
+        self.assertIn("run-manifest.json", text)
+        self.assertIn("fallback_reason", text)
+        self.assertNotIn("|| true", text)
+
     def test_sft_reproduction_launcher_binds_checkpoint_data_and_generation_contract(self):
         text = Path("scripts/turing_sft_reproduction.sh").read_text(encoding="utf-8")
         for required in (
