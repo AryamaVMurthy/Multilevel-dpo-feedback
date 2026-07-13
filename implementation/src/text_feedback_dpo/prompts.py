@@ -63,6 +63,9 @@ def build_search_query_prompt(example: dict, hints: list[str]) -> str:
         "Generate one concise search query that will help retrieve evidence for the question.",
         "Return exactly one-line plain text, with no answer, explanation, XML, JSON, or code fence.",
         "",
+        "Example question: What gas do plants absorb from the air?",
+        "Example query: plants absorb carbon dioxide gas",
+        "",
         f"Question: {_question(example)}",
     ]
     if hints:
@@ -88,6 +91,14 @@ def build_cited_response_prompt(
         "Reasoning must contain at most 96 words.",
         "Use concise reasoning, cite every reasoning claim, and list each citation once in first-appearance order.",
         "Do not use XML, JSON, code fences, or URLs. Never reproduce URLs or source titles in your response.",
+        "",
+        "Worked format example:",
+        "Question: Which planet is known as the Red Planet?",
+        "Example source: Mars is known as the Red Planet [S001].",
+        "Answer: Mars",
+        "Reasoning: The source identifies Mars as the Red Planet [S001].",
+        "Sources: S001",
+        "Use this only as a format example; cite only IDs from the retrieved sources below.",
         "",
         "Retrieved sources:",
     ]
