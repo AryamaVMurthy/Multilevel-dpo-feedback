@@ -1040,7 +1040,16 @@ def cmd_collect(args: argparse.Namespace) -> None:
                         "explicit teacher recovery requires a private gold field to redact"
                     )
                 payload["private_gold_answer"] = "[redacted for explicit recovery]"
-                return prefix + marker + json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+                return prefix + marker + json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, indent=2
+                ) + """
+
+Explicit recovery constraint:
+The private answer was redacted. Do not name or quote any candidate answer from the
+question, failed response, source titles, or source snippets. Do not reveal an entity,
+date, number, place, or other answer candidate. Give only a generic directional hint
+about checking the responsible region, in at most 12 words. Return the JSON object now.
+"""
 
             fallback_source_prompts = [redact_teacher_gold(prompt) for prompt in prompts] if args.teacher_thinking else []
             fallback_rendered = render_teacher_prompts(
@@ -1068,7 +1077,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                     "prompt_token_counts": fallback_prompt_counts,
                     "max_new_tokens": legal_max_new_tokens,
                     "gold_redacted": True,
-                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted",
+                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted_generic_hint",
                 }, sort_keys=True), file=sys.stderr, flush=True)
                 return batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
@@ -1097,7 +1106,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 ],
                 fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
                 fallback_reason=(
-                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted"
+                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted_generic_hint"
                     if args.teacher_thinking else None
                 ),
             )
