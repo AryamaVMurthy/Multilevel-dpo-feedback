@@ -16,7 +16,7 @@ from text_feedback_dpo.runtime import GeneratedText
 from text_feedback_dpo.trajectories import TrajectoryError, validate_active_artifact
 
 
-EVALUATOR_VERSION = "cited-response-evaluator-v1"
+EVALUATOR_VERSION = "cited-response-evaluator-v2-standalone-article-answer"
 
 def source_records() -> list[dict]:
     return [

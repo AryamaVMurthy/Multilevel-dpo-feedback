@@ -18,6 +18,7 @@ for name in PROJECT_DIR DATA OUTPUT MODEL MODEL_REVISION DATASET_SOURCE DATASET_
   RESPONSE_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P; do
   [[ -n "${!name:-}" ]] || fail "required environment variable is missing: $name" bootstrap_contract_missing
 done
+[[ -n "${EVALUATOR_VERSION:-}" ]] || fail "required environment variable is missing: EVALUATOR_VERSION" bootstrap_contract_missing
 [[ "${SLURM_NNODES:?}" == 1 && "${SLURM_NTASKS:?}" == 1 ]] || fail "bootstrap requires one node and one task" allocation_shape_invalid
 [[ "${SLURM_GPUS_ON_NODE:?}" == 1 || "${SLURM_GPUS_ON_NODE}" == gpu:1 ]] || fail "bootstrap requires exactly one GPU" gpu_count_invalid
 [[ "$(git -C "$PROJECT_DIR" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]] || fail "remote commit differs from EXPECTED_COMMIT" commit_mismatch
@@ -46,9 +47,9 @@ mkdir -p "$HF_HOME" "$(dirname "$OUTPUT")" logs
 OUTPUT_MANIFEST="${OUTPUT%.*}.manifest.json"
 if [[ -e "$OUTPUT" ]]; then
   [[ -f "$OUTPUT_MANIFEST" ]] || fail "output exists without its completion manifest" incomplete_output_exists
-  uv run --frozen python - "$OUTPUT" "$OUTPUT_MANIFEST" "$DATA_SHA256" "$MODEL" "$MODEL_REVISION" "$POLICY_HASH" "$MODEL_ARTIFACT_IDENTITY" <<'PY'
+  uv run --frozen python - "$OUTPUT" "$OUTPUT_MANIFEST" "$DATA_SHA256" "$MODEL" "$MODEL_REVISION" "$POLICY_HASH" "$MODEL_ARTIFACT_IDENTITY" "$EVALUATOR_VERSION" <<'PY'
 import hashlib, json, sys
-output, manifest_path, data_hash, model, revision, policy_hash, artifact_hash = sys.argv[1:]
+output, manifest_path, data_hash, model, revision, policy_hash, artifact_hash, evaluator_version = sys.argv[1:]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 if manifest.get("command") != "bootstrap-rollouts" or manifest.get("dataset", {}).get("sha256") != data_hash:
     raise SystemExit("existing bootstrap output manifest identity mismatch")
@@ -56,6 +57,8 @@ model_manifest = manifest.get("model", {})
 expected_artifact = None if artifact_hash == "none" else artifact_hash
 if model_manifest != {"identity": model, "revision": revision, "policy_hash": policy_hash, "artifact_sha256": expected_artifact}:
     raise SystemExit("existing bootstrap output model identity mismatch")
+if manifest.get("evaluator_version") != evaluator_version:
+    raise SystemExit("existing bootstrap output evaluator identity mismatch")
 if not open(output, encoding="utf-8").read().strip():
     raise SystemExit("existing bootstrap output is empty")
 print("event=bootstrap_reuse status=validated fallback_reason=none")
@@ -81,4 +84,11 @@ uv run --frozen python -m text_feedback_dpo.cli bootstrap-rollouts \
   --query-temperature "$QUERY_TEMPERATURE" \
   --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" \
   --top-k 8 --k1 1.2 --b 0.75 --context-budget 4096
+uv run --frozen python - "$OUTPUT_MANIFEST" "$EVALUATOR_VERSION" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+if manifest.get("evaluator_version") != sys.argv[2]:
+    raise SystemExit("new bootstrap output evaluator identity mismatch")
+print("event=bootstrap_evaluator_identity_validated fallback_reason=none")
+PY
 printf 'event=bootstrap_complete output=%q fallback_reason=none\n' "$OUTPUT"

@@ -261,6 +261,28 @@ def cmd_select_balanced_sft(args: argparse.Namespace) -> None:
     write_json(args.report, report)
 
 
+def cmd_split_paired_sft(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.dataset import split_paired_sft_rows
+
+    rows = read_unique_jsonl(args.input, label="paired SFT input")
+    train, evaluation, report = split_paired_sft_rows(
+        rows,
+        eval_pairs=args.eval_pairs,
+        min_train_pairs=args.min_train_pairs,
+        seed=args.seed,
+    )
+    report.update({
+        "input_sha256": _sha256_file(args.input),
+        "train_sha256": _identity_hash({"rows": train}),
+        "eval_sha256": _identity_hash({"rows": evaluation}),
+    })
+    write_jsonl(train, args.train)
+    write_jsonl(evaluation, args.eval)
+    report["train_file_sha256"] = _sha256_file(args.train)
+    report["eval_file_sha256"] = _sha256_file(args.eval)
+    write_json(args.report, report)
+
+
 def cmd_evaluate_sft_reproduction(args: argparse.Namespace) -> None:
     from text_feedback_dpo.monitoring import build_sft_reproduction_report
     from text_feedback_dpo.runtime import (
@@ -565,7 +587,11 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 def cmd_generate_searchqa(args: argparse.Namespace) -> None:
     """Generate structured SearchQA query/search/cited-response trajectories."""
-    from text_feedback_dpo.batch_generation import RESPONSE_SCHEMA_VERSION, _validate_rows, run_fixed_retrieval_pipeline
+    from text_feedback_dpo.batch_generation import (
+        RESPONSE_SCHEMA_VERSION,
+        _validate_rows,
+        run_fixed_retrieval_pipeline,
+    )
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import generate_batch_records, generate_student_batch, load_student, load_tokenizer
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
@@ -675,7 +701,12 @@ def cmd_generate_searchqa(args: argparse.Namespace) -> None:
 
 def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
     """Generate multiple no-hint student candidates while loading the model once."""
-    from text_feedback_dpo.batch_generation import RESPONSE_SCHEMA_VERSION, _validate_rows, run_fixed_retrieval_pipeline
+    from text_feedback_dpo.batch_generation import (
+        EVALUATOR_VERSION,
+        RESPONSE_SCHEMA_VERSION,
+        _validate_rows,
+        run_fixed_retrieval_pipeline,
+    )
     from text_feedback_dpo.bootstrap import collect_bootstrap_rollouts
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
@@ -762,6 +793,7 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
         "source_schema": {**source_identity, "sha256": _identity_hash(source_identity)},
         "prompt": {**prompt_identity, "sha256": _identity_hash(prompt_identity)},
         "response_schema_version": RESPONSE_SCHEMA_VERSION,
+        "evaluator_version": EVALUATOR_VERSION,
         "retrieval": {
             "identity": "fixed_bm25", "top_k": args.top_k, "k1": args.k1, "b": args.b,
         },
@@ -1271,6 +1303,18 @@ def build_parser() -> argparse.ArgumentParser:
     balanced_sft.add_argument("--per-task", required=True, type=int)
     balanced_sft.add_argument("--seed", required=True, type=int)
     balanced_sft.set_defaults(func=cmd_select_balanced_sft)
+    paired_sft = sub.add_parser(
+        "split-paired-sft",
+        help="create deterministic balanced trajectory-disjoint SFT train/eval pairs",
+    )
+    paired_sft.add_argument("--input", required=True, type=Path)
+    paired_sft.add_argument("--train", required=True, type=Path)
+    paired_sft.add_argument("--eval", required=True, type=Path)
+    paired_sft.add_argument("--report", required=True, type=Path)
+    paired_sft.add_argument("--eval-pairs", required=True, type=int)
+    paired_sft.add_argument("--min-train-pairs", required=True, type=int)
+    paired_sft.add_argument("--seed", required=True, type=int)
+    paired_sft.set_defaults(func=cmd_split_paired_sft)
     reproduction = sub.add_parser(
         "evaluate-sft-reproduction",
         help="generate and exactly compare all verified SFT completions from a checkpoint",

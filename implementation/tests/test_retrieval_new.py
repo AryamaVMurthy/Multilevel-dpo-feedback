@@ -158,6 +158,17 @@ class FixedBM25RetrievalTest(unittest.TestCase):
         self.assertIs(retrieval.normalize_answer, scoring.normalize_answer)
         self.assertFalse(hasattr(retrieval, "_normalize_answer"))
 
+    def test_standalone_article_answer_is_preserved_for_vitamin_a(self):
+        self.assertEqual(scoring.normalize_answer("A"), "a")
+        self.assertEqual(scoring.normalize_answer("The Ada Lovelace"), "ada lovelace")
+        ranked = FixedBM25Retriever([
+            source("S001", 1, "Vitamin A is also called retinol."),
+            source("S002", 2, "Vitamin C is ascorbic acid."),
+        ]).search("retinol vitamin", top_k=2)
+        metrics = retrieval_metrics(ranked, "A", ks=(1, 2))
+        self.assertEqual(metrics["recall@1"], 1.0)
+        self.assertEqual(metrics["first_answer_rank"], 1)
+
     def test_retrieval_metrics_reject_malformed_ranked_results(self):
         ranked = FixedBM25Retriever(
             [source("S001", 1, "alpha evidence"), source("S002", 2, "Ada Lovelace evidence")]

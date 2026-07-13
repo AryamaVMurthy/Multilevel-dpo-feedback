@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
 
-from text_feedback_dpo.scoring import normalize_answer
+from text_feedback_dpo.scoring import contains_normalized_answer, normalize_answer
 
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
@@ -188,11 +188,8 @@ def retrieve(
 
 
 def _contains_answer(result: Mapping[str, Any], normalized_gold: str) -> bool:
-    answer_tokens = normalized_gold.split()
     source_text = " ".join(str(result.get(field, "")) for field in ("title", "snippet"))
-    source_tokens = normalize_answer(source_text).split()
-    width = len(answer_tokens)
-    return any(source_tokens[index : index + width] == answer_tokens for index in range(len(source_tokens) - width + 1))
+    return contains_normalized_answer(source_text, normalized_gold)
 
 
 def _validate_ranked_results(ranked_results: Sequence[Mapping[str, Any]]) -> None:

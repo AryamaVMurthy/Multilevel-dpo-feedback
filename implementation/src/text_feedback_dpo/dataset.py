@@ -525,6 +525,98 @@ def select_balanced_sft_rows(
     return output
 
 
+def split_paired_sft_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    eval_pairs: int,
+    min_train_pairs: int,
+    seed: int,
+) -> tuple[list[dict], list[dict], dict]:
+    """Create balanced, trajectory-disjoint train/eval SFT pairs without duplication."""
+    for label, value in (("eval_pairs", eval_pairs), ("min_train_pairs", min_train_pairs)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"paired SFT {label} must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("paired SFT seed must be an integer")
+    grouped: dict[str, dict[str, dict]] = {}
+    seen_ids: set[str] = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"paired SFT row {index} must be an object")
+        row_id = row.get("id")
+        task = row.get("task")
+        metadata = row.get("metadata")
+        if not isinstance(row_id, str) or not row_id or row_id in seen_ids:
+            raise ValueError(f"paired SFT row {index} requires a unique non-empty ID")
+        seen_ids.add(row_id)
+        if task not in {"query", "response"}:
+            raise ValueError(f"paired SFT row {row_id} requires task=query or task=response")
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("provenance") != "student"
+            or metadata.get("no_hint") is not True
+        ):
+            raise ValueError(f"paired SFT row {row_id} must be student-generated no-hint supervision")
+        trajectory_id = metadata.get("trajectory_id")
+        if not isinstance(trajectory_id, str) or not trajectory_id:
+            raise ValueError(f"paired SFT row {row_id} requires a trajectory_id")
+        if (
+            not isinstance(row.get("prompt"), str)
+            or not str(row["prompt"]).strip()
+            or not isinstance(row.get("completion"), str)
+            or not str(row["completion"]).strip()
+        ):
+            raise ValueError(f"paired SFT row {row_id} requires non-empty prompt/completion")
+        tasks = grouped.setdefault(trajectory_id, {})
+        if task in tasks:
+            raise ValueError(f"paired SFT trajectory {trajectory_id} contains duplicate {task} rows")
+        tasks[str(task)] = dict(row)
+
+    paired = [trajectory_id for trajectory_id, tasks in grouped.items() if set(tasks) == {"query", "response"}]
+    required_pairs = eval_pairs + min_train_pairs
+    if len(paired) < required_pairs:
+        raise ValueError(
+            f"paired SFT requires at least {required_pairs} paired trajectories "
+            f"({eval_pairs} eval + {min_train_pairs} train), got {len(paired)}"
+        )
+
+    def key(trajectory_id: str) -> tuple[str, str]:
+        return hashlib.sha256(f"{seed}\0{trajectory_id}".encode()).hexdigest(), trajectory_id
+
+    ordered = sorted(paired, key=key)
+    eval_ids = ordered[:eval_pairs]
+    train_ids = ordered[eval_pairs:]
+
+    def flatten(trajectory_ids: Sequence[str]) -> list[dict]:
+        output: list[dict] = []
+        for trajectory_id in trajectory_ids:
+            output.extend((grouped[trajectory_id]["query"], grouped[trajectory_id]["response"]))
+        return output
+
+    train = flatten(train_ids)
+    evaluation = flatten(eval_ids)
+    report = {
+        "input_rows": len(seen_ids),
+        "input_trajectories": len(grouped),
+        "paired_trajectories": len(paired),
+        "excluded_unpaired_trajectories": len(grouped) - len(paired),
+        "train_pairs": len(train_ids),
+        "train_rows": len(train),
+        "eval_pairs": len(eval_ids),
+        "eval_rows": len(evaluation),
+        "seed": seed,
+        "assignment": "lowest_sha256_seed_nul_trajectory_id_to_eval_v1",
+        "train_trajectory_ids_sha256": hashlib.sha256(
+            json.dumps(train_ids, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "eval_trajectory_ids_sha256": hashlib.sha256(
+            json.dumps(eval_ids, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "trajectory_overlap": 0,
+    }
+    return train, evaluation, report
+
+
 def build_sft_rows_from_bootstrap(
     bootstrap_rows: list[dict],
     *,

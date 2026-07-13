@@ -7,13 +7,38 @@ from collections.abc import Mapping, Sequence
 
 _CITATION_ID_PATTERN = re.compile(r"(?<!\w)(S\d{3})(?!\w)")
 _CITATION_MENTION_PATTERN = re.compile(r"\[(S\d{3})\]")
+_ARTICLES = {"a", "an", "the"}
+
+
+def _basic_normalize(value: str) -> list[str]:
+    value = value.lower()
+    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    return value.split()
 
 
 def normalize_answer(value: str) -> str:
-    value = value.lower()
-    value = re.sub(r"[^a-z0-9\s]", " ", value)
-    value = re.sub(r"\b(a|an|the)\b", " ", value)
-    return " ".join(value.split())
+    tokens = _basic_normalize(value)
+    without_articles = [token for token in tokens if token not in _ARTICLES]
+    if without_articles:
+        return " ".join(without_articles)
+    if len(tokens) == 1 and tokens[0] in _ARTICLES:
+        return tokens[0]
+    return ""
+
+
+def contains_normalized_answer(source_text: str, normalized_answer: str) -> bool:
+    target = normalized_answer.split()
+    source_tokens = (
+        _basic_normalize(source_text)
+        if len(target) == 1 and target[0] in _ARTICLES
+        else normalize_answer(source_text).split()
+    )
+    if not target:
+        return False
+    return any(
+        source_tokens[index : index + len(target)] == target
+        for index in range(len(source_tokens) - len(target) + 1)
+    )
 
 
 def _f1(prediction: str, gold: str) -> float:
@@ -50,11 +75,7 @@ def score_searchqa(response: str, gold_answer: str, packed_evidence: str) -> dic
 
 
 def _contains_normalized_phrase(source: dict, normalized_gold: str) -> bool:
-    target = normalized_gold.split()
-    source_tokens = normalize_answer(f"{source['title']} {source['snippet']}").split()
-    if not target:
-        return False
-    return any(source_tokens[index : index + len(target)] == target for index in range(len(source_tokens) - len(target) + 1))
+    return contains_normalized_answer(f"{source['title']} {source['snippet']}", normalized_gold)
 
 
 def _line_content(text: object, label: str) -> str:

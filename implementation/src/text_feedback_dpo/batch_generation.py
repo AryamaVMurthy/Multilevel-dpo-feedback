@@ -24,7 +24,7 @@ FIXED_B = 0.75
 PROMPT_VERSION = "fixed-retrieval-cited-v1"
 SCAFFOLD_PROMPT_VERSION = "fixed-retrieval-cited-answer-prefix-v2"
 RESPONSE_SCHEMA_VERSION = 1
-EVALUATOR_VERSION = "cited-response-evaluator-v1"
+EVALUATOR_VERSION = "cited-response-evaluator-v2-standalone-article-answer"
 MAX_QUERY_TOKENS = 16
 CANONICAL_ARTIFACT_HASH_FIELDS = (
     "raw_query", "raw_response", "parsed_response", "rendered_visible_response",

@@ -151,6 +151,19 @@ class CitedResponseRenderingTest(unittest.TestCase):
 
 
 class CitedResponseScoringTest(unittest.TestCase):
+    def test_scores_standalone_vitamin_a_answer_and_support(self):
+        sources = [source("S001", "Retinol", "Vitamin A is also called retinol.")]
+        result = score_cited_response(
+            "Answer: A\nReasoning: The source identifies vitamin A as retinol [S001].\nSources: S001",
+            "A",
+            sources,
+            truncated=False,
+        )
+        self.assertTrue(result["parse_valid"])
+        self.assertTrue(result["answer_correct"])
+        self.assertTrue(result["correct"])
+        self.assertEqual(result["lexical_cited_answer_support"], 1.0)
+
     def test_scores_answer_and_citation_support_metrics(self):
         result = score_cited_response(
             "Answer: Ada Lovelace\n"

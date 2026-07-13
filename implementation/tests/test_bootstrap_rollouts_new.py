@@ -9,7 +9,11 @@ from text_feedback_dpo.bootstrap import (
     validate_bootstrap_rows,
 )
 from text_feedback_dpo.cli import build_parser
-from text_feedback_dpo.dataset import build_sft_rows_from_bootstrap, select_balanced_sft_rows
+from text_feedback_dpo.dataset import (
+    build_sft_rows_from_bootstrap,
+    select_balanced_sft_rows,
+    split_paired_sft_rows,
+)
 from text_feedback_dpo.runtime import GeneratedText
 
 
@@ -77,6 +81,46 @@ class BootstrapRolloutsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "student-generated no-hint"):
             select_balanced_sft_rows([verified, invalid], per_task=1, seed=1)
 
+    def test_paired_sft_split_is_deterministic_balanced_and_trajectory_disjoint(self):
+        rows = []
+        for trajectory in range(10):
+            for task in ("query", "response"):
+                rows.append({
+                    "id": f"t{trajectory}::sft::{task}", "task": task,
+                    "prompt": f"prompt {trajectory} {task}", "completion": f" completion {trajectory} {task}",
+                    "metadata": {
+                        "trajectory_id": f"t{trajectory}", "seed": 11,
+                        "provenance": "student", "no_hint": True,
+                    },
+                })
+        rows.append({
+            "id": "query-only::sft::query", "task": "query", "prompt": "p", "completion": " q",
+            "metadata": {"trajectory_id": "query-only", "seed": 11, "provenance": "student", "no_hint": True},
+        })
+        train, evaluation, report = split_paired_sft_rows(
+            rows, eval_pairs=2, min_train_pairs=5, seed=20260713,
+        )
+        reversed_train, reversed_eval, reversed_report = split_paired_sft_rows(
+            reversed(rows), eval_pairs=2, min_train_pairs=5, seed=20260713,
+        )
+        self.assertEqual((train, evaluation, report), (reversed_train, reversed_eval, reversed_report))
+        self.assertEqual(len(train), 16)
+        self.assertEqual(len(evaluation), 4)
+        self.assertEqual([row["task"] for row in evaluation], ["query", "response", "query", "response"])
+        train_ids = {row["metadata"]["trajectory_id"] for row in train}
+        eval_ids = {row["metadata"]["trajectory_id"] for row in evaluation}
+        self.assertFalse(train_ids & eval_ids)
+        self.assertEqual(report["excluded_unpaired_trajectories"], 1)
+
+    def test_paired_sft_split_fails_when_train_or_eval_pair_gate_is_unmet(self):
+        row = {
+            "id": "t1::sft::query", "task": "query", "prompt": "p", "completion": " q",
+            "metadata": {"trajectory_id": "t1", "seed": 11, "provenance": "student", "no_hint": True},
+        }
+        response = {**row, "id": "t1::sft::response", "task": "response"}
+        with self.assertRaisesRegex(ValueError, "paired trajectories"):
+            split_paired_sft_rows([row, response], eval_pairs=1, min_train_pairs=1, seed=1)
+
     def test_query_sft_is_independent_when_response_is_invalid(self):
         example = _example()
         malformed = run_fixed_retrieval_pipeline(
@@ -115,6 +159,7 @@ class BootstrapRolloutsTest(unittest.TestCase):
         self.assertIn("QUERY_MIN_NEW_TOKENS", script)
         self.assertIn("RESPONSE_MIN_NEW_TOKENS", script)
         self.assertIn("MODEL_ARTIFACT_SHA256", script)
+        self.assertIn("EVALUATOR_VERSION", script)
         self.assertIn("--model-artifact-sha256", script)
         self.assertIn("model.safetensors", script)
         self.assertNotIn('${QUERY_MIN_NEW_TOKENS:-', script)

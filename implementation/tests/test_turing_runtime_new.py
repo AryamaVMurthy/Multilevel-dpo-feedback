@@ -149,6 +149,39 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertNotIn("#SBATCH --gres=gpu:", text)
         self.assertNotIn("|| true", text)
 
+    def test_bootstrap_merge_validates_all_shard_manifests_and_seals_merged_hash(self):
+        text = Path("scripts/turing_merge_bootstrap.sh").read_text(encoding="utf-8")
+        for required in (
+            "PROJECT_DIR", "EXPECTED_COMMIT", "PREPARE_MANIFEST", "PREPARE_MANIFEST_SHA256",
+            "SHARD_DIR", "SHARD_COUNT", "OUTPUT", "MODEL", "MODEL_REVISION",
+            "MODEL_ARTIFACT_SHA256", "POLICY_HASH", "PROMPT_VERSION", "SEEDS",
+            "EVALUATOR_VERSION",
+            "QUERY_BATCH_SIZE", "RESPONSE_BATCH_SIZE", "QUERY_MAX_NEW_TOKENS",
+            "RESPONSE_MAX_NEW_TOKENS", "QUERY_MIN_NEW_TOKENS", "RESPONSE_MIN_NEW_TOKENS",
+            "QUERY_TEMPERATURE", "RESPONSE_TEMPERATURE", "TOP_P",
+        ):
+            self.assertIn(f'require_env "{required}"', text)
+        self.assertIn("merge-predictions", text)
+        self.assertIn("predictions-{index}.manifest.json", text)
+        self.assertIn("merged_sha256", text)
+        self.assertIn("fallback_reason", text)
+        self.assertIn("#SBATCH --cpus-per-task=2", text)
+        self.assertNotIn("#SBATCH --gres=gpu:", text)
+        self.assertNotIn("|| true", text)
+
+    def test_paired_sft_split_launcher_is_hash_bound_disjoint_and_cpu_only(self):
+        text = Path("scripts/turing_split_paired_sft.sh").read_text(encoding="utf-8")
+        for required in (
+            "PROJECT_DIR", "EXPECTED_COMMIT", "INPUT", "INPUT_SHA256", "TRAIN",
+            "EVAL", "REPORT", "EVAL_PAIRS", "MIN_TRAIN_PAIRS", "SEED",
+        ):
+            self.assertIn(f'require_env "{required}"', text)
+        self.assertIn("split-paired-sft", text)
+        self.assertIn("trajectory_overlap", text)
+        self.assertIn("#SBATCH --cpus-per-task=2", text)
+        self.assertNotIn("#SBATCH --gres=gpu:", text)
+        self.assertNotIn("|| true", text)
+
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):

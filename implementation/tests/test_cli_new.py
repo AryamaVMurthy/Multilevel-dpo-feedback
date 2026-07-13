@@ -191,6 +191,16 @@ class CLITest(unittest.TestCase):
         self.assertEqual(parsed.bootstrap_sha256, "d" * 64)
         self.assertEqual(parsed.func.__name__, "cmd_evaluate_sft_capability")
 
+    def test_paired_sft_split_cli_requires_explicit_train_and_eval_gates(self):
+        parsed = build_parser().parse_args([
+            "split-paired-sft", "--input", "sft.jsonl", "--train", "train.jsonl",
+            "--eval", "eval.jsonl", "--report", "split.json", "--eval-pairs", "256",
+            "--min-train-pairs", "1000", "--seed", "20260713",
+        ])
+        self.assertEqual(parsed.eval_pairs, 256)
+        self.assertEqual(parsed.min_train_pairs, 1000)
+        self.assertEqual(parsed.func.__name__, "cmd_split_paired_sft")
+
     def test_teacher_probe_supplies_bounded_retrieved_context_to_private_prompt(self):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "teacher-probe.json"
