@@ -9,6 +9,7 @@ from text_feedback_dpo.bootstrap import (
     validate_bootstrap_rows,
 )
 from text_feedback_dpo.cli import build_parser
+from text_feedback_dpo.dataset import build_sft_rows_from_bootstrap
 from text_feedback_dpo.runtime import GeneratedText
 
 
@@ -36,7 +37,33 @@ def _artifact(example: dict, *, policy_hash="policy-v1") -> dict:
     )[0]
 
 
+class _Tokenizer:
+    eos_token = "<eos>"
+
+    def encode(self, text, add_special_tokens=False):
+        return list(range(len(text.split())))
+
+
 class BootstrapRolloutsTest(unittest.TestCase):
+    def test_query_sft_is_independent_when_response_is_invalid(self):
+        example = _example()
+        malformed = run_fixed_retrieval_pipeline(
+            [example],
+            query_generate_batch=lambda _prompts: [GeneratedText("first algorithm author", False)],
+            response_generate_batch=lambda _prompts: [GeneratedText("Ada Lovelace", False)],
+            policy_hash="policy-v1",
+        )[0]
+        bootstrap = collect_bootstrap_rollouts(
+            [example], seeds=(11,), generate_seed_batch=lambda _batch, **_kwargs: [malformed]
+        )
+        rows, report = build_sft_rows_from_bootstrap(
+            bootstrap, examples={"q1": example}, tokenizer=_Tokenizer()
+        )
+        self.assertEqual([row["task"] for row in rows], ["query"])
+        self.assertEqual(report["query_unique_examples"], 1)
+        self.assertEqual(report["response_unique_examples"], 0)
+        self.assertEqual(report["response_exclusion_counts"]["response_not_verified_correct"], 1)
+
     def test_pool_selection_is_exact_deterministic_and_input_order_independent(self):
         examples = [_example(f"q{index}") for index in range(20)]
         selected = select_bootstrap_pool(examples, count=7, seed=20260713)

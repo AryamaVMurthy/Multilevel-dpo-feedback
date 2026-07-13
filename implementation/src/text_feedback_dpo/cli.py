@@ -10,6 +10,7 @@ from pathlib import Path
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.dataset import (
     attach_evidence,
+    build_sft_rows_from_bootstrap,
     build_sft_rows_from_trajectories,
     load_searchqa_split_with_stats,
     stream_searchqa_split_with_stats,
@@ -177,10 +178,28 @@ def cmd_build_sft(args: argparse.Namespace) -> None:
     examples = {row["id"]: row for row in read_unique_jsonl(args.data, label="SFT canonical dataset")}
     trajectories = read_unique_jsonl(args.trajectories, label="SFT trajectories")
     tokenizer = load_tokenizer(model_id, revision=revision)
-    rows, report = build_sft_rows_from_trajectories(
-        trajectories, examples=examples, tokenizer=tokenizer,
-        min_coverage=args.min_coverage, min_rows=args.min_rows,
-    )
+    bootstrap_flags = [isinstance(row.get("candidates"), list) for row in trajectories]
+    if any(bootstrap_flags) and not all(bootstrap_flags):
+        raise ValueError("SFT input mixes bootstrap and intervention trajectory schemas")
+    if all(bootstrap_flags):
+        rows, report = build_sft_rows_from_bootstrap(
+            trajectories, examples=examples, tokenizer=tokenizer,
+        )
+        report["input_schema"] = "bootstrap-rollouts-v1"
+        query_coverage = report["query_unique_examples"] / max(1, report["input_examples"])
+        response_coverage = report["response_unique_examples"] / max(1, report["input_examples"])
+        report["query_coverage"] = query_coverage
+        report["response_coverage"] = response_coverage
+        if min(query_coverage, response_coverage) < args.min_coverage or len(rows) < args.min_rows:
+            from text_feedback_dpo.dataset import SFTDataGateError
+
+            raise SFTDataGateError("bootstrap SFT coverage gate failed", report)
+    else:
+        rows, report = build_sft_rows_from_trajectories(
+            trajectories, examples=examples, tokenizer=tokenizer,
+            min_coverage=args.min_coverage, min_rows=args.min_rows,
+        )
+        report["input_schema"] = "minimal-intervention-trajectories-v1"
     write_jsonl(rows, args.output)
     write_json(args.report, report)
 

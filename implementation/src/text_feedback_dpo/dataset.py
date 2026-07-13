@@ -474,6 +474,122 @@ def build_sft_rows_from_trajectories(
 build_task7_sft_rows = build_sft_rows_from_trajectories
 
 
+def build_sft_rows_from_bootstrap(
+    bootstrap_rows: list[dict],
+    *,
+    examples: Mapping[str, Mapping[str, object]],
+    tokenizer: object,
+    max_length: int = SFT_MAX_LENGTH,
+) -> tuple[list[dict], dict]:
+    """Select query and response supervision independently from no-hint rollouts."""
+    from text_feedback_dpo.bootstrap import validate_bootstrap_rows
+
+    if max_length != SFT_MAX_LENGTH:
+        raise ValueError("bootstrap SFT max_length must remain exactly 4096")
+    ordered_examples: list[Mapping[str, object]] = []
+    expected_seeds: list[int] | None = None
+    for row in bootstrap_rows:
+        example_id = row.get("id")
+        example = examples.get(str(example_id))
+        if not isinstance(example, Mapping):
+            raise ValueError(f"bootstrap SFT is missing canonical example {example_id}")
+        seeds = row.get("seeds")
+        if not isinstance(seeds, list) or any(not isinstance(seed, int) for seed in seeds):
+            raise ValueError(f"bootstrap SFT row {example_id} has invalid seeds")
+        if expected_seeds is None:
+            expected_seeds = seeds
+        elif seeds != expected_seeds:
+            raise ValueError("bootstrap SFT rows must share one exact seed list")
+        ordered_examples.append(example)
+    validated = validate_bootstrap_rows(
+        bootstrap_rows,
+        examples=ordered_examples,
+        expected_seeds=expected_seeds or [],
+    )
+    report = {
+        "input_examples": len(validated),
+        "query_rows": 0,
+        "response_rows": 0,
+        "query_unique_examples": 0,
+        "response_unique_examples": 0,
+        "query_exclusion_counts": {},
+        "response_exclusion_counts": {},
+        "max_length": max_length,
+    }
+    output: list[dict] = []
+
+    def exclude(task: str, reason: str) -> None:
+        counts = report[f"{task}_exclusion_counts"]
+        counts[reason] = counts.get(reason, 0) + 1
+
+    for row in validated:
+        query_candidates: list[tuple[int, int, Mapping[str, object]]] = []
+        response_candidates: list[tuple[int, Mapping[str, object]]] = []
+        for candidate in row["candidates"]:
+            artifact = candidate["artifact"]
+            seed = int(candidate["seed"])
+            truncation = artifact["truncation"]
+            first_rank = artifact["retrieval_metrics"]["first_answer_rank"]
+            raw_query = artifact.get("raw_query")
+            if truncation["query"] or not isinstance(raw_query, str) or not raw_query.strip():
+                exclude("query", "query_invalid_or_truncated")
+            elif first_rank is None:
+                exclude("query", "query_answer_recall_missing")
+            else:
+                query_candidates.append((int(first_rank), seed, artifact))
+            score = artifact["cited_score"]
+            response_ok = (
+                not truncation["query"]
+                and not truncation["response"]
+                and isinstance(score, Mapping)
+                and score.get("correct") is True
+                and score.get("parse_valid") is True
+                and score.get("answer_correct") is True
+                and score.get("lexical_cited_answer_support") == 1.0
+            )
+            if response_ok:
+                response_candidates.append((seed, artifact))
+            else:
+                exclude("response", "response_not_verified_correct")
+
+        selected = {
+            "query": min(query_candidates, default=None, key=lambda item: (item[0], item[1])),
+            "response": min(response_candidates, default=None, key=lambda item: item[0]),
+        }
+        for task, choice in selected.items():
+            if choice is None:
+                continue
+            seed = choice[1] if task == "query" else choice[0]
+            artifact = choice[2] if task == "query" else choice[1]
+            prompt_field = "query_prompt" if task == "query" else "response_prompt"
+            completion_field = "raw_query" if task == "query" else "raw_response"
+            completion = _completion(artifact[completion_field], task=task)
+            if _sft_combined_token_count(tokenizer, str(artifact[prompt_field]), completion) > max_length:
+                exclude(task, "combined_token_length_exceeds_max_length")
+                continue
+            sft_row = {
+                "id": f"{row['id']}::sft::{task}",
+                "task": task,
+                "prompt": artifact[prompt_field],
+                "completion": completion,
+                "metadata": {
+                    "trajectory_id": row["id"],
+                    "seed": seed,
+                    "provenance": "student",
+                    "no_hint": True,
+                    "query_prompt_hash": artifact["query_prompt_hash"],
+                    "response_prompt_hash": artifact.get("response_prompt_hash"),
+                    "retrieval_context_hash": artifact.get("retrieval_context_hash"),
+                },
+            }
+            if task == "response":
+                sft_row["visible_response"] = artifact["raw_response"]
+            output.append(sft_row)
+            report[f"{task}_rows"] += 1
+            report[f"{task}_unique_examples"] += 1
+    return output, report
+
+
 def build_rl_rows_from_trajectories(
     trajectories: list[dict],
     *,
