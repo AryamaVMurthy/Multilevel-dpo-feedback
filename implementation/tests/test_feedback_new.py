@@ -59,6 +59,26 @@ class FeedbackContractTest(unittest.TestCase):
         self.assertNotIn("<feedback>", prompt)
         self.assertNotIn("<teacher_task>", prompt)
 
+    def test_teacher_prompt_preserves_explicit_empty_retrieval_for_query_repair(self):
+        prompt = build_teacher_prompt(
+            {
+                "question": "Who?",
+                "gold_answer": "Ada",
+                "sources": [
+                    {"source_id": "S001", "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada evidence"},
+                ],
+            },
+            "",
+            [],
+            raw_query="",
+            retrieved_sources=[],
+            diagnostics={"responsible_region": "query/retrieval", "error_code": "query_invalid_format"},
+        )
+
+        self.assertIn('"retrieved_records": []', prompt)
+        self.assertIn('"repair_region": "query/retrieval"', prompt)
+        self.assertNotIn("Ada evidence", prompt)
+
     def test_diagnostics_select_the_earliest_failure_region_and_label_support_as_a_proxy(self):
         base = {
             "raw_query": "",

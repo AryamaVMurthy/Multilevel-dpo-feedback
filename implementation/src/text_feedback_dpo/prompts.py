@@ -136,13 +136,17 @@ def build_teacher_prompt(
     if isinstance(level, bool) or not isinstance(level, int) or level <= 0:
         raise ValueError("escalation level must be a positive integer")
     prior = [{"level": item.get("level"), "hint": item.get("hint")} for item in interventions]
+    effective_repair_region = repair_region or diagnostics.get("responsible_region")
+    if not retrieved_sources and effective_repair_region != "query/retrieval":
+        raise ValueError("empty retrieved source records are valid only for query/retrieval repair")
+    validated_retrieved_records = validate_retrieved_sources(retrieved_sources) if retrieved_sources else []
     compact_retrieved_records = [
         {
             "source_id": source["source_id"],
             "title": source["title"],
             "snippet": source["snippet"],
         }
-        for source in validate_retrieved_sources(retrieved_sources)
+        for source in validated_retrieved_records
     ]
     request = {
         "available_source_count": len(sources),
@@ -154,7 +158,7 @@ def build_teacher_prompt(
         "deterministic_diagnostics": dict(diagnostics),
         "prior_hints": prior,
         "escalation_level": level,
-        "repair_region": repair_region or diagnostics.get("responsible_region"),
+        "repair_region": effective_repair_region,
     }
     return """You are a privileged Qwen3 instruct tutor. The fields below are private.
 Localize the earliest responsible region and provide one minimal, answer-free directional hint.
