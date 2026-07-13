@@ -113,12 +113,15 @@ def collect_dataset_batchwise(
     student_generate_batch: Callable[..., list[object]],
     teacher_generate_batch: Callable[..., list[str]],
     max_interventions: int,
+    teacher_max_new_tokens: int = 96,
     sibling_generate_batch: Callable[..., list[object]] | None = None,
     sibling_seeds: Sequence[int] = (),
     student_seed: int,
 ) -> list[dict]:
     if not isinstance(max_interventions, int) or max_interventions < 0:
         raise ValueError("max_interventions must be a nonnegative integer")
+    if isinstance(teacher_max_new_tokens, bool) or not isinstance(teacher_max_new_tokens, int) or teacher_max_new_tokens <= 0:
+        raise ValueError("teacher_max_new_tokens must be a positive integer")
     if isinstance(student_seed, bool) or not isinstance(student_seed, int) or student_seed < 0:
         raise ValueError("student_seed must be a nonnegative integer")
     ids = _validate_ids(examples)
@@ -179,7 +182,9 @@ def collect_dataset_batchwise(
                 ))
         if not failed_ids:
             break
-        feedback_rows = teacher_generate_batch(teacher_prompts, max_new_tokens=512, temperature=0.0, top_p=1.0)
+        feedback_rows = teacher_generate_batch(
+            teacher_prompts, max_new_tokens=teacher_max_new_tokens, temperature=0.0, top_p=1.0,
+        )
         if not isinstance(feedback_rows, list) or len(feedback_rows) != len(failed_ids):
             raise ValueError(f"teacher batch cardinality mismatch at attempt {attempt_index}")
         for example_id, teacher_prompt, raw_feedback in zip(

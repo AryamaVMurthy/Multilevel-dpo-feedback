@@ -39,7 +39,10 @@ class FeedbackContractTest(unittest.TestCase):
             {
                 "question": "Who?",
                 "gold_answer": "Ada",
-                "sources": [{"source_id": "S001", "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada evidence"}],
+                "sources": [
+                    {"source_id": "S001", "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada evidence"},
+                    {"source_id": "S999", "title": "Unused", "url": "https://example.test/unused", "snippet": "UNRETRIEVED_PRIVATE_SOURCE"},
+                ],
             },
             "Grace",
             [{"hint": "Look for the writer.", "level": 1}],
@@ -50,6 +53,9 @@ class FeedbackContractTest(unittest.TestCase):
         self.assertIn('"escalation_level": 2', prompt)
         self.assertIn('Return exactly one strict JSON object with exactly this shape: {"hint":"..."}', prompt)
         self.assertIn("Grace", prompt)
+        self.assertIn('"available_source_count": 2', prompt)
+        self.assertNotIn('"complete_source_records"', prompt)
+        self.assertNotIn("UNRETRIEVED_PRIVATE_SOURCE", prompt)
         self.assertNotIn("<feedback>", prompt)
         self.assertNotIn("<teacher_task>", prompt)
 

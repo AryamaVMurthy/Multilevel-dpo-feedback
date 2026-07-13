@@ -75,9 +75,11 @@ class CollectionBatchTest(unittest.TestCase):
 
         def teacher(prompts, **_kwargs):
             teacher_calls.append(prompts)
-            self.assertIn("complete_source_records", prompts[0])
+            self.assertNotIn("complete_source_records", prompts[0])
+            self.assertIn("available_source_count", prompts[0])
             self.assertIn("retrieved_records", prompts[0])
             self.assertIn("deterministic_diagnostics", prompts[0])
+            self.assertEqual(_kwargs["max_new_tokens"], 96)
             return ['{"hint":"Recheck the associated person."}']
 
         def siblings(requests, **kwargs):

@@ -662,6 +662,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             student_generate_batch=student_batch,
             teacher_generate_batch=teacher_batch,
             max_interventions=args.max_interventions,
+            teacher_max_new_tokens=args.teacher_max_new_tokens,
             sibling_generate_batch=sibling_batch,
             sibling_seeds=args.sibling_seeds,
             student_seed=args.seed,
@@ -811,7 +812,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--model-revision", required=True)
     probe.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
     probe.add_argument("--teacher-fallback-reason")
-    probe.add_argument("--teacher-max-new-tokens", type=int, default=512)
+    probe.add_argument("--teacher-max-new-tokens", type=int, default=96)
     probe.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
     probe.add_argument("--output", required=True, type=Path)
     probe.set_defaults(func=cmd_probe_model)
@@ -940,7 +941,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--response-max-new-tokens", type=int, default=256)
     collect.add_argument("--student-temperature", type=float, default=0.7)
     collect.add_argument("--student-top-p", type=float, default=0.9)
-    collect.add_argument("--teacher-max-new-tokens", type=int, default=512)
+    collect.add_argument("--teacher-max-new-tokens", type=int, default=96)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)

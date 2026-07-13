@@ -136,9 +136,17 @@ def build_teacher_prompt(
     if isinstance(level, bool) or not isinstance(level, int) or level <= 0:
         raise ValueError("escalation level must be a positive integer")
     prior = [{"level": item.get("level"), "hint": item.get("hint")} for item in interventions]
+    compact_retrieved_records = [
+        {
+            "source_id": source["source_id"],
+            "title": source["title"],
+            "snippet": source["snippet"],
+        }
+        for source in validate_retrieved_sources(retrieved_sources)
+    ]
     request = {
-        "complete_source_records": sources,
-        "retrieved_records": list(retrieved_sources),
+        "available_source_count": len(sources),
+        "retrieved_records": compact_retrieved_records,
         "question": example.get("question"),
         "query": raw_query,
         "private_gold_answer": example.get("gold_answer"),
