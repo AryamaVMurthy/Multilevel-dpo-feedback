@@ -192,6 +192,43 @@ class ThinkingRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
 
+    def test_teacher_retries_invalid_explicit_recovery_with_stricter_feedback(self):
+        calls = []
+
+        def generate(prompts, *, max_new_tokens):
+            calls.append((list(prompts), max_new_tokens))
+            if max_new_tokens == 128:
+                return ["<think>unfinished"]
+            return ["<think>unfinished"]
+
+        retry_calls = []
+
+        def fallback_generate(indices):
+            return ['{"hint":"Ada is the answer."}' for _ in indices]
+
+        def fallback_retry_generate(indices):
+            retry_calls.append(list(indices))
+            return ['{"hint":"Inspect the responsible region."}' for _ in indices]
+
+        outputs, report = bounded_teacher_outputs(
+            ["p0"],
+            prompt_token_counts=[100],
+            primary_max_new_tokens=128,
+            retry_max_new_tokens=256,
+            generate=generate,
+            token_count=lambda _text: 256,
+            validate_outputs=[lambda text: "Ada" not in text],
+            fallback_generate=fallback_generate,
+            fallback_reason="explicit_recovery",
+            fallback_retry_generate=fallback_retry_generate,
+            fallback_retry_reason="explicit_recovery_second_attempt",
+        )
+        self.assertEqual(retry_calls, [[0]])
+        self.assertEqual(report["fallback_indices"], [0])
+        self.assertEqual(report["fallback_retry_indices"], [0])
+        self.assertEqual(report["fallback_retry_reason"], "explicit_recovery_second_attempt")
+        self.assertEqual(outputs, ['{"hint":"Inspect the responsible region."}'])
+
     def test_teacher_identity_is_pinned_qwen3_instruct_with_explicit_fallback(self):
         self.assertEqual(
             validate_teacher_identity("Qwen/Qwen3-32B", revision="teacher-rev", quantization="4bit", fallback_reason=None),

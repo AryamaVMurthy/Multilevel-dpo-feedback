@@ -1058,6 +1058,20 @@ about checking the responsible region, in at most 12 words. Return the JSON obje
             fallback_rendered = render_teacher_prompts(
                 teacher_tokenizer, fallback_source_prompts, enable_thinking=False
             ) if args.teacher_thinking else []
+            fallback_retry_rendered = render_teacher_prompts(
+                teacher_tokenizer,
+                [
+                    prompt + """
+
+Second recovery correction:
+The previous hint failed the safety contract. Emit exactly one short JSON hint using
+only this safe direction: \"Inspect the responsible region.\" Do not add an answer,
+entity, source wording, explanation, or any other field.
+"""
+                    for prompt in fallback_source_prompts
+                ],
+                enable_thinking=False,
+            ) if args.teacher_thinking else []
 
             def explicit_nonthinking_fallback(indices):
                 if not fallback_rendered:
@@ -1089,6 +1103,35 @@ about checking the responsible region, in at most 12 words. Return the JSON obje
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                 )
 
+            def explicit_nonthinking_fallback_retry(indices):
+                if not fallback_retry_rendered:
+                    raise RuntimeErrorExplicit(
+                        "explicit non-thinking teacher recovery retry is unavailable when teacher thinking is disabled"
+                    )
+                active_prompts = [fallback_retry_rendered[index] for index in indices]
+                prompt_counts = [
+                    len(teacher_tokenizer.encode(prompt, add_special_tokens=False))
+                    for prompt in active_prompts
+                ]
+                legal_max_new_tokens = min(256, min(4096 - count for count in prompt_counts))
+                if legal_max_new_tokens <= 0:
+                    raise RuntimeErrorExplicit(
+                        "explicit non-thinking teacher recovery retry has no legal output budget"
+                    )
+                print(json.dumps({
+                    "event": "teacher_explicit_nonthinking_recovery_retry",
+                    "original_indices": indices,
+                    "prompt_token_counts": prompt_counts,
+                    "max_new_tokens": legal_max_new_tokens,
+                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_second_attempt",
+                }, sort_keys=True), file=sys.stderr, flush=True)
+                return batched_generate(
+                    teacher, teacher_tokenizer, active_prompts,
+                    batch_size=args.teacher_batch_size,
+                    max_new_tokens=legal_max_new_tokens,
+                    temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                )
+
             final_outputs, output_report = bounded_teacher_outputs(
                 rendered,
                 prompt_token_counts=prompt_token_counts,
@@ -1110,6 +1153,11 @@ about checking the responsible region, in at most 12 words. Return the JSON obje
                 fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
                 fallback_reason=(
                     "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_context_redacted_generic_hint"
+                    if args.teacher_thinking else None
+                ),
+                fallback_retry_generate=explicit_nonthinking_fallback_retry if args.teacher_thinking else None,
+                fallback_retry_reason=(
+                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_second_attempt"
                     if args.teacher_thinking else None
                 ),
             )
