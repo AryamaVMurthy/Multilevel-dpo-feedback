@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from numbers import Real
 from pathlib import Path
 from typing import Any
@@ -50,12 +51,22 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError(f"missing retrieval config keys: {', '.join(missing_retrieval)}")
     if retrieval["backend"] != "fixed_bm25":
         raise ValueError(f"unknown retrieval backend: {retrieval['backend']!r}")
-    if isinstance(retrieval["top_k"], bool) or not isinstance(retrieval["top_k"], int) or retrieval["top_k"] < 1:
-        raise ValueError("retrieval.top_k must be a positive integer")
-    if isinstance(retrieval["k1"], bool) or not isinstance(retrieval["k1"], Real) or retrieval["k1"] <= 0:
-        raise ValueError("retrieval.k1 must be greater than zero")
-    if isinstance(retrieval["b"], bool) or not isinstance(retrieval["b"], Real) or not 0 <= retrieval["b"] <= 1:
-        raise ValueError("retrieval.b must be between zero and one")
+    if isinstance(retrieval["top_k"], bool) or not isinstance(retrieval["top_k"], int) or retrieval["top_k"] != 8:
+        raise ValueError("retrieval.top_k must be exactly 8")
+    if (
+        isinstance(retrieval["k1"], bool)
+        or not isinstance(retrieval["k1"], Real)
+        or not math.isfinite(retrieval["k1"])
+        or retrieval["k1"] <= 0
+    ):
+        raise ValueError("retrieval.k1 must be a finite number greater than zero")
+    if (
+        isinstance(retrieval["b"], bool)
+        or not isinstance(retrieval["b"], Real)
+        or not math.isfinite(retrieval["b"])
+        or not 0 <= retrieval["b"] <= 1
+    ):
+        raise ValueError("retrieval.b must be a finite number between zero and one")
     if retrieval["schema_version"] != 1:
         raise ValueError("retrieval.schema_version must be 1")
     return data

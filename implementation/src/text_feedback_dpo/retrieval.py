@@ -8,6 +8,8 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from text_feedback_dpo.scoring import normalize_answer
+
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _CANONICAL_SOURCE_FIELDS = ("source_id", "original_rank", "title", "url", "snippet", "related_links")
@@ -89,7 +91,7 @@ def _validate_parameters(k1: float, b: float) -> None:
 class FixedBM25Retriever:
     """Deterministic BM25 search over one example's fixed canonical sources."""
 
-    def __init__(self, sources: Sequence[Mapping[str, Any]], *, k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(self, sources: Sequence[Mapping[str, Any]], *, k1: float = 1.2, b: float = 0.75) -> None:
         _validate_parameters(k1, b)
         self._sources = _validate_sources(sources)
         self.k1 = float(k1)
@@ -126,7 +128,7 @@ class FixedBM25Retriever:
             result.update(
                 {
                     "retrieval_rank": 0,
-                    "score": float(score),
+                    "bm25_score": float(score),
                     "matched_query_terms": matched_terms,
                     "query_hash": query_hash,
                     "corpus_hash": self._corpus_hash,
@@ -147,24 +149,17 @@ def retrieve(
     sources: Sequence[Mapping[str, Any]],
     *,
     top_k: int = 8,
-    k1: float = 1.5,
+    k1: float = 1.2,
     b: float = 0.75,
 ) -> list[dict[str, Any]]:
     """Search fixed sources without exposing a gold answer to the search API."""
     return FixedBM25Retriever(sources, k1=k1, b=b).search(query, top_k=top_k)
 
 
-def _normalize_answer(value: str) -> str:
-    value = value.casefold()
-    value = re.sub(r"[^a-z0-9\s]", " ", value)
-    value = re.sub(r"\b(a|an|the)\b", " ", value)
-    return " ".join(value.split())
-
-
 def _contains_answer(result: Mapping[str, Any], normalized_gold: str) -> bool:
     answer_tokens = normalized_gold.split()
     source_text = " ".join(str(result.get(field, "")) for field in ("title", "snippet"))
-    source_tokens = _normalize_answer(source_text).split()
+    source_tokens = normalize_answer(source_text).split()
     width = len(answer_tokens)
     return any(source_tokens[index : index + width] == answer_tokens for index in range(len(source_tokens) - width + 1))
 
@@ -177,7 +172,7 @@ def retrieval_metrics(
     """Report evaluator-only answer-bearing retrieval metrics for one row."""
     if not isinstance(gold_answer, str) or not gold_answer.strip():
         raise ValueError("gold answer is required for retrieval metrics")
-    normalized_gold = _normalize_answer(gold_answer)
+    normalized_gold = normalize_answer(gold_answer)
     if not normalized_gold:
         raise ValueError("gold answer must contain searchable normalized tokens")
     if isinstance(ks, (str, bytes)):
@@ -200,8 +195,8 @@ def retrieval_metrics(
     answer_bearing_ranks = [index for index, result in enumerate(ranked_results, start=1) if _contains_answer(result, normalized_gold)]
     first_rank = answer_bearing_ranks[0] if answer_bearing_ranks else None
     metrics: dict[str, float | int | None] = {
-        f"answer_bearing_recall@{k}": float(bool(first_rank and first_rank <= k)) for k in requested_ks
+        f"recall@{k}": float(bool(first_rank and first_rank <= k)) for k in requested_ks
     }
     reciprocal_rank = 1.0 / first_rank if first_rank is not None else 0.0
-    metrics.update({"reciprocal_rank": reciprocal_rank, "mrr": reciprocal_rank, "first_answer_bearing_rank": first_rank})
+    metrics.update({"reciprocal_rank": reciprocal_rank, "mrr": reciprocal_rank, "first_answer_rank": first_rank})
     return metrics

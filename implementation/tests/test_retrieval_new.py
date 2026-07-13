@@ -1,9 +1,14 @@
 import inspect
 import json
+import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import yaml
+
+import text_feedback_dpo.retrieval as retrieval
+from text_feedback_dpo import scoring
 from text_feedback_dpo.config import load_config
 from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, tokenize_query
 
@@ -20,6 +25,9 @@ def source(source_id: str, original_rank: int, snippet: str, *, title: str | Non
 
 
 class FixedBM25RetrievalTest(unittest.TestCase):
+    def test_default_k1_is_frozen_at_one_point_two(self):
+        self.assertEqual(FixedBM25Retriever([source("S001", 1, "evidence")]).k1, 1.2)
+
     def test_query_tokenization_is_explicit_and_retriever_has_no_gold_answer_input(self):
         self.assertEqual(tokenize_query(" Ada-Lovelace's algorithm! "), ("ada", "lovelace", "s", "algorithm"))
         self.assertNotIn("gold_answer", inspect.signature(FixedBM25Retriever.search).parameters)
@@ -37,7 +45,8 @@ class FixedBM25RetrievalTest(unittest.TestCase):
         self.assertEqual(results[0]["url"], "https://example.test/S001")
         self.assertEqual(results[0]["snippet"], sources[0]["snippet"])
         self.assertEqual(results[0]["retrieval_rank"], 1)
-        self.assertGreater(results[0]["score"], results[1]["score"])
+        self.assertGreater(results[0]["bm25_score"], results[1]["bm25_score"])
+        self.assertNotIn("score", results[0])
         self.assertEqual(results[0]["matched_query_terms"], ["wrote", "the", "algorithm"])
         self.assertEqual(results[0]["query_hash"], results[1]["query_hash"])
         self.assertEqual(results[0]["corpus_hash"], results[1]["corpus_hash"])
@@ -54,7 +63,7 @@ class FixedBM25RetrievalTest(unittest.TestCase):
         results = FixedBM25Retriever(sources).search("unseen-token", top_k=3)
 
         self.assertEqual([row["source_id"] for row in results], ["S001", "S002", "S003"])
-        self.assertEqual([row["score"] for row in results], [0.0, 0.0, 0.0])
+        self.assertEqual([row["bm25_score"] for row in results], [0.0, 0.0, 0.0])
         self.assertEqual([row["matched_query_terms"] for row in results], [[], [], []])
         self.assertEqual([row["retrieval_rank"] for row in results], [1, 2, 3])
 
@@ -96,22 +105,28 @@ class FixedBM25RetrievalTest(unittest.TestCase):
 
         metrics = retrieval_metrics(ranked, "The Ada Lovelace", ks=(1, 3, 5))
 
-        self.assertEqual(metrics["answer_bearing_recall@1"], 0.0)
-        self.assertEqual(metrics["answer_bearing_recall@3"], 1.0)
-        self.assertEqual(metrics["answer_bearing_recall@5"], 1.0)
+        self.assertEqual(metrics["recall@1"], 0.0)
+        self.assertEqual(metrics["recall@3"], 1.0)
+        self.assertEqual(metrics["recall@5"], 1.0)
         self.assertEqual(metrics["reciprocal_rank"], 0.5)
         self.assertEqual(metrics["mrr"], 0.5)
-        self.assertEqual(metrics["first_answer_bearing_rank"], 2)
+        self.assertEqual(metrics["first_answer_rank"], 2)
+        self.assertNotIn("answer_bearing_recall@1", metrics)
+        self.assertNotIn("first_answer_bearing_rank", metrics)
         with self.assertRaisesRegex(ValueError, "gold"):
             retrieval_metrics(ranked, "", ks=(1,))
         with self.assertRaisesRegex(ValueError, "k"):
             retrieval_metrics(ranked, "Ada Lovelace", ks=(0,))
 
+    def test_retrieval_metrics_reuse_the_shared_answer_normalizer(self):
+        self.assertIs(retrieval.normalize_answer, scoring.normalize_answer)
+        self.assertFalse(hasattr(retrieval, "_normalize_answer"))
+
     def test_searchqa_config_requires_fixed_bm25_retrieval_settings(self):
         config = load_config(Path("configs/searchqa.yaml"))
         self.assertEqual(
             config["retrieval"],
-            {"backend": "fixed_bm25", "top_k": 8, "k1": 1.5, "b": 0.75, "schema_version": 1},
+            {"backend": "fixed_bm25", "top_k": 8, "k1": 1.2, "b": 0.75, "schema_version": 1},
         )
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
@@ -120,6 +135,18 @@ class FixedBM25RetrievalTest(unittest.TestCase):
             path.write_text(json.dumps(altered), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "backend"):
                 load_config(path)
+
+    def test_searchqa_config_freezes_top_k_and_rejects_nonfinite_bm25_parameters(self):
+        config = load_config(Path("configs/searchqa.yaml"))
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            for field, value in (("top_k", 7), ("k1", math.inf), ("b", math.nan)):
+                altered = dict(config)
+                altered["retrieval"] = dict(config["retrieval"], **{field: value})
+                path.write_text(yaml.safe_dump(altered), encoding="utf-8")
+                expected = "exactly 8" if field == "top_k" else field
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, expected):
+                    load_config(path)
 
 
 if __name__ == "__main__":
