@@ -310,6 +310,8 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("validate-collection-decision", text)
         for value in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "MERGE_ID"):
             self.assertIn(value, text)
+        self.assertIn("DECISION_DATASET_SHA256", text)
+        self.assertIn('--dataset-sha256 "$DECISION_DATASET_SHA256"', text)
         self.assertIn("TEACHER_DEVICE", text)
         self.assertIn("STUDENT_DEVICE", text)
         self.assertIn("--teacher-batch-size", text)

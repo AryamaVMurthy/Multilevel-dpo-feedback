@@ -29,6 +29,7 @@ manifest = {
     "status": os.environ["MANIFEST_STATUS"], "commit_hash": os.environ["COMMIT_HASH"], "config_hash": os.environ["CONFIG_HASH"],
     "model_hash": os.environ["MODEL_HASH"], "dataset_hash": os.environ["DATASET_HASH"], "prompt_hash": os.environ["PROMPT_HASH"],
     "retrieval_hash": os.environ["RETRIEVAL_HASH"], "source_schema_hash": os.environ["SOURCE_SCHEMA_HASH"], "node": socket.gethostname(),
+    "decision_dataset_sha256": os.environ["DECISION_DATASET_SHA256"],
     "platform": platform.platform(), "slurm_allocation": {k: os.environ.get(k) for k in ("SLURM_JOB_ID", "SLURM_JOB_NODELIST", "SLURM_NNODES", "SLURM_NTASKS", "SLURM_GPUS_ON_NODE")},
     "package_versions": values("PACKAGE_VERSIONS"), "gpu_telemetry": os.environ.get("GPU_TELEMETRY"),
     "timings": {"started_at": os.environ["MANIFEST_STARTED_AT"], "ended_at": os.environ["MANIFEST_ENDED_AT"]}, "artifact_paths": values("ARTIFACT_PATHS"),
@@ -66,6 +67,7 @@ PY
 : "${POLICY_VERSION:?POLICY_VERSION must be supplied with --export}"
 : "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied}"
 : "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied}"
+: "${DECISION_DATASET_SHA256:?DECISION_DATASET_SHA256 must be supplied with the frozen generation decision dataset SHA-256}"
 : "${COLLECTION_DECISION:?COLLECTION_DECISION must freeze teacher/student devices and VRAM evidence}"
 : "${COLLECTION_DECISION_SHA256:?COLLECTION_DECISION_SHA256 must be supplied}"
 : "${TEACHER_BATCH_SIZE:?TEACHER_BATCH_SIZE must be supplied}"
@@ -80,6 +82,7 @@ PY
 : "${SIBLING_COUNT:?SIBLING_COUNT must be supplied}"
 : "${SIBLING_SEEDS:?SIBLING_SEEDS must be a space-separated deterministic list}"
 [[ "$POLICY_HASH" =~ ^[0-9a-f]{64}$ ]] || fail "POLICY_HASH must be a lowercase SHA-256; got '$POLICY_HASH'" policy_hash_invalid
+[[ "$DECISION_DATASET_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "DECISION_DATASET_SHA256 must be a lowercase SHA-256; got '$DECISION_DATASET_SHA256'" decision_dataset_sha256_invalid
 
 : "${SLURM_NNODES:?SLURM_NNODES is required inside the allocation}"
 if [[ "$SLURM_NNODES" != "1" ]]; then fail "collection requires one node; got $SLURM_NNODES" "multi_node_collection_forbidden"; fi
@@ -115,7 +118,7 @@ IFS=$'\t' read -r TEACHER_DEVICE STUDENT_DEVICE VALIDATED_COLLECTION_DECISION_SH
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
   run_probe_runner validate-decision --decision "$OPTIMIZATION_DECISION" --expected-sha256 "$OPTIMIZATION_DECISION_SHA256" --purpose generation --output-format generation-tsv \
     --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_HASH" --model "$STUDENT_MODEL" --model-revision "$STUDENT_REVISION" \
-    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATASET_HASH" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DECISION_DATASET_SHA256" \
     --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" \
     --student-thinking-mode "${STUDENT_THINKING_MODE:?STUDENT_THINKING_MODE must be explicit}" --scratchpad-max-new-tokens "${SCRATCHPAD_MAX_NEW_TOKENS:?SCRATCHPAD_MAX_NEW_TOKENS must be explicit}" \
     --query-temperature "${QUERY_TEMPERATURE:?QUERY_TEMPERATURE must be explicit}" --response-temperature "${RESPONSE_TEMPERATURE:?RESPONSE_TEMPERATURE must be explicit}" \
@@ -136,7 +139,7 @@ print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transf
 PY
 )"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
+export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH DECISION_DATASET_SHA256 PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" shard_index="$SHARD_INDEX" shard_count="$SHARD_COUNT" merge_id="$MERGE_ID" allocated_gpus="$ALLOCATED_GPU_COUNT"
 if ! nvidia-smi --query-gpu=uuid --format=csv,noheader,nounits >/dev/null; then
   fail "nvidia-smi telemetry identity query failed" gpu_telemetry_query_failed
