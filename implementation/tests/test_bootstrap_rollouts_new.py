@@ -1,0 +1,93 @@
+import copy
+import unittest
+from pathlib import Path
+
+from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
+from text_feedback_dpo.bootstrap import collect_bootstrap_rollouts, validate_bootstrap_rows
+from text_feedback_dpo.cli import build_parser
+from text_feedback_dpo.runtime import GeneratedText
+
+
+def _example(example_id="q1") -> dict:
+    return {
+        "id": example_id,
+        "question": "Who wrote the first algorithm?",
+        "gold_answer": "Ada Lovelace",
+        "sources": [{
+            "source_id": "S001", "original_rank": 1, "title": "History",
+            "url": "https://example.test/history", "snippet": "Ada Lovelace wrote the first algorithm.",
+        }],
+    }
+
+
+def _artifact(example: dict, *, policy_hash="policy-v1") -> dict:
+    return run_fixed_retrieval_pipeline(
+        [example],
+        query_generate_batch=lambda _prompts: [GeneratedText("first algorithm author", False)],
+        response_generate_batch=lambda _prompts: [GeneratedText(
+            "Answer: Ada Lovelace\nReasoning: The source identifies Ada Lovelace [S001].\nSources: S001",
+            False,
+        )],
+        policy_hash=policy_hash,
+    )[0]
+
+
+class BootstrapRolloutsTest(unittest.TestCase):
+    def test_turing_launcher_is_single_gpu_commit_and_hash_bound(self):
+        script = (Path(__file__).parents[1] / "scripts" / "turing_bootstrap_rollouts.sh").read_text()
+        self.assertIn("#SBATCH --gres=gpu:1", script)
+        self.assertIn("EXPECTED_COMMIT", script)
+        self.assertIn("DATA_SHA256", script)
+        self.assertIn("fallback_reason=none", script)
+        self.assertIn("bootstrap-rollouts", script)
+
+    def test_cli_requires_explicit_seed_list_and_pins_direct_mode(self):
+        args = build_parser().parse_args([
+            "bootstrap-rollouts", "--data", "train.jsonl", "--output", "rollouts.jsonl",
+            "--model", "Qwen/Qwen3-4B-Base", "--model-revision", "rev",
+            "--dataset-source", "kyunghyuncho/search_qa", "--dataset-revision", "data-rev",
+            "--attention-implementation", "sdpa", "--policy-hash", "a" * 64,
+            "--seeds", "11", "12", "13",
+        ])
+        self.assertEqual(args.seeds, [11, 12, 13])
+        self.assertEqual(args.context_budget, 4096)
+        self.assertEqual(args.func.__name__, "cmd_bootstrap_rollouts")
+
+    def test_expands_each_seed_deterministically_and_records_no_teacher_provenance(self):
+        examples = [_example("q1"), _example("q2")]
+        calls = []
+
+        def generate(batch, *, seed):
+            calls.append((seed, [row["id"] for row in batch]))
+            return [_artifact(row) for row in batch]
+
+        rows = collect_bootstrap_rollouts(examples, seeds=(11, 12, 13), generate_seed_batch=generate)
+        self.assertEqual(calls, [(11, ["q1", "q2"]), (12, ["q1", "q2"]), (13, ["q1", "q2"])])
+        self.assertEqual([row["id"] for row in rows], ["q1", "q2"])
+        self.assertEqual([item["seed"] for item in rows[0]["candidates"]], [11, 12, 13])
+        self.assertEqual(sum(len(row["candidates"]) for row in rows), 6)
+        for row in rows:
+            for candidate in row["candidates"]:
+                self.assertEqual(candidate["provenance"], "student")
+                self.assertTrue(candidate["no_hint"])
+                self.assertNotIn("teacher", candidate)
+
+    def test_rejects_duplicates_cardinality_tampering_and_noncanonical_artifacts(self):
+        with self.assertRaisesRegex(ValueError, "duplicate example"):
+            collect_bootstrap_rollouts([_example(), _example()], seeds=(1,), generate_seed_batch=lambda *_args, **_kwargs: [])
+        with self.assertRaisesRegex(ValueError, "unique"):
+            collect_bootstrap_rollouts([_example()], seeds=(1, 1), generate_seed_batch=lambda *_args, **_kwargs: [])
+        with self.assertRaisesRegex(ValueError, "cardinality"):
+            collect_bootstrap_rollouts([_example()], seeds=(1,), generate_seed_batch=lambda *_args, **_kwargs: [])
+
+        rows = collect_bootstrap_rollouts(
+            [_example()], seeds=(1,), generate_seed_batch=lambda batch, **_kwargs: [_artifact(batch[0])]
+        )
+        forged = copy.deepcopy(rows)
+        forged[0]["candidates"][0]["artifact"]["raw_response"] = "forged"
+        with self.assertRaisesRegex(ValueError, "cited_score|parsed_response"):
+            validate_bootstrap_rows(forged, examples=[_example()], expected_seeds=(1,))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -481,6 +481,101 @@ def cmd_generate_searchqa(args: argparse.Namespace) -> None:
     write_json(args.output.parent / "manifest.json", manifest)
 
 
+def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
+    """Generate multiple no-hint student candidates while loading the model once."""
+    from text_feedback_dpo.batch_generation import RESPONSE_SCHEMA_VERSION, _validate_rows, run_fixed_retrieval_pipeline
+    from text_feedback_dpo.bootstrap import collect_bootstrap_rollouts
+    from text_feedback_dpo.prompts import prompt_builder_identity
+    from text_feedback_dpo.runtime import (
+        generate_batch_records,
+        load_student,
+        load_tokenizer,
+        set_generation_seed,
+    )
+    from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
+
+    if args.context_budget != 4096:
+        raise ValueError("bootstrap SearchQA generation requires exactly 4096 total tokens")
+    if args.query_batch_size <= 0 or args.response_batch_size <= 0:
+        raise ValueError("bootstrap query and response batch sizes must be positive")
+    if args.query_max_new_tokens <= 0 or args.response_max_new_tokens <= 0:
+        raise ValueError("bootstrap generation token limits must be positive")
+    if len(args.policy_hash) != 64 or any(character not in "0123456789abcdef" for character in args.policy_hash):
+        raise ValueError("bootstrap policy_hash must be a lowercase SHA-256")
+    rows = read_jsonl(args.data)
+    _validate_rows(rows)
+    tokenizer = load_tokenizer(args.model, revision=args.model_revision)
+    model = load_student(
+        args.model,
+        revision=args.model_revision,
+        attention_implementation=args.attention_implementation,
+        device=args.device,
+    )
+
+    def generate_seed_batch(seed_rows: list[dict], *, seed: int) -> list[dict]:
+        set_generation_seed(seed)
+        return run_fixed_retrieval_pipeline(
+            seed_rows,
+            query_generate_batch=lambda prompts: generate_batch_records(
+                model, tokenizer, prompts,
+                max_new_tokens=args.query_max_new_tokens,
+                temperature=args.query_temperature,
+                top_p=args.top_p,
+                context_budget=args.context_budget,
+            ),
+            response_generate_batch=lambda prompts: generate_batch_records(
+                model, tokenizer, prompts,
+                max_new_tokens=args.response_max_new_tokens,
+                temperature=args.response_temperature,
+                top_p=args.top_p,
+                context_budget=args.context_budget,
+            ),
+            query_batch_size=args.query_batch_size,
+            response_batch_size=args.response_batch_size,
+            top_k=args.top_k,
+            k1=args.k1,
+            b=args.b,
+            policy_hash=args.policy_hash,
+            prompt_version=args.prompt_version,
+        )
+
+    results = collect_bootstrap_rollouts(rows, seeds=args.seeds, generate_seed_batch=generate_seed_batch)
+    write_jsonl(results, args.output)
+    prompt_identity = {"identity": args.prompt_version, "builders": prompt_builder_identity()}
+    source_identity = {"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}
+    manifest = {
+        "command": "bootstrap-rollouts",
+        "max_length": 4096,
+        "rows": len(results),
+        "candidates": len(results) * len(args.seeds),
+        "seeds": list(args.seeds),
+        "model": {"identity": args.model, "revision": args.model_revision, "policy_hash": args.policy_hash},
+        "dataset": {
+            "source": args.dataset_source,
+            "revision": args.dataset_revision,
+            "sha256": _sha256_file(args.data),
+        },
+        "source_schema": {**source_identity, "sha256": _identity_hash(source_identity)},
+        "prompt": {**prompt_identity, "sha256": _identity_hash(prompt_identity)},
+        "response_schema_version": RESPONSE_SCHEMA_VERSION,
+        "retrieval": {
+            "identity": "fixed_bm25", "top_k": args.top_k, "k1": args.k1, "b": args.b,
+        },
+        "generation": {
+            "query_batch_size": args.query_batch_size,
+            "response_batch_size": args.response_batch_size,
+            "query_max_new_tokens": args.query_max_new_tokens,
+            "response_max_new_tokens": args.response_max_new_tokens,
+            "query_temperature": args.query_temperature,
+            "response_temperature": args.response_temperature,
+            "top_p": args.top_p,
+            "student_thinking_mode": "direct",
+        },
+        "required_files": [args.output.name],
+    }
+    write_json(args.output.with_suffix(".manifest.json"), manifest)
+
+
 def cmd_build_preferences(args: argparse.Namespace) -> None:
     from text_feedback_dpo.preferences import build_preference_rows
     from text_feedback_dpo.trajectories import revalidate_cached_trajectory
@@ -921,6 +1016,33 @@ def build_parser() -> argparse.ArgumentParser:
     active_generate.add_argument("--b", type=float, default=0.75)
     active_generate.add_argument("--context-budget", type=int, default=4096)
     active_generate.set_defaults(func=cmd_generate_searchqa)
+    bootstrap = sub.add_parser(
+        "bootstrap-rollouts",
+        help="generate multiple direct no-hint SearchQA candidates per example",
+    )
+    bootstrap.add_argument("--data", required=True, type=Path)
+    bootstrap.add_argument("--output", required=True, type=Path)
+    bootstrap.add_argument("--model", required=True)
+    bootstrap.add_argument("--model-revision", required=True)
+    bootstrap.add_argument("--dataset-source", required=True)
+    bootstrap.add_argument("--dataset-revision", required=True)
+    bootstrap.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
+    bootstrap.add_argument("--device", default="cuda:0")
+    bootstrap.add_argument("--policy-hash", required=True)
+    bootstrap.add_argument("--prompt-version", default="fixed-retrieval-cited-v1")
+    bootstrap.add_argument("--seeds", required=True, type=int, nargs="+")
+    bootstrap.add_argument("--query-batch-size", type=int, default=4)
+    bootstrap.add_argument("--response-batch-size", type=int, default=4)
+    bootstrap.add_argument("--query-max-new-tokens", type=int, default=32)
+    bootstrap.add_argument("--response-max-new-tokens", type=int, default=256)
+    bootstrap.add_argument("--query-temperature", type=float, default=0.7)
+    bootstrap.add_argument("--response-temperature", type=float, default=0.7)
+    bootstrap.add_argument("--top-p", type=float, default=0.9)
+    bootstrap.add_argument("--top-k", type=int, default=8)
+    bootstrap.add_argument("--k1", type=float, default=1.2)
+    bootstrap.add_argument("--b", type=float, default=0.75)
+    bootstrap.add_argument("--context-budget", type=int, default=4096)
+    bootstrap.set_defaults(func=cmd_bootstrap_rollouts)
     preferences = sub.add_parser("build-preferences")
     preferences.add_argument("--data", required=True, type=Path)
     preferences.add_argument("--trajectories", required=True, type=Path)
