@@ -2,7 +2,7 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `2b8c7e37ac210b421f031973bb5d97ce14f830c5`
+**Last observed remote commit:** `d69ab13831bb7c2ff3510113b6d305383f77c10d`
 
 **Current local implementation commit:** `f46913e712f510476824f4eaa0a1018190b8171c`
 
@@ -145,11 +145,16 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - Job `13808` deterministically regenerated all 64 balanced training prompts from checkpoint 20, with hashes bound to both the model and SFT data. Exact decoded-text reproduction is 33/64: 18/32 query and 15/32 response. There are zero empty outputs, zero response truncations, and one query truncation. Exact-text reproduction is intentionally not treated as the capability score because correct responses may paraphrase reasoning or cite another valid retrieved source.
 - Job `13810` canonically revalidated every generated continuation against its original example, seed-selected bootstrap artifact, fixed retrieval context, and hashes with no repair. Generated queries retrieve answer-bearing evidence for 29/32 targets; one query repeats `cotton` to the 32-token cap and two valid queries miss answer-bearing evidence. All 32 generated responses parse; 31/32 have the exact canonical answer and 30/32 also cite a source with lexical answer support. The canonical answer miss is `Madeleine K. Albright` versus `Madeleine Albright` (F1 `0.8`), which remains a visible strict-metric miss rather than being normalized away.
 - Turing automatically added one GPU to job `13810` because its CPU-only launcher requested four CPU cores. The audit finished in three seconds and did not execute CUDA work. The launcher is reduced to two cores so future capability audits remain CPU-only under the observed cluster billing rule.
+- Job `13811` selected 4,096 train-only examples at seed `20260713` and deterministically assigned them to eight shards. Pool SHA-256: `a924bd068e0b1c1bda7d6b0c515db8778b41cd4e4ada8ef1762db0d35b23f6ff`; selected-ID SHA-256: `c24a0aa4885bd064f94a0a945811e2c57ee84e01b5ae649d6bf6107dbfa66b65`. Shards contain 479–551 examples and their individual hashes are sealed in the preparation manifest.
+- Jobs `13812`–`13819` launched all eight checkpoint-20 rollout shards concurrently. Seven were cancelled after shard 3 failed, because mixing pre-fix and post-fix evaluator semantics would invalidate lineage. The exact root cause was train row `train-88271`, whose legitimate gold answer is standalone `A` (vitamin A). SQuAD-style article removal normalized `A` to an empty string, and retrieval scoring raised `gold answer must contain searchable normalized tokens` after model loading.
+- Commit `d69ab13` fixes the evaluator at the normalization source: a standalone answer `A`, `An`, or `The` remains searchable, while articles are still removed from multiword answers. Retrieval and cited lexical-support checks use the same article-aware phrase matcher. Evaluator identity is bumped to `cited-response-evaluator-v2-standalone-article-answer`; old and new rollout shards cannot be merged. The exact vitamin-A regression and cited-response support are covered by tests.
+- Job `13822` reran only the previously failing vitamin-A row against checkpoint 20. It completed in 56 seconds, retrieved answer-bearing evidence at rank 1, and produced a nonempty parse-valid cited response (`Vitamin A`) with no exception or truncation. The strict exact-answer metric still records `Vitamin A` versus gold `A` as a visible miss; no alias repair is applied.
+- Jobs `13825`–`13832` are the clean evaluator-v2 restart: eight concurrent one-A100 workers, two seeds per example, query/response batch size 4, explicit 2/32 and 8/256 token bounds, temperature `0.7`, top-p `0.9`, checkpoint model SHA-256 verification, and no-hint direct generation.
 - No optimizer step has run for DPO, GRPO, or DAPO. Full-scale SFT has not started; larger checkpoint-20 student-only rollout collection is now the active data gate.
 
 ## Verification state
 
-- Local verification: 258 unit tests passed. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. One expected upstream Torch deprecation warning remains.
+- Local verification: 267 unit tests passed. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. One expected upstream Torch deprecation warning remains.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
