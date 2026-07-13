@@ -4,13 +4,13 @@
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
 **Last observed remote commit:** `0d506a03d4ec5c4287a5c25ba5ba041f331150bc`
 
-**Current local implementation commit:** `f0f154fabb6c65ad025257db570b4d3747d79cb0`
+**Current local implementation baseline:** `a078c6e9bb49448f5ce21114329b5c548b477d6e` plus the tested explicit minimum-generation-token change described below
 
 ## Executive status
 
 The fixed-retrieval SearchQA pipeline, strict cited-response evaluator, batched generation path, minimal-hint trajectory code, student-only SFT/DPO data gates, Turing launch contracts, and hardware probes exist and pass the local test suite. The pinned Qwen3-4B-Base student and Qwen3-32B 4-bit teacher both fit their assigned A100-40GB GPUs.
 
-The raw student is not ready for preference-data collection at scale. On the audited 32-row validation preflight, neither direct nor private two-pass generation passed the structural gate, and no rollout was a fully correct, supported, protocol-valid response. The verified no-hint bootstrap collector and trajectory-audit tooling now exist locally and pass the full test suite, but have not yet been deployed because the commit-bound teacher smoke is still active on the older remote checkout. No SFT, DPO, GRPO, or DAPO optimizer step has run.
+The raw student is not ready for preference-data collection at scale. On the audited 32-row validation preflight, neither direct nor private two-pass generation passed the structural gate. The larger train-only bootstrap pilot found two fully correct responses, but response coverage remains far below the SFT scale gate. The verified no-hint collector, independent query/response SFT selector, v2 answer scaffold, and explicit non-empty generation controls now exist locally and pass the full test suite. They are awaiting deployment for an identical controlled pilot comparison. No SFT, DPO, GRPO, or DAPO optimizer step has run.
 
 ## Dataset state
 
@@ -126,14 +126,17 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - Local commit `c52962c` adds batched multi-seed no-hint bootstrap collection and a one-GPU Turing launcher. The model is loaded once, each seed is generated across the active example batch, every artifact is canonically revalidated, and duplicate/tampered/incomplete output fails explicitly.
 - Job `13783` remeasured the commit/config-bound SDPA baseline after adding explicit teacher retry: 22.132 generated tokens/second, 97.6% mean measured utilization, 10.47 GiB framework peak memory. Frozen decision SHA-256: `4095b1d0eee507c10d33765b9e8e50f3a6a04630dd4c21ce155d3435d5405d30`.
 - Job `13786` selected the deterministic 128-example train-only bootstrap pool in one streaming pass over the pinned train file. Pool SHA-256: `f2c3df4c0ef3272183e07d26e8546516391972722b4bc64f69d697f135959836`; selected-ID SHA-256: `bbaba67ed0d9e4cc824469cfcd9a60623bacdf756527cac3f6f3dd3b9c324a05`.
-- Jobs `13789` and `13790` are currently running in parallel on node10: the corrected two-GPU teacher smoke and the 128-example/two-seed/batch-4 no-hint student bootstrap pilot, respectively.
+- Job `13789` terminated after 11:21. The bounded retry mechanism worked as designed: only exact-cap malformed row 25 was retried at 2,048 tokens and its retry closed after 270 tokens. Collection then stopped at the independent strict hint-leakage gate for validation row 7 (`the Tour de France`), reported as `hint contains a normalized gold answer token`. The rejected final hint was not persisted, so the detector must first report the exact overlapping normalized token before any leakage rule can be safely changed.
 - Local commit `f0f154f` splits bootstrap SFT selection by task. A no-hint query is eligible when canonical BM25 retrieves answer-bearing evidence even if the response fails; a response remains eligible only when it is parse-valid, answer-correct, supported, cited, untruncated, student-generated, and no-hint.
-- Because the audited base set has zero fully correct continuations, the existing SFT builder would currently produce zero rows for this sample.
+- Job `13790` completed in 5:06 with exact cardinality (128 examples, 256 candidates). Query eligibility is useful: 147 candidates across 90 unique examples retrieved answer-bearing evidence. Response eligibility is insufficient: only 8/256 outputs parsed, 5/256 had the correct answer, and 2/256 were fully correct/supported/cited across two unique examples. There were 50 empty queries and 59 empty responses; dominant response errors were line count (138) and label order (47).
+- Because unchanged scaling would miss the response-SFT gate, commit `a078c6e` adds the controlled v2 response scaffold. The model-visible prompt ends with `Response:` then `Answer:`; generation supplies only the continuation, while canonical evaluation explicitly composes the fixed `Answer: ` prefix. The prefix and raw generated continuation are persisted and revalidated, so this is not hidden parser repair. Query prompting remains unchanged.
+- Root-cause inspection found that the generation runtime allowed EOS at the first generated token. The pending explicit-minimum change passes `min_new_tokens` into model generation, rejects invalid min/max combinations, requires both bootstrap minima at the launcher boundary, and records them in the artifact manifest. The controlled rerun freezes query minimum 2 and response minimum 8; it does not post-process or fabricate output.
+- The 128-row pilot can currently supply 90 unique query-SFT examples and two unique response-SFT examples. This is useful evidence but insufficient response coverage for full SFT.
 - No optimizer step has run for SFT, DPO, GRPO, or DAPO.
 
 ## Verification state
 
-- Local tests: 293 passed, 14 upstream deprecation warnings, 171 subtests passed.
+- Local tests: 297 passed, 14 upstream deprecation warnings, 171 subtests passed.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
@@ -151,7 +154,15 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 
 ## Immediate next evidence gate
 
-The next stage is complete only when all of the following exist:
+The immediate student gate is complete only when all of the following exist:
+
+- The v2 scaffold plus explicit query/response minima is deployed at an exact commit on Turing.
+- The identical frozen 128-example, seeds 11/12 pilot completes with exact cardinality and manifest identity.
+- Every candidate is re-audited, with exact samples inspected across success and each failure category.
+- Empty-output, parse-valid, answer-correct, citation-valid, fully verified, latency, throughput, and GPU metrics are compared directly with job `13790`.
+- Only canonically verified student-generated rows enter SFT; if response coverage remains insufficient, the run fails promotion explicitly rather than scaling weak data.
+
+The independent teacher gate still requires:
 
 - A corrected 32-row teacher-guided trajectory file with exact row parity.
 - A tokenizer-measured teacher-prompt budget report proving every rendered smoke prompt fits the 4,096 total-token contract before scaling.

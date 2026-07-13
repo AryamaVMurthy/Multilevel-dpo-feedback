@@ -80,6 +80,10 @@ class BootstrapRolloutsTest(unittest.TestCase):
         self.assertIn("DATA_SHA256", script)
         self.assertIn("fallback_reason=none", script)
         self.assertIn("bootstrap-rollouts", script)
+        self.assertIn("QUERY_MIN_NEW_TOKENS", script)
+        self.assertIn("RESPONSE_MIN_NEW_TOKENS", script)
+        self.assertNotIn('${QUERY_MIN_NEW_TOKENS:-', script)
+        self.assertNotIn('${RESPONSE_MIN_NEW_TOKENS:-', script)
 
     def test_cli_requires_explicit_seed_list_and_pins_direct_mode(self):
         args = build_parser().parse_args([
@@ -88,9 +92,12 @@ class BootstrapRolloutsTest(unittest.TestCase):
             "--dataset-source", "kyunghyuncho/search_qa", "--dataset-revision", "data-rev",
             "--attention-implementation", "sdpa", "--policy-hash", "a" * 64,
             "--seeds", "11", "12", "13",
+            "--query-min-new-tokens", "2", "--response-min-new-tokens", "8",
         ])
         self.assertEqual(args.seeds, [11, 12, 13])
         self.assertEqual(args.context_budget, 4096)
+        self.assertEqual(args.query_min_new_tokens, 2)
+        self.assertEqual(args.response_min_new_tokens, 8)
         self.assertEqual(args.func.__name__, "cmd_bootstrap_rollouts")
 
     def test_expands_each_seed_deterministically_and_records_no_teacher_provenance(self):

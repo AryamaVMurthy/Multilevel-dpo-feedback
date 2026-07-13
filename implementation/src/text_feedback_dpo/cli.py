@@ -519,6 +519,10 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
         raise ValueError("bootstrap query and response batch sizes must be positive")
     if args.query_max_new_tokens <= 0 or args.response_max_new_tokens <= 0:
         raise ValueError("bootstrap generation token limits must be positive")
+    if not 0 <= args.query_min_new_tokens <= args.query_max_new_tokens:
+        raise ValueError("query_min_new_tokens must be between 0 and query_max_new_tokens")
+    if not 0 <= args.response_min_new_tokens <= args.response_max_new_tokens:
+        raise ValueError("response_min_new_tokens must be between 0 and response_max_new_tokens")
     if len(args.policy_hash) != 64 or any(character not in "0123456789abcdef" for character in args.policy_hash):
         raise ValueError("bootstrap policy_hash must be a lowercase SHA-256")
     rows = read_jsonl(args.data)
@@ -538,6 +542,7 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
             query_generate_batch=lambda prompts: generate_batch_records(
                 model, tokenizer, prompts,
                 max_new_tokens=args.query_max_new_tokens,
+                min_new_tokens=args.query_min_new_tokens,
                 temperature=args.query_temperature,
                 top_p=args.top_p,
                 context_budget=args.context_budget,
@@ -545,6 +550,7 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
             response_generate_batch=lambda prompts: generate_batch_records(
                 model, tokenizer, prompts,
                 max_new_tokens=args.response_max_new_tokens,
+                min_new_tokens=args.response_min_new_tokens,
                 temperature=args.response_temperature,
                 top_p=args.top_p,
                 context_budget=args.context_budget,
@@ -585,6 +591,8 @@ def cmd_bootstrap_rollouts(args: argparse.Namespace) -> None:
             "response_batch_size": args.response_batch_size,
             "query_max_new_tokens": args.query_max_new_tokens,
             "response_max_new_tokens": args.response_max_new_tokens,
+            "query_min_new_tokens": args.query_min_new_tokens,
+            "response_min_new_tokens": args.response_min_new_tokens,
             "query_temperature": args.query_temperature,
             "response_temperature": args.response_temperature,
             "top_p": args.top_p,
@@ -1049,6 +1057,8 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--response-batch-size", type=int, default=4)
     bootstrap.add_argument("--query-max-new-tokens", type=int, default=32)
     bootstrap.add_argument("--response-max-new-tokens", type=int, default=256)
+    bootstrap.add_argument("--query-min-new-tokens", type=int, required=True)
+    bootstrap.add_argument("--response-min-new-tokens", type=int, required=True)
     bootstrap.add_argument("--query-temperature", type=float, default=0.7)
     bootstrap.add_argument("--response-temperature", type=float, default=0.7)
     bootstrap.add_argument("--top-p", type=float, default=0.9)

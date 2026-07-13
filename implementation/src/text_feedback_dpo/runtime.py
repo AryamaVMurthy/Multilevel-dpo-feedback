@@ -273,6 +273,7 @@ def generate_batch_records(
     prompts: list[str],
     *,
     max_new_tokens: int,
+    min_new_tokens: int = 0,
     temperature: float,
     top_p: float,
     context_budget: int = TOTAL_CONTEXT_TOKENS,
@@ -283,6 +284,8 @@ def generate_batch_records(
         raise ValueError(f"context_budget must be exactly {TOTAL_CONTEXT_TOKENS}")
     if max_new_tokens <= 0 or max_new_tokens > 4096:
         raise ValueError("max_new_tokens must be between 1 and 4096")
+    if min_new_tokens < 0 or min_new_tokens > max_new_tokens:
+        raise ValueError("min_new_tokens must be between 0 and max_new_tokens")
     max_input_tokens = TOTAL_CONTEXT_TOKENS - max_new_tokens
     if max_input_tokens <= 0:
         raise ValueError("max_new_tokens leaves no room for an input within the 4096-token limit")
@@ -304,7 +307,13 @@ def generate_batch_records(
             f"but only {max_input_tokens} fit within the explicit {TOTAL_CONTEXT_TOKENS}-token total budget"
         )
     encoded = encoded.to(model.device)
-    kwargs = {"max_new_tokens": max_new_tokens, "do_sample": temperature > 0, "pad_token_id": tokenizer.pad_token_id, "eos_token_id": tokenizer.eos_token_id}
+    kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "min_new_tokens": min_new_tokens,
+        "do_sample": temperature > 0,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
+    }
     if temperature > 0:
         kwargs.update(temperature=temperature, top_p=top_p)
     output_ids = model.generate(**encoded, **kwargs)

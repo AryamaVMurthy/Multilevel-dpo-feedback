@@ -13,7 +13,8 @@ set -euo pipefail
 
 fail() { printf 'event=failure reason=%q fallback_reason=%q\n' "$1" "${2:-none}" >&2; exit 2; }
 for name in PROJECT_DIR DATA OUTPUT MODEL MODEL_REVISION DATASET_SOURCE DATASET_REVISION \
-  DATA_SHA256 POLICY_HASH PROMPT_VERSION SEEDS EXPECTED_COMMIT; do
+  DATA_SHA256 POLICY_HASH PROMPT_VERSION SEEDS EXPECTED_COMMIT QUERY_MIN_NEW_TOKENS \
+  RESPONSE_MIN_NEW_TOKENS; do
   [[ -n "${!name:-}" ]] || fail "required environment variable is missing: $name" bootstrap_contract_missing
 done
 [[ "${SLURM_NNODES:?}" == 1 && "${SLURM_NTASKS:?}" == 1 ]] || fail "bootstrap requires one node and one task" allocation_shape_invalid
@@ -58,6 +59,8 @@ uv run --frozen python -m text_feedback_dpo.cli bootstrap-rollouts \
   --query-batch-size "${QUERY_BATCH_SIZE:-4}" --response-batch-size "${RESPONSE_BATCH_SIZE:-4}" \
   --query-max-new-tokens "${QUERY_MAX_NEW_TOKENS:-32}" \
   --response-max-new-tokens "${RESPONSE_MAX_NEW_TOKENS:-256}" \
+  --query-min-new-tokens "$QUERY_MIN_NEW_TOKENS" \
+  --response-min-new-tokens "$RESPONSE_MIN_NEW_TOKENS" \
   --query-temperature "${QUERY_TEMPERATURE:-0.7}" \
   --response-temperature "${RESPONSE_TEMPERATURE:-0.7}" --top-p "${TOP_P:-0.9}" \
   --top-k 8 --k1 1.2 --b 0.75 --context-budget 4096

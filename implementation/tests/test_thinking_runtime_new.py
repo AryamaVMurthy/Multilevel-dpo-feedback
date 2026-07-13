@@ -119,6 +119,61 @@ class ThinkingRuntimeTest(unittest.TestCase):
             generate_batch_records(model, tokenizer, ["long prompt"], max_new_tokens=200, temperature=0.0, top_p=1.0)
         self.assertFalse(tokenizer.calls[0][1]["truncation"])
 
+    def test_generation_forwards_explicit_minimum_new_tokens(self):
+        from text_feedback_dpo.runtime import generate_batch_records
+
+        class Encoded(dict):
+            def __init__(self):
+                input_ids = type("Ids", (), {"shape": (1, 1)})()
+                super().__init__(input_ids=input_ids, attention_mask=[[1]])
+                self.input_ids = input_ids
+
+            def to(self, _device):
+                return self
+
+        class Tokenizer:
+            pad_token_id = 0
+            eos_token_id = 2
+
+            def __call__(self, _prompts, **_kwargs):
+                return Encoded()
+
+            @staticmethod
+            def decode(ids, **_kwargs):
+                return " ".join(str(item) for item in ids)
+
+        class Model:
+            device = "cpu"
+
+            def __init__(self):
+                self.kwargs = None
+
+            def generate(self, **kwargs):
+                self.kwargs = kwargs
+                return [[99, 10, 11, 2]]
+
+        model = Model()
+        records = generate_batch_records(
+            model,
+            Tokenizer(),
+            ["prompt"],
+            max_new_tokens=32,
+            min_new_tokens=2,
+            temperature=0.0,
+            top_p=1.0,
+        )
+        self.assertEqual(model.kwargs["min_new_tokens"], 2)
+        self.assertEqual(records[0].text, "10 11")
+
+    def test_generation_rejects_minimum_above_maximum(self):
+        from text_feedback_dpo.runtime import generate_batch_records
+
+        with self.assertRaisesRegex(ValueError, "min_new_tokens.*max_new_tokens"):
+            generate_batch_records(
+                object(), object(), ["prompt"], max_new_tokens=8, min_new_tokens=9,
+                temperature=0.0, top_p=1.0,
+            )
+
     def test_generation_records_true_length_cap_truncation(self):
         class Tokenizer:
             eos_token_id = 2
