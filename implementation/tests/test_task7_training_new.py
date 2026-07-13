@@ -65,6 +65,19 @@ class _Tokenizer:
 
 
 class Task7TrainingTest(unittest.TestCase):
+    def test_retained_training_checkpoints_ignore_non_numeric_audit_directories(self):
+        import text_feedback_dpo.training as training
+
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            for name in ("checkpoint-200", "checkpoint-audits", "checkpoint-50", "checkpoint-invalid"):
+                (output / name).mkdir()
+            self.assertTrue(hasattr(training, "retained_training_checkpoints"))
+            self.assertEqual(
+                training.retained_training_checkpoints(output),
+                [(50, output / "checkpoint-50"), (200, output / "checkpoint-200")],
+            )
+
     def test_grpo_constructor_wiring_passes_eval_dataset_all_rewards_and_no_peft(self):
         from text_feedback_dpo.trainers import run_grpo
 

@@ -16,6 +16,19 @@ FALLBACK_STUDENT_MODEL = "Qwen/Qwen3-1.7B-Base"
 MAX_SEQUENCE_LENGTH = 4096
 
 
+def retained_training_checkpoints(output: Path) -> list[tuple[int, Path]]:
+    """Return only numeric trainer checkpoints, ordered by optimizer step."""
+    checkpoints: list[tuple[int, Path]] = []
+    for path in output.iterdir():
+        prefix = "checkpoint-"
+        if not path.is_dir() or not path.name.startswith(prefix):
+            continue
+        suffix = path.name[len(prefix):]
+        if suffix.isdigit():
+            checkpoints.append((int(suffix), path))
+    return sorted(checkpoints)
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 

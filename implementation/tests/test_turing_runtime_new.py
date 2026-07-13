@@ -132,6 +132,19 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("fallback_reason", text)
         self.assertNotIn("|| true", text)
 
+    def test_full_sft_manifest_has_reentrant_cpu_only_finalizer(self):
+        launcher = Path("scripts/turing_full_sft.sh").read_text(encoding="utf-8")
+        finalizer_path = Path("scripts/turing_finalize_full_sft.sh")
+        self.assertTrue(finalizer_path.is_file())
+        finalizer = finalizer_path.read_text(encoding="utf-8")
+        self.assertIn("python -m text_feedback_dpo.sft_manifest", launcher)
+        self.assertIn("python -m text_feedback_dpo.sft_manifest", finalizer)
+        self.assertNotIn("#SBATCH --gres=gpu:", finalizer)
+        self.assertIn("EXPECTED_COMMIT", finalizer)
+        self.assertIn("FINAL_MODEL_SHA256", finalizer)
+        self.assertIn("fallback_reason=none", finalizer)
+        self.assertNotIn("|| true", finalizer)
+
     def test_sft_reproduction_launcher_binds_checkpoint_data_and_generation_contract(self):
         text = Path("scripts/turing_sft_reproduction.sh").read_text(encoding="utf-8")
         for required in (

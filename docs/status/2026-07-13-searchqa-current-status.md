@@ -2,15 +2,15 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `d69ab13831bb7c2ff3510113b6d305383f77c10d`
+**Last observed remote commit:** `dc763063d663f6c19f15f26e857b979ef0209a5f`
 
-**Current local implementation commit:** `f46913e712f510476824f4eaa0a1018190b8171c`
+**Current local implementation commit:** `dc763063d663f6c19f15f26e857b979ef0209a5f`
 
 ## Executive status
 
 The fixed-retrieval SearchQA pipeline, strict cited-response evaluator, batched generation path, minimal-hint trajectory code, student-only SFT/DPO data gates, Turing launch contracts, and hardware probes exist and pass the local test suite. The pinned Qwen3-4B-Base student and Qwen3-32B 4-bit teacher both fit their assigned A100-40GB GPUs.
 
-The raw student was not ready for preference-data collection at scale: the original audited validation preflight produced zero fully correct protocol responses. The controlled v2 scaffold plus explicit minimum-generation contract removed empty-output collapse and supplied enough canonically verified, student-generated, no-hint targets for an SFT overfit gate. A four-GPU Qwen3-4B full-parameter BF16 ZeRO-3 SFT run has now completed 20 optimizer steps with real save/resume. DPO, GRPO, DAPO, and full-scale SFT have not started.
+The raw student was not ready for preference-data collection at scale: the original audited validation preflight produced zero fully correct protocol responses. The controlled v2 scaffold plus explicit minimum-generation contract removed empty-output collapse and supplied enough canonically verified, student-generated, no-hint targets for an SFT overfit gate. After the 20-step save/resume gate, eight parallel A100 workers generated 8,192 checkpoint-20 candidates for 4,096 train-only examples. Canonical validation produced 4,783 verified SFT rows and 1,680 complete query/response trajectory pairs. Four-GPU full Qwen3-4B BF16 ZeRO-3 SFT is now running as Slurm job `13836`; DPO, GRPO, and DAPO have not started.
 
 The overfit checkpoint is a material protocol improvement on the untouched 32-row validation sample: all 32 queries and all 32 responses are nonempty, parse-valid, cited three-line outputs, with zero truncations. Canonical retrieval recall@8 is 25/32 and canonical exact-answer correctness is 18/32. Manual review found one additional semantically accepted alias (`Launch and Arrival` against gold `takeoff & landing (or launch & arrival)`), which is reported separately and is not silently converted into training supervision or a changed canonical score.
 
@@ -31,8 +31,8 @@ Important identities:
 - Audited 32-row sample SHA-256: `c3e59f4f5a0c551cb276f614553b88562f66d771118bd9442fcdaf6fdf48f75a`
 - Retrieval identity SHA-256: `dbcbff5eeba529cb51361191378791b4e2afc371bdaee98ecac19140d83df97d`
 - Source-schema identity SHA-256: `59fe2f48bbbc35395d689c16f5aabf41103e78a6511afeeeabfc5bde20a939dc`
-- Active bounded prompt identity SHA-256: `5c52f50fb2122acd9c2fa3c334d7fe0cc276a92ffe6dac810510f0a3e0b94f27`
-- Active config SHA-256: `992faecd7db375456ca71d2f3a1c5b0f01ccb80bd1a98fe84afd9e0060a7a501`
+- Active bounded prompt identity SHA-256: `9b46e6ab3a36ddb1f6e8183c396e5db6debdaa168ca01d9547ed4c3187466124`
+- Active config SHA-256: `8a049d40663998c72f75658924739f02e1b39cb6ec10b1b0c7fd0ef3189a84a3`
 
 ## Model and hardware evidence
 
@@ -149,12 +149,18 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - Jobs `13812`–`13819` launched all eight checkpoint-20 rollout shards concurrently. Seven were cancelled after shard 3 failed, because mixing pre-fix and post-fix evaluator semantics would invalidate lineage. The exact root cause was train row `train-88271`, whose legitimate gold answer is standalone `A` (vitamin A). SQuAD-style article removal normalized `A` to an empty string, and retrieval scoring raised `gold answer must contain searchable normalized tokens` after model loading.
 - Commit `d69ab13` fixes the evaluator at the normalization source: a standalone answer `A`, `An`, or `The` remains searchable, while articles are still removed from multiword answers. Retrieval and cited lexical-support checks use the same article-aware phrase matcher. Evaluator identity is bumped to `cited-response-evaluator-v2-standalone-article-answer`; old and new rollout shards cannot be merged. The exact vitamin-A regression and cited-response support are covered by tests.
 - Job `13822` reran only the previously failing vitamin-A row against checkpoint 20. It completed in 56 seconds, retrieved answer-bearing evidence at rank 1, and produced a nonempty parse-valid cited response (`Vitamin A`) with no exception or truncation. The strict exact-answer metric still records `Vitamin A` versus gold `A` as a visible miss; no alias repair is applied.
-- Jobs `13825`–`13832` are the clean evaluator-v2 restart: eight concurrent one-A100 workers, two seeds per example, query/response batch size 4, explicit 2/32 and 8/256 token bounds, temperature `0.7`, top-p `0.9`, checkpoint model SHA-256 verification, and no-hint direct generation.
-- No optimizer step has run for DPO, GRPO, or DAPO. Full-scale SFT has not started; larger checkpoint-20 student-only rollout collection is now the active data gate.
+- Jobs `13825`–`13832` completed the clean evaluator-v2 restart on eight concurrent A100s with exact cardinality: 4,096 examples and 8,192 candidates. All 8,192 queries are nonempty. The 174 absent downstream responses are explicit query-stage rejections (154 invalid-format and 20 truncated), not empty response generations. Of 8,018 attempted responses, 7,549 parse, 4,149 have the canonical answer, and 3,933 satisfy protocol correctness. Across seeds, 3,103 examples have an answer-retrieving query and 1,680 have a fully verified, lexically supported response.
+- Job `13833` validated every shard manifest and merged the rollout artifact at SHA-256 `3fd639b24b9e603e4906fb989a553a0af16412d51c0b213b060e02f406aa6826`.
+- Job `13834` canonically rebuilt supervision with no repair: 3,103 query rows and 1,680 response rows, all nonempty, untruncated, student-generated, no-hint, hash-bound, and tokenizer-validated within 4,096 tokens. SFT SHA-256: `6f5a6e924b4d62dbb9bf50c3937ee35fd7061ec43bf5b182d19ee5e68e7c4e5d`.
+- Job `13835` produced a balanced trajectory-disjoint split: 1,424 train pairs (2,848 rows), 256 validation pairs (512 rows), zero overlap. Train file SHA-256: `e30d365db9de031c9fcb03c80f902b7986336a28ff671fc38470972592ff3858`; validation file SHA-256: `39118ba21b9f966093ac0ba0c80a5c14589921b483b3dd6da834de6f626d1248`.
+- Job `13836` is active full-parameter Qwen3-4B SFT on four A100s, BF16, TF32, ZeRO-3, fused AdamW, non-reentrant gradient checkpointing, max length 4,096, effective batch 16, two epochs, and a fresh optimizer initialized from exact checkpoint-20 weights. Validation loss/token accuracy is `0.1440`/`0.9433` at step 50, `0.1431`/`0.9425` at step 100, `0.1417`/`0.9427` at step 150, `0.1416`/`0.9423` at step 200, `0.1511`/`0.9413` at step 250, and `0.1527`/`0.9418` at step 300. Steps 250 and 300 confirm overfitting after step 200. Checkpoints and validation run every 50 optimizer steps; no OOM or traceback has occurred.
+- Job `13838` regenerated all 512 held-out paired prompts from checkpoint 50. Every generation is nonempty and untruncated. Exact decoded-text reproduction is 113/512, which is not used as the capability score because valid answers may paraphrase.
+- Job `13841` canonically revalidated those checkpoint-50 generations with no repair. Of 256 query rows, 254 are format-valid and 251 retrieve answer-bearing evidence in the top eight. Of 256 response rows, 255 parse, 249 have the canonical answer, 248 satisfy protocol correctness, and 236 pass the stricter SFT-eligibility rule. Manual inspection found two malformed queries, one duplicate-citation response, five mostly alias/wording misses, and two substantive answer errors. There are zero empty or truncated outputs.
+- Job `13842` preserved the step-150 model-only candidate before retention can retire it; model SHA-256 is `a10e3ad8aee3adf5b81ac0fe25cb590a343a1e703022cc63166556a397748fc8`. Jobs `13844` and `13846` generated and canonically revalidated checkpoint 200. Its response capability is slightly stronger than checkpoint 50 (251/256 answer-correct, 249 protocol-correct, 237 strict-eligible), but its search capability is weaker (250 valid queries, 247 retrieval recall@8, two truncations). Job `13845` preserved checkpoint 200 at model SHA-256 `1f5625ca3ece4b2c3c5df80a91542e11b2dae4a19341e9b31a895824a9742b75`; checkpoint 150 is now being audited to resolve the search/answer tradeoff. No optimizer step has run for DPO, GRPO, or DAPO.
 
 ## Verification state
 
-- Local verification: 267 unit tests passed. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. One expected upstream Torch deprecation warning remains.
+- Local verification: 323 unit tests and 171 subtests passed. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. Expected upstream Torch deprecation warnings remain.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
@@ -172,14 +178,13 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 
 ## Immediate next evidence gate
 
-The SFT overfit promotion gate has passed: the manifest fix, deterministic reproduction, canonical capability scoring, held-out generation, exact response inspection, and save/resume evidence all exist. The next full-SFT data gate requires:
+The scale rollout, merge, canonical SFT build, disjoint split, and full-SFT launch gates have passed. The active SFT promotion gate requires:
 
-- Select a larger train-only bootstrap pool at a frozen seed and hash; validation and official test remain excluded.
-- Shard it deterministically and run checkpoint-20 student-only, no-hint rollouts in parallel across available GPUs with batched query/response generation and explicit per-shard manifests.
-- Merge only exact shard IDs with duplicate/missing detection, then canonically revalidate every candidate before SFT selection.
-- Require nonempty, untruncated, answer-bearing query targets and fully parse-valid, answer-correct, cited, lexically supported response targets. Do not repair or synthesize rejected outputs.
-- Freeze full-SFT train/eval splits by trajectory ID, learning rate, checkpoint interval, generation-validation interval, and stop/promotion criteria before launching the longer four-GPU full-parameter run.
-- Preserve checkpoint 20 and the recorded checkpoint-5 resume hash; remove redundant scratch checkpoints only after the retention manifest is written and verified.
+- Continue loss/token-accuracy validation and checkpointing every 50 steps without changing the frozen run.
+- Canonically inspect generated query retrieval and cited responses from checkpoint 50 and later retained checkpoints; require zero empty response attempts, no hidden repair, and no regression from checkpoint 20.
+- Select the SFT checkpoint using held-out canonical capability, not training loss alone, then rerun the untouched 32-row validation sample end to end.
+- Preserve the selected checkpoint, exact hashes, data lineage, trainer state, GPU telemetry, and response audits before pruning redundant optimizer checkpoints.
+- Start the 32B-instruct minimal-correction collection only after the selected SFT policy is frozen; construct DPO preferences from successful student continuations and verified minimal hints, then run full DPO before GRPO/DAPO comparisons.
 
 The independent teacher gate still requires:
 
