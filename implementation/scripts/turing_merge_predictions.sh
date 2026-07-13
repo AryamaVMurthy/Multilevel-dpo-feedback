@@ -17,22 +17,10 @@ CLEANUP_INPUT_SHARDS="${CLEANUP_INPUT_SHARDS:-true}"
 
 cd "$PROJECT_DIR"
 mkdir -p "$(dirname "$OUTPUT")"
-tmp="$OUTPUT.tmp.${SLURM_JOB_ID}"
-rm -f "$tmp"
-for ((index=0; index<SHARDS; index++)); do
-  shard="$SHARD_DIR/shard-${index}.jsonl"
-  prediction="$SHARD_DIR/predictions-${index}.jsonl"
-  [[ -s "$shard" ]] || { echo "ERROR: missing or empty input shard: $shard" >&2; exit 2; }
-  [[ -s "$prediction" ]] || { echo "ERROR: missing or empty prediction shard: $prediction" >&2; exit 2; }
-  shard_lines="$(wc -l < "$shard")"
-  prediction_lines="$(wc -l < "$prediction")"
-  [[ "$shard_lines" == "$prediction_lines" ]] || {
-    echo "ERROR: prediction/input line-count mismatch for shard $index: input=$shard_lines prediction=$prediction_lines" >&2
-    exit 2
-  }
-  cat "$prediction" >> "$tmp"
-done
-mv "$tmp" "$OUTPUT"
+export PATH="$HOME/.local/bin:$PATH"
+export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+uv run --frozen python -m text_feedback_dpo.cli merge-predictions \
+  --shard-dir "$SHARD_DIR" --output "$OUTPUT" --shards "$SHARDS"
 if [[ "$CLEANUP_INPUT_SHARDS" == "true" ]]; then
   for ((index=0; index<SHARDS; index++)); do
     rm -f -- "$SHARD_DIR/shard-${index}.jsonl" "$SHARD_DIR/predictions-${index}.jsonl"

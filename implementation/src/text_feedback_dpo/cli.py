@@ -46,6 +46,19 @@ def cmd_prepare(args: argparse.Namespace) -> None:
     write_json(args.output.parent / "manifest.json", manifest)
 
 
+def cmd_shard_jsonl(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.sharding import shard_jsonl
+
+    shard_jsonl(args.input, args.output_dir, shard_count=args.shards)
+
+
+def cmd_merge_predictions(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.sharding import merge_prediction_shards
+
+    result = merge_prediction_shards(args.shard_dir, args.output, shard_count=args.shards)
+    write_json(args.output.with_suffix(".manifest.json"), result)
+
+
 def cmd_probe_model(args: argparse.Namespace) -> None:
     from text_feedback_dpo.runtime import (
         extract_qwen_final_content,
@@ -332,6 +345,16 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--max-evidence-tokens", required=True, type=int)
     prepare.add_argument("--limit", type=int)
     prepare.set_defaults(func=cmd_prepare)
+    shard = sub.add_parser("shard-jsonl")
+    shard.add_argument("--input", required=True, type=Path)
+    shard.add_argument("--output-dir", required=True, type=Path)
+    shard.add_argument("--shards", required=True, type=int)
+    shard.set_defaults(func=cmd_shard_jsonl)
+    merge = sub.add_parser("merge-predictions")
+    merge.add_argument("--shard-dir", required=True, type=Path)
+    merge.add_argument("--output", required=True, type=Path)
+    merge.add_argument("--shards", required=True, type=int)
+    merge.set_defaults(func=cmd_merge_predictions)
     probe = sub.add_parser("probe-model")
     probe.add_argument("--role", choices=("student", "teacher"), required=True)
     probe.add_argument("--model", required=True)

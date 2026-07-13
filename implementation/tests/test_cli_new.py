@@ -6,7 +6,7 @@ from text_feedback_dpo.cli import build_parser
 class CLITest(unittest.TestCase):
     def test_exposes_only_searchqa_training_commands(self):
         parser = build_parser()
-        for command in ("prepare-searchqa", "probe-model", "collect", "build-preferences", "build-sft-data", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
+        for command in ("prepare-searchqa", "shard-jsonl", "merge-predictions", "probe-model", "collect", "build-preferences", "build-sft-data", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
             parsed = parser.parse_args([command] + self._required_args(command))
             self.assertEqual(parsed.command, command)
 
@@ -33,6 +33,10 @@ class CLITest(unittest.TestCase):
             return ["--source", "source", "--split", "train", "--tokenizer-model", "model", "--tokenizer-revision", "tok-rev", "--revision", "data-rev", "--output", "x.jsonl", "--max-evidence-tokens", "100"]
         if command == "probe-model":
             return ["--role", "teacher", "--model", "model", "--model-revision", "rev", "--teacher-quantization", "4bit", "--output", "probe.json"]
+        if command == "shard-jsonl":
+            return ["--input", "data.jsonl", "--output-dir", "shards", "--shards", "4"]
+        if command == "merge-predictions":
+            return ["--shard-dir", "shards", "--output", "merged.jsonl", "--shards", "4"]
         if command == "collect":
             return ["--data", "x.jsonl", "--output", "y.jsonl", "--student-model", "student", "--teacher-model", "teacher", "--student-revision", "student-rev", "--teacher-revision", "teacher-rev", "--dataset-revision", "data-rev", "--prompt-version", "plain-v2", "--seed", "7", "--teacher-quantization", "4bit", "--attention-implementation", "sdpa", "--student-device", "cuda:1", "--teacher-device", "cuda:0", "--trajectory-cache", "cache.jsonl", "--policy-hash", "p1"]
         if command == "build-preferences":
