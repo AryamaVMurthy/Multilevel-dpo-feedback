@@ -1,8 +1,9 @@
 #!/bin/bash
 # Submit with: sbatch -A <account> --export=ALL,PROJECT_DIR=...,METHOD=dpo,... scripts/turing_train.sh
 #SBATCH -p u22
-#SBATCH -n 64
-#SBATCH --gres=gpu:2
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --gres=gpu:4
 #SBATCH --mem-per-cpu=4096
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-%x-%j.out
@@ -16,10 +17,21 @@ set -euo pipefail
 : "${TRAIN:?TRAIN must be supplied with --export}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
 : "${TRAIN_GPUS:?TRAIN_GPUS must be supplied with --export}"
-if [[ "$TRAIN_GPUS" != "2" ]]; then
-  echo "ERROR: this script requests exactly 2 GPUs; TRAIN_GPUS=$TRAIN_GPUS is unsupported" >&2
+if [[ "$TRAIN_GPUS" != "2" && "$TRAIN_GPUS" != "4" ]]; then
+  echo "ERROR: TRAIN_GPUS must be 2 or 4; got $TRAIN_GPUS" >&2
   exit 2
 fi
+: "${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is required inside the allocation}"
+if [[ "$SLURM_GPUS_ON_NODE" != "$TRAIN_GPUS" ]]; then
+  echo "ERROR: requested training workers ($TRAIN_GPUS) do not match allocated GPUs ($SLURM_GPUS_ON_NODE)" >&2
+  exit 2
+fi
+EFFECTIVE_BATCH_SIZE="${EFFECTIVE_BATCH_SIZE:-128}"
+if (( EFFECTIVE_BATCH_SIZE % TRAIN_GPUS != 0 )); then
+  echo "ERROR: EFFECTIVE_BATCH_SIZE=$EFFECTIVE_BATCH_SIZE must be divisible by TRAIN_GPUS=$TRAIN_GPUS" >&2
+  exit 2
+fi
+GRADIENT_ACCUMULATION_STEPS="$((EFFECTIVE_BATCH_SIZE / TRAIN_GPUS))"
 
 case "$METHOD" in
   sft|dpo) : "${EVAL:?EVAL must be supplied for $METHOD}" ;;
@@ -53,7 +65,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ARGS=(--config "$CONFIG" --train "$TRAIN" --output "$OUTPUT" --deepspeed-config configs/deepspeed_zero3.json --save-steps 100 --eval-steps 100)
+ARGS=(--config "$CONFIG" --train "$TRAIN" --output "$OUTPUT" --deepspeed-config configs/deepspeed_zero3.json --save-steps 100 --eval-steps 100 --gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS")
 if [[ "$METHOD" == sft || "$METHOD" == dpo ]]; then
   ARGS+=(--eval "$EVAL")
 fi

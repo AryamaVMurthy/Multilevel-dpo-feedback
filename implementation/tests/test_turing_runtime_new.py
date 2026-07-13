@@ -58,6 +58,15 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("probe-model", text)
         self.assertIn("--teacher-quantization 4bit", text)
 
+    def test_training_uses_configurable_multi_gpu_with_fixed_effective_batch(self):
+        text = Path("scripts/turing_train.sh").read_text(encoding="utf-8")
+        self.assertIn('TRAIN_GPUS" != "2" && "$TRAIN_GPUS" != "4"', text)
+        self.assertIn("SLURM_GPUS_ON_NODE", text)
+        self.assertIn("EFFECTIVE_BATCH_SIZE", text)
+        self.assertIn("GRADIENT_ACCUMULATION_STEPS", text)
+        self.assertIn('--gradient-accumulation-steps "$GRADIENT_ACCUMULATION_STEPS"', text)
+        self.assertIn('--nproc_per_node="$TRAIN_GPUS"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

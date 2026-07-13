@@ -1,9 +1,20 @@
 import unittest
 
-from text_feedback_dpo.trainers import _dpo_args, _rl_args, _sft_args, searchqa_rl_reward
+from text_feedback_dpo.trainers import _common_args, _dpo_args, _rl_args, _sft_args, searchqa_rl_reward
 
 
 class TrainerContractTest(unittest.TestCase):
+    def test_common_training_args_enable_measured_ada_optimizations(self):
+        args = _common_args({}, "out")
+        self.assertTrue(args["tf32"])
+        self.assertEqual(args["optim"], "adamw_torch_fused")
+        self.assertNotIn("group_by_length", args)
+        self.assertGreaterEqual(args["dataloader_num_workers"], 4)
+        self.assertTrue(args["dataloader_pin_memory"])
+        self.assertFalse(args["ddp_find_unused_parameters"])
+        self.assertEqual(args["gradient_checkpointing_kwargs"], {"use_reentrant": False})
+        self.assertTrue(args["include_num_input_tokens_seen"])
+
     def test_sft_uses_prompt_completion_and_completion_only_loss(self):
         args = _sft_args({}, "out")
         self.assertTrue(args["completion_only_loss"])
