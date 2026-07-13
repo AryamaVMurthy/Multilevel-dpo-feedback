@@ -39,6 +39,14 @@ Important identities:
 - Two-GPU collection decision: teacher `cuda:0`, student `cuda:1`, both A100-SXM4-40GB.
 - Sample-bound generation decision SHA-256: `866369e355585c0a691aafcdb308847dcd04512fda5ce176c5314e4e539b6bdf`.
 
+## Storage evidence
+
+- Turing home quota: 50 GiB total, 42 GiB used, 8.6 GiB available (83% used at this snapshot).
+- Node10 scratch: 14 TiB total, 5.8 TiB available.
+- Active fixed-retrieval checkout: 6.5 GiB, of which 6.4 GiB is materialized data.
+- Full 4B checkpoints with optimizer state and full trajectory dumps cannot safely be written to home. Run data, optimizer checkpoints, model caches, and trajectory shards must live under a manifest-bound node10 scratch root; home should retain source, small logs, metrics, manifests, and final research summaries.
+- Other large home paths (`slm-research-qwen`, 22 GiB; `browser-agent-run`, 7.6 GiB; obsolete plain-answer checkout, 5.3 GiB) were measured but not deleted. Cleanup requires an artifact/lineage audit so unrelated work is not removed.
+
 ## Exhaustive 32-row student audit
 
 Artifacts audited:
@@ -124,4 +132,3 @@ The next stage is complete only when all of the following exist:
 - Zero teacher-answer leakage and zero hidden parser repair.
 - Measured resolution rate, hint-level curve, no-hint sibling success rate, SFT eligibility, preference eligibility, latency, throughput, and GPU utilization.
 - A written decision choosing teacher-first collection, student-only bootstrap SFT, or an explicit prompt-scaffold experiment based on those numbers.
-
