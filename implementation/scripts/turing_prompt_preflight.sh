@@ -44,6 +44,15 @@ allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is r
 [[ "$SLURM_NTASKS" == "1" ]] || fail "prompt preflight requires exactly one task; got $SLURM_NTASKS" multi_task_prompt_preflight
 ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
 [[ "$ALLOCATED_GPU_COUNT" == "1" ]] || fail "prompt preflight requires exactly one allocated GPU; got $ALLOCATED_GPU_COUNT" prompt_preflight_gpu_count
+mkdir -p "$OUTPUT_ROOT"
+SAMPLED_DATA="$OUTPUT_ROOT/prompt-preflight-32.jsonl"
+SAMPLE_MANIFEST="$OUTPUT_ROOT/prompt-preflight-32.manifest.json"
+head -n 32 "$DATA" > "$SAMPLED_DATA"
+ROW_COUNT="$(wc -l < "$SAMPLED_DATA" | tr -d ' ')"
+[[ "$ROW_COUNT" == "32" ]] || fail "prompt preflight requires exactly 32 input rows; got $ROW_COUNT" prompt_preflight_sample_too_small
+SAMPLE_SHA256="$(sha256sum "$SAMPLED_DATA" | awk '{print $1}')"
+printf '{"status":"ready","row_count":32,"data_sha256":"%s","fallback_reason":"none"}\n' "$SAMPLE_SHA256" > "$SAMPLE_MANIFEST"
+[[ "$(grep -c '"row_count":32' "$SAMPLE_MANIFEST")" == "1" ]] || fail "prompt preflight sample manifest row count is not 32" prompt_preflight_sample_manifest_invalid
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
 DATA_SHA256="$(sha256sum "$DATA" | awk '{print $1}')"
@@ -70,14 +79,17 @@ nvidia-smi
 
 for mode in direct two_pass; do
   uv run --frozen python -m text_feedback_dpo.cli generate-searchqa \
-    --data "$DATA" --output "$OUTPUT_ROOT/$mode-predictions.jsonl" \
+    --data "$SAMPLED_DATA" --output "$OUTPUT_ROOT/$mode-predictions.jsonl" \
     --model "$MODEL" --model-revision "$MODEL_REVISION" --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --attention-implementation "$ATTENTION_IMPLEMENTATION" \
     --device cuda:0 --student-thinking-mode "$mode" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" \
     --query-batch-size "$QUERY_BATCH_SIZE" --response-batch-size "$RESPONSE_BATCH_SIZE" \
     --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" \
-    --context-budget 4096 --top-p 1.0 --top-k 8 --k1 1.2 --b 0.75 --policy-hash "$POLICY_HASH:$mode"
+    --query-temperature "$FROZEN_QUERY_TEMPERATURE" --response-temperature "$FROZEN_RESPONSE_TEMPERATURE" \
+    --context-budget 4096 --top-p "$FROZEN_TOP_P" --top-k "$FROZEN_TOP_K" --k1 "$FROZEN_K1" --b "$FROZEN_B" --policy-hash "$POLICY_HASH:$mode"
+  PREDICTION_ROWS="$(wc -l < "$OUTPUT_ROOT/$mode-predictions.jsonl" | tr -d ' ')"
+  [[ "$PREDICTION_ROWS" == "32" ]] || fail "$mode generation emitted $PREDICTION_ROWS rows; expected 32" prompt_preflight_prediction_row_count
   uv run --frozen python -m text_feedback_dpo.cli preflight-quality \
-    --data "$DATA" --predictions "$OUTPUT_ROOT/$mode-predictions.jsonl" \
+    --data "$SAMPLED_DATA" --predictions "$OUTPUT_ROOT/$mode-predictions.jsonl" \
     --output "$OUTPUT_ROOT/$mode-metrics.json" --samples "$OUTPUT_ROOT/$mode-samples.jsonl" \
     --split-name train-dev --sample-size 32 --seed 7 --protocol active-search
 done
@@ -85,3 +97,14 @@ done
 uv run --frozen python -m text_feedback_dpo.cli select-thinking-mode \
   --direct "$OUTPUT_ROOT/direct-metrics.json" --two-pass "$OUTPUT_ROOT/two_pass-metrics.json" \
   --output "$OUTPUT_ROOT/selected-thinking-mode.json"
+
+THINKING_MODE_SELECTION="$OUTPUT_ROOT/selected-thinking-mode.manifest.json"
+IFS=$'\t' read -r SELECTED_THINKING_MODE THINKING_MODE_SELECTION_SHA256 SELECTION_FALLBACK_REASON < <(
+  run_probe_runner freeze-thinking-selection --selection "$OUTPUT_ROOT/selected-thinking-mode.json" --output "$THINKING_MODE_SELECTION" \
+    --expected-mode "$FROZEN_THINKING_MODE" --row-count 32 --optimization-decision-sha256 "$VALIDATED_DECISION_SHA256" \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_SHA256" --model "$MODEL" --model-revision "$MODEL_REVISION" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$DATA_SHA256" \
+    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+) || fail "selected thinking mode does not match the frozen decision" thinking_mode_selection_invalid
+[[ "$SELECTED_THINKING_MODE" == "$FROZEN_THINKING_MODE" ]] || fail "selected thinking mode drifted from the frozen decision" thinking_mode_selection_mismatch
+log_event thinking_mode_selected artifact="$THINKING_MODE_SELECTION" artifact_sha256="$THINKING_MODE_SELECTION_SHA256" selected="$SELECTED_THINKING_MODE" row_count=32 fallback_reason="$SELECTION_FALLBACK_REASON"

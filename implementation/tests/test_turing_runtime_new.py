@@ -126,7 +126,7 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn('SLURM_NNODES" != "1"', text)
         self.assertIn('SLURM_NTASKS" != "1"', text)
         self.assertIn("ALLOCATED_GPU_COUNT", text)
-        self.assertIn('ALLOCATED_GPU_COUNT" -lt "2"', text)
+        self.assertIn('ALLOCATED_GPU_COUNT" != "2"', text)
         self.assertIn("COLLECTION_DECISION", text)
         self.assertIn("validate-collection-decision", text)
         for value in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "MERGE_ID"):

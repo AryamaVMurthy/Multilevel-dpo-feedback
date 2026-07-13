@@ -21,6 +21,7 @@ for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || fail "$name must be su
 : "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == 1 ]] || fail "scaling probe requires one node" multi_node_probe_forbidden
 : "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == 1 ]] || fail "scaling probe requires one task" multi_task_probe_forbidden
 [[ "$TRAIN_GPUS" == 4 || "$TRAIN_GPUS" == 8 ]] || fail "TRAIN_GPUS must be 4 or 8" scale_gpu_counts_invalid
+[[ "$PROBE_MAX_STEPS" =~ ^[1-9][0-9]*$ ]] || fail "PROBE_MAX_STEPS must be positive before a scaling subprocess can launch" max_steps_invalid
 ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
 [[ "$ALLOCATED_GPU_COUNT" == "$TRAIN_GPUS" ]] || fail "allocation=$ALLOCATED_GPU_COUNT differs from TRAIN_GPUS=$TRAIN_GPUS" gpu_allocation_mismatch
 

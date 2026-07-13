@@ -280,6 +280,93 @@ def cmd_validate_decision(args: argparse.Namespace) -> None:
         print(json.dumps(payload, sort_keys=True))
 
 
+def selection_identity(args: argparse.Namespace) -> dict[str, str]:
+    return {
+        "commit_hash": args.commit_hash,
+        "config_sha256": args.config_sha256,
+        "model": args.model,
+        "model_revision": args.model_revision,
+        "dataset_source": args.dataset_source,
+        "dataset_revision": args.dataset_revision,
+        "dataset_sha256": args.dataset_sha256,
+        "prompt_sha256": args.prompt_sha256,
+        "retrieval_sha256": args.retrieval_sha256,
+        "source_schema_sha256": args.source_schema_sha256,
+    }
+
+
+def load_thinking_selection(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        reject("thinking_selection_missing", f"thinking-mode selection artifact does not exist: {path}")
+    try:
+        selection = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        reject("thinking_selection_invalid", f"cannot parse thinking-mode selection artifact: {exc}")
+    if not isinstance(selection, dict) or selection.get("selected") not in {"direct", "two_pass"}:
+        reject("thinking_selection_invalid", "selection artifact must contain selected=direct or selected=two_pass")
+    eligible = selection.get("eligible")
+    if not isinstance(eligible, list) or selection["selected"] not in eligible:
+        reject("thinking_selection_invalid", "selection artifact eligible modes are missing or inconsistent")
+    if not isinstance(selection.get("selection_metric"), list) or not selection["selection_metric"]:
+        reject("thinking_selection_invalid", "selection artifact lacks selection_metric")
+    return selection
+
+
+def selection_identity_from_manifest(manifest: dict[str, Any], args: argparse.Namespace) -> None:
+    identities = manifest.get("identities")
+    if not isinstance(identities, dict):
+        reject("thinking_selection_identity_missing", "thinking-mode selection identities are missing")
+    for key, value in selection_identity(args).items():
+        if identities.get(key) != value:
+            reject("thinking_selection_identity_mismatch", f"selection {key}={identities.get(key)!r}, expected {value!r}")
+
+
+def cmd_freeze_thinking_selection(args: argparse.Namespace) -> None:
+    selection = load_thinking_selection(args.selection)
+    if selection["selected"] != args.expected_mode:
+        reject("thinking_selection_frozen_mode_mismatch", f"selected mode {selection['selected']!r} differs from frozen mode {args.expected_mode!r}")
+    if args.row_count != 32:
+        reject("thinking_selection_row_count_invalid", f"thinking-mode selection must be based on exactly 32 rows, got {args.row_count}")
+    manifest = {
+        "schema_version": 1,
+        "status": "frozen",
+        "fallback_reason": "none",
+        "selected": selection["selected"],
+        "selection_metric": selection["selection_metric"],
+        "eligible": selection["eligible"],
+        "selection_artifact_sha256": sha256_file(args.selection),
+        "row_count": args.row_count,
+        "optimization_decision_sha256": args.optimization_decision_sha256,
+        "identities": selection_identity(args),
+    }
+    write_json(args.output, manifest)
+    print(f"{selection['selected']}\t{sha256_file(args.output)}\tnone")
+
+
+def cmd_validate_thinking_selection(args: argparse.Namespace) -> None:
+    if not args.manifest.is_file():
+        reject("thinking_selection_missing", f"thinking-mode selection manifest does not exist: {args.manifest}")
+    actual_sha256 = sha256_file(args.manifest)
+    if actual_sha256 != args.expected_sha256:
+        reject("thinking_selection_hash_mismatch", f"selection manifest hash is {actual_sha256}, expected {args.expected_sha256}")
+    try:
+        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        reject("thinking_selection_invalid", f"cannot parse thinking-mode selection manifest: {exc}")
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or manifest.get("status") != "frozen":
+        reject("thinking_selection_schema_invalid", "selection manifest must be schema_version=1 and status=frozen")
+    if manifest.get("fallback_reason") != "none":
+        reject("thinking_selection_fallback_invalid", "selection manifest must record fallback_reason=none")
+    if manifest.get("selected") != args.expected_mode:
+        reject("thinking_selection_mode_mismatch", f"selection mode {manifest.get('selected')!r} differs from expected {args.expected_mode!r}")
+    if manifest.get("row_count") != 32:
+        reject("thinking_selection_row_count_invalid", "selection manifest must record row_count=32")
+    if manifest.get("optimization_decision_sha256") != args.optimization_decision_sha256:
+        reject("thinking_selection_decision_mismatch", "selection manifest does not match the frozen optimization decision")
+    selection_identity_from_manifest(manifest, args)
+    print(f"{manifest['selected']}\t{actual_sha256}\tnone")
+
+
 def checkpoint_step(path: Path) -> tuple[int, Path]:
     state_path = path / "trainer_state.json"
     if not state_path.is_file():
@@ -358,10 +445,40 @@ QWEN3_KEY_FAMILIES = (
 )
 
 
+def canonical_model_key(key: str) -> str:
+    while key.startswith("module."):
+        key = key[len("module."):]
+    return key
+
+
 def validate_model_tensors(tensors: list[tuple[str, Any]], config: dict[str, Any], path: Path) -> None:
-    recognized = [(key, tensor) for key, tensor in tensors if any(pattern.fullmatch(key) for pattern in QWEN3_KEY_FAMILIES)]
+    hidden = int(config["hidden_size"])
+    layers = int(config["num_hidden_layers"])
+    heads = int(config["num_attention_heads"])
+    kv_heads = int(config.get("num_key_value_heads", heads))
+    head_dim = int(config.get("head_dim", hidden // heads if heads and hidden % heads == 0 else 0))
+    intermediate = int(config.get("intermediate_size", 0))
+    vocab = int(config["vocab_size"])
+    if not head_dim or not intermediate or heads % kv_heads != 0:
+        reject("checkpoint_model_config_invalid", f"Qwen3 config has invalid head/intermediate dimensions: {path}")
+    recognized: list[tuple[str, Any]] = []
+    layer_indices: set[int] = set()
+    for raw_key, tensor in tensors:
+        key = canonical_model_key(raw_key)
+        layer_match = re.match(r"^model\.layers\.(\d+)\.", key)
+        if layer_match:
+            layer_index = int(layer_match.group(1))
+            if layer_index >= layers:
+                reject("checkpoint_model_layer_out_of_range", f"tensor {raw_key} names layer {layer_index} but config has {layers} layers")
+            layer_indices.add(layer_index)
+        if any(pattern.fullmatch(key) for pattern in QWEN3_KEY_FAMILIES):
+            recognized.append((key, tensor))
+        elif key.startswith("model.layers."):
+            reject("checkpoint_model_key_invalid", f"unrecognized Qwen3 layer tensor key: {raw_key}")
     keys = {key for key, _ in recognized}
-    required_exact = {"model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"}
+    required_exact = {"model.embed_tokens.weight", "model.norm.weight"}
+    if not config.get("tie_word_embeddings", False):
+        required_exact.add("lm_head.weight")
     family_hits = {
         "attention": any(".self_attn." in key for key in keys),
         "mlp": any(".mlp." in key for key in keys),
@@ -369,11 +486,41 @@ def validate_model_tensors(tensors: list[tuple[str, Any]], config: dict[str, Any
     minimum_tensors = max(8, min(16, config["num_hidden_layers"] * 4))
     minimum_numel = max(256, config["hidden_size"] * config["vocab_size"] * 2)
     total_numel = sum(int(tensor.numel()) for _, tensor in recognized)
+    expected_layer_indices = set(range(layers))
+    if layer_indices != expected_layer_indices:
+        reject(
+            "checkpoint_model_layer_set_invalid",
+            f"model state layer indices {sorted(layer_indices)} do not match config range 0..{layers - 1}: {path}",
+        )
     if not required_exact.issubset(keys) or not all(family_hits.values()) or len(recognized) < minimum_tensors or total_numel < minimum_numel:
         reject(
             "checkpoint_model_semantics_invalid",
             f"model state is inconsistent with Qwen3 architecture: recognized_tensors={len(recognized)} numel={total_numel} path={path}",
         )
+    expected_shapes: dict[str, tuple[int, ...]] = {
+        "model.embed_tokens.weight": (vocab, hidden),
+        "model.norm.weight": (hidden,),
+        "lm_head.weight": (vocab, hidden),
+    }
+    for key, tensor in recognized:
+        shape = tuple(int(value) for value in tensor.shape)
+        expected: tuple[int, ...] | None = expected_shapes.get(key)
+        layer_match = re.match(r"^model\.layers\.(\d+)\.self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight$", key)
+        if layer_match:
+            projection = layer_match.group(2)
+            if projection == "q_proj":
+                expected = (heads * head_dim, hidden)
+            elif projection in {"k_proj", "v_proj"}:
+                expected = (kv_heads * head_dim, hidden)
+            else:
+                expected = (hidden, heads * head_dim)
+        if re.fullmatch(r"model\.layers\.\d+\.(?:input_layernorm|post_attention_layernorm)\.weight", key):
+            expected = (hidden,)
+        mlp_match = re.match(r"^model\.layers\.\d+\.mlp\.(gate_proj|up_proj|down_proj)\.weight$", key)
+        if mlp_match:
+            expected = (intermediate, hidden) if mlp_match.group(1) in {"gate_proj", "up_proj"} else (hidden, intermediate)
+        if expected is not None and shape != expected:
+            reject("checkpoint_model_shape_invalid", f"tensor {key} has shape {shape}, expected {expected} from config")
 
 
 def validate_model_mapping(value: dict[str, Any], config: dict[str, Any], path: Path) -> None:
@@ -635,6 +782,7 @@ class TelemetrySampler:
         self.hardware = hardware
         self.interval_seconds = interval_seconds
         self.samples: list[dict[str, Any]] = []
+        self.query_errors: list[str] = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sample, daemon=True)
         self.started_at = 0.0
@@ -658,8 +806,8 @@ class TelemetrySampler:
                         "memory_used_mb": float(fields[2]), "power_watts": float(fields[3]),
                         "temperature_c": float(fields[4]), "timestamp": time.monotonic(),
                     })
-            except (OSError, ValueError, subprocess.SubprocessError):
-                pass
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                self.query_errors.append(f"{type(exc).__name__}: {exc}")
             self._stop.wait(self.interval_seconds)
 
     def __enter__(self) -> TelemetrySampler:
@@ -675,6 +823,8 @@ class TelemetrySampler:
     def summary(self) -> dict[str, float | int]:
         if not self.samples:
             reject("gpu_telemetry_unavailable", "nvidia-smi produced no utilization telemetry during the measured probe")
+        if self.query_errors:
+            reject("gpu_telemetry_query_failed", f"nvidia-smi telemetry query failed: {self.query_errors[0]}")
         duration = self.ended_at - self.started_at
         hardware_uuids = sorted(device["uuid"] for device in self.hardware["devices"])
         monitored_uuids = sorted({str(item["uuid"]) for item in self.samples})
@@ -686,6 +836,7 @@ class TelemetrySampler:
             "measured_duration_seconds": duration,
             "coverage_ratio": min(1.0, sample_rounds / expected_rounds),
             "monitored_uuids": monitored_uuids,
+            "query_errors": self.query_errors,
             "utilization_mean_percent": sum(item["utilization_percent"] for item in self.samples) / len(self.samples),
             "utilization_peak_percent": max(item["utilization_percent"] for item in self.samples),
             "nvidia_smi_peak_memory_mb": max(item["memory_used_mb"] for item in self.samples),
@@ -715,6 +866,8 @@ def read_probe_prompts(path: Path, sample_size: int) -> list[str]:
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
     started_at = time.time()
+    if args.max_steps <= 0:
+        reject("max_steps_invalid", f"--max-steps must be positive before a measured probe can launch: {args.max_steps}")
     base_result = {
         "schema_version": 1,
         "probe_name": args.probe_name,
@@ -949,6 +1102,7 @@ PROBE_CONFIG_FIELDS = (
 )
 TELEMETRY_FIELDS = (
     "sample_count", "monitor_interval_seconds", "measured_duration_seconds", "coverage_ratio", "monitored_uuids",
+    "query_errors",
     "utilization_mean_percent", "utilization_peak_percent",
     "nvidia_smi_peak_memory_mb", "power_peak_watts", "temperature_peak_c",
 )
@@ -1010,7 +1164,7 @@ def probe_artifact_error(result: object) -> str | None:
     telemetry = result.get("gpu_utilization")
     if not isinstance(telemetry, dict) or set(TELEMETRY_FIELDS) - telemetry.keys():
         return "probe_gpu_telemetry_invalid"
-    numeric_telemetry_fields = set(TELEMETRY_FIELDS) - {"monitored_uuids"}
+    numeric_telemetry_fields = set(TELEMETRY_FIELDS) - {"monitored_uuids", "query_errors"}
     for key in numeric_telemetry_fields:
         value = telemetry[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -1025,6 +1179,8 @@ def probe_artifact_error(result: object) -> str | None:
     hardware_uuids = sorted(device["uuid"] for device in result["gpu_hardware"]["devices"])
     if telemetry["monitored_uuids"] != hardware_uuids:
         return "probe_gpu_telemetry_invalid"
+    if not isinstance(telemetry["query_errors"], list) or telemetry["query_errors"]:
+        return "probe_gpu_telemetry_query_failed"
     expected_samples = math.floor(telemetry["measured_duration_seconds"] / telemetry["monitor_interval_seconds"])
     if telemetry["sample_count"] < max(MIN_TELEMETRY_SAMPLES, math.floor(expected_samples * MIN_TELEMETRY_COVERAGE)):
         return "probe_gpu_telemetry_invalid"
@@ -1330,8 +1486,8 @@ def cmd_freeze_collection_decision(args: argparse.Namespace) -> None:
     if error:
         reject("collection_hardware_probe_invalid", f"collection hardware probe is invalid: {error}")
     hardware = result["gpu_hardware"]
-    if hardware["count"] < 2:
-        reject("collection_gpu_count", "collection requires at least two measured GPUs")
+    if hardware["count"] != 2:
+        reject("collection_gpu_count", "collection device decisions require exactly two measured GPUs")
     if args.teacher_device_index == args.student_device_index:
         reject("collection_device_collision", "teacher and student must use different devices")
     if any(index < 0 or index >= hardware["count"] for index in (args.teacher_device_index, args.student_device_index)):
@@ -1365,14 +1521,46 @@ def cmd_validate_collection_decision(args: argparse.Namespace) -> None:
         reject("collection_teacher_identity_mismatch", "teacher model identity differs from frozen collection decision")
     if decision.get("student", {}).get("model") != args.student_model or decision["student"].get("revision") != args.student_revision:
         reject("collection_student_identity_mismatch", "student model identity differs from frozen collection decision")
-    hardware = decision.get("allocated_gpu_hardware")
-    if gpu_hardware_error(hardware) or hardware["count"] != args.allocated_gpus:
-        reject("collection_hardware_identity_mismatch", "allocated GPU count differs from frozen collection evidence")
-    teacher_index = decision["teacher"]["device_index"]
-    student_index = decision["student"]["device_index"]
-    if teacher_index == student_index or min(teacher_index, student_index) < 0 or max(teacher_index, student_index) >= args.allocated_gpus:
-        reject("collection_device_contract_invalid", "frozen teacher/student devices are not distinct valid allocation indices")
+    frozen_hardware = decision.get("allocated_gpu_hardware")
+    if gpu_hardware_error(frozen_hardware) or frozen_hardware["count"] != args.allocated_gpus or args.allocated_gpus != 2:
+        reject("collection_hardware_identity_mismatch", "collection requires exactly two GPUs matching frozen hardware evidence")
+    try:
+        current_payload = json.loads(args.current_hardware.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        reject("collection_current_hardware_invalid", f"cannot parse current hardware evidence: {exc}")
+    current_hardware = current_payload.get("gpu_hardware") if isinstance(current_payload, dict) else None
+    if gpu_hardware_error(current_hardware) or current_hardware["count"] != 2:
+        reject("collection_current_hardware_invalid", "current collection hardware evidence is not exactly two GPUs")
+    for frozen, current in zip(frozen_hardware["devices"], current_hardware["devices"], strict=True):
+        for key in ("name", "uuid", "total_memory_bytes", "compute_capability"):
+            if frozen[key] != current[key]:
+                reject("collection_gpu_uuid_mismatch", f"current GPU {key} differs from frozen collection evidence")
+    frozen_teacher = decision["teacher"]
+    frozen_student = decision["student"]
+    current_by_uuid = {device["uuid"]: device for device in current_hardware["devices"]}
+    if frozen_teacher["uuid"] not in current_by_uuid or frozen_student["uuid"] not in current_by_uuid:
+        reject("collection_gpu_uuid_mismatch", "current physical GPU UUIDs do not match frozen teacher/student UUIDs")
+    current_teacher = current_by_uuid[frozen_teacher["uuid"]]
+    current_student = current_by_uuid[frozen_student["uuid"]]
+    if current_teacher["free_memory_bytes"] < frozen_teacher["free_memory_bytes"] or current_student["free_memory_bytes"] < frozen_student["free_memory_bytes"]:
+        reject("collection_vram_insufficient", "current free VRAM is below frozen teacher/student selection evidence")
+    if current_teacher["free_memory_bytes"] != max(device["free_memory_bytes"] for device in current_hardware["devices"]):
+        reject("teacher_not_largest_fit_device", "current teacher UUID is not the largest-free-VRAM device")
+    teacher_index = current_teacher["index"]
+    student_index = current_student["index"]
+    if teacher_index == student_index:
+        reject("collection_device_contract_invalid", "frozen teacher and student UUIDs resolve to the same device")
     print(f"cuda:{teacher_index}\tcuda:{student_index}\t{args.expected_sha256}\tnone")
+
+
+def cmd_probe_hardware(args: argparse.Namespace) -> None:
+    import torch
+
+    if not torch.cuda.is_available():
+        reject("cuda_unavailable", "hardware probe refuses CPU fallback")
+    payload = {"schema_version": 1, "status": "ok", "fallback_reason": "none", "gpu_hardware": gpu_hardware_identity(torch), "package_versions": required_package_versions()}
+    write_json(args.output, payload)
+    print(json.dumps(payload, sort_keys=True))
 
 
 def add_identity_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
@@ -1408,6 +1596,23 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--training-method", choices=("sft", "dpo", "grpo", "dapo"))
     add_identity_args(validate, required=True)
     validate.set_defaults(func=cmd_validate_decision)
+
+    freeze_thinking = subparsers.add_parser("freeze-thinking-selection")
+    freeze_thinking.add_argument("--selection", required=True, type=Path)
+    freeze_thinking.add_argument("--output", required=True, type=Path)
+    freeze_thinking.add_argument("--expected-mode", choices=("direct", "two_pass"), required=True)
+    freeze_thinking.add_argument("--row-count", required=True, type=int)
+    freeze_thinking.add_argument("--optimization-decision-sha256", required=True)
+    add_identity_args(freeze_thinking, required=True)
+    freeze_thinking.set_defaults(func=cmd_freeze_thinking_selection)
+
+    validate_thinking = subparsers.add_parser("validate-thinking-selection")
+    validate_thinking.add_argument("--manifest", required=True, type=Path)
+    validate_thinking.add_argument("--expected-sha256", required=True)
+    validate_thinking.add_argument("--expected-mode", choices=("direct", "two_pass"), required=True)
+    validate_thinking.add_argument("--optimization-decision-sha256", required=True)
+    add_identity_args(validate_thinking, required=True)
+    validate_thinking.set_defaults(func=cmd_validate_thinking_selection)
 
     create_smoke = subparsers.add_parser("create-smoke-manifest")
     create_smoke.add_argument("--initial-checkpoint", required=True, type=Path)
@@ -1542,7 +1747,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate_collection.add_argument("--student-model", required=True)
     validate_collection.add_argument("--student-revision", required=True)
     validate_collection.add_argument("--allocated-gpus", required=True, type=int)
+    validate_collection.add_argument("--current-hardware", required=True, type=Path)
     validate_collection.set_defaults(func=cmd_validate_collection_decision)
+
+    hardware = subparsers.add_parser("probe-hardware")
+    hardware.add_argument("--output", required=True, type=Path)
+    hardware.set_defaults(func=cmd_probe_hardware)
     return parser
 
 

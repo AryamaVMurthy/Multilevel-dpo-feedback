@@ -52,7 +52,8 @@ fi
 ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
 [[ "$TRAIN_GPUS" == 4 || "$TRAIN_GPUS" == 8 ]] || fail "checkpoint smoke TRAIN_GPUS must be 4 or 8" checkpoint_smoke_gpu_count
 [[ "$ALLOCATED_GPU_COUNT" == "$TRAIN_GPUS" ]] || fail "checkpoint smoke allocation=$ALLOCATED_GPU_COUNT differs from TRAIN_GPUS=$TRAIN_GPUS" checkpoint_smoke_gpu_count
-[[ "$INITIAL_MAX_STEPS" =~ ^[1-9][0-9]*$ && "$RESUMED_MAX_STEPS" =~ ^[1-9][0-9]*$ && "$RESUMED_MAX_STEPS" -gt "$INITIAL_MAX_STEPS" ]] || fail "resume max steps must exceed initial max steps" checkpoint_smoke_step_contract
+[[ "$INITIAL_MAX_STEPS" =~ ^[1-9][0-9]*$ && "$RESUMED_MAX_STEPS" =~ ^[1-9][0-9]*$ ]] || fail "checkpoint smoke max steps must be positive" max_steps_invalid
+[[ "$RESUMED_MAX_STEPS" -gt "$INITIAL_MAX_STEPS" ]] || fail "resume max steps must exceed initial max steps" checkpoint_smoke_step_contract
 [[ ! -e "$SMOKE_ROOT" ]] || fail "SMOKE_ROOT already exists; refusing stale checkpoint reuse: $SMOKE_ROOT" checkpoint_smoke_root_exists
 
 module load u22/cuda/12.4

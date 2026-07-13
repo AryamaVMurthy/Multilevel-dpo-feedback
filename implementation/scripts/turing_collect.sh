@@ -84,7 +84,7 @@ if [[ "$SLURM_NNODES" != "1" ]]; then fail "collection requires one node; got $S
 : "${SLURM_NTASKS:?SLURM_NTASKS is required inside the allocation}"
 if [[ "$SLURM_NTASKS" != "1" ]]; then fail "collection requires one Slurm task; got $SLURM_NTASKS" "multi_task_collection_forbidden"; fi
 ALLOCATED_GPU_COUNT="$(allocated_gpu_count)"
-if [[ "$ALLOCATED_GPU_COUNT" -lt "2" ]]; then fail "collection requires at least two allocated GPUs; got $ALLOCATED_GPU_COUNT" "collection_gpu_count"; fi
+if [[ "$ALLOCATED_GPU_COUNT" != "2" ]]; then fail "collection requires exactly two allocated GPUs; got $ALLOCATED_GPU_COUNT" "collection_gpu_count"; fi
 [[ "$SHARD_INDEX" =~ ^[0-9]+$ && "$SHARD_COUNT" =~ ^[1-9][0-9]*$ && "$SHARD_INDEX" -lt "$SHARD_COUNT" ]] || fail "invalid shard contract index=$SHARD_INDEX count=$SHARD_COUNT" shard_contract_invalid
 ACTUAL_SHARD_INPUT_SHA256="$(sha256sum "$DATA" | awk '{print $1}')"
 [[ "$ACTUAL_SHARD_INPUT_SHA256" == "$SHARD_INPUT_SHA256" ]] || fail "SHARD_INPUT_SHA256=$SHARD_INPUT_SHA256 differs from actual=$ACTUAL_SHARD_INPUT_SHA256" shard_input_identity_mismatch
@@ -101,10 +101,12 @@ RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEM
 COMMIT_HASH="$(git rev-parse HEAD)" CONFIG_HASH="$(hash_path "${CONFIG:?CONFIG must be supplied with --export}")" MODEL_HASH="$(hash_value "$STUDENT_MODEL@$STUDENT_REVISION|teacher=$TEACHER_MODEL@$TEACHER_REVISION")" DATASET_HASH="$ACTUAL_SHARD_INPUT_SHA256"
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 run_probe_runner() { uv run --frozen python "$PROBE_RUNNER" "$@"; }
+CURRENT_HARDWARE="${CURRENT_HARDWARE:-$OUTPUT.hardware.json}"
+run_probe_runner probe-hardware --output "$CURRENT_HARDWARE" || fail "current physical GPU hardware probe failed" collection_current_hardware_probe_failed
 IFS=$'\t' read -r TEACHER_DEVICE STUDENT_DEVICE VALIDATED_COLLECTION_DECISION_SHA256 COLLECTION_FALLBACK_REASON < <(
   run_probe_runner validate-collection-decision --decision "$COLLECTION_DECISION" --expected-sha256 "$COLLECTION_DECISION_SHA256" \
     --teacher-model "$TEACHER_MODEL" --teacher-revision "$TEACHER_REVISION" --student-model "$STUDENT_MODEL" \
-    --student-revision "$STUDENT_REVISION" --allocated-gpus "$ALLOCATED_GPU_COUNT"
+    --student-revision "$STUDENT_REVISION" --allocated-gpus "$ALLOCATED_GPU_COUNT" --current-hardware "$CURRENT_HARDWARE"
 ) || fail "frozen collection device decision validation failed" collection_decision_invalid
 [[ "$TEACHER_DEVICE" != "$STUDENT_DEVICE" ]] || fail "teacher and student devices must differ" collection_device_collision
 IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B ATTENTION_FALLBACK_REASON VALIDATED_DECISION_SHA256 < <(
@@ -133,6 +135,9 @@ PY
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
 export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" shard_index="$SHARD_INDEX" shard_count="$SHARD_COUNT" merge_id="$MERGE_ID" allocated_gpus="$ALLOCATED_GPU_COUNT"
+if ! nvidia-smi --query-gpu=uuid --format=csv,noheader,nounits >/dev/null; then
+  fail "nvidia-smi telemetry identity query failed" gpu_telemetry_query_failed
+fi
 nvidia-smi
 nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu --format=csv -l 10 > "$GPU_TELEMETRY" &
 GPU_MONITOR_PID=$!
@@ -153,7 +158,7 @@ COLLECT_ARGS=(
 )
 if [[ "$TEACHER_THINKING" == true ]]; then COLLECT_ARGS+=(--teacher-thinking); else COLLECT_ARGS+=(--no-teacher-thinking); fi
 if [[ "$TEACHER_FALLBACK_REASON" != none ]]; then COLLECT_ARGS+=(--teacher-fallback-reason "$TEACHER_FALLBACK_REASON"); fi
-log_event collection_launch teacher_device="$TEACHER_DEVICE" student_device="$STUDENT_DEVICE" allocated_gpus="$ALLOCATED_GPU_COUNT" unused_gpus="$((ALLOCATED_GPU_COUNT - 2))" teacher_batch_size="$TEACHER_BATCH_SIZE" student_batch_size="$QUERY_BATCH_SIZE" max_length=4096 decision_sha256="$VALIDATED_DECISION_SHA256" collection_decision_sha256="$VALIDATED_COLLECTION_DECISION_SHA256" fallback_reason="$ATTENTION_FALLBACK_REASON"
+log_event collection_launch teacher_device="$TEACHER_DEVICE" student_device="$STUDENT_DEVICE" allocated_gpus="$ALLOCATED_GPU_COUNT" teacher_batch_size="$TEACHER_BATCH_SIZE" student_batch_size="$QUERY_BATCH_SIZE" max_length=4096 decision_sha256="$VALIDATED_DECISION_SHA256" collection_decision_sha256="$VALIDATED_COLLECTION_DECISION_SHA256" fallback_reason="$ATTENTION_FALLBACK_REASON"
 uv run --frozen python -m text_feedback_dpo.cli collect "${COLLECT_ARGS[@]}"
 log_event collection_complete artifact="$OUTPUT" merge_id="$MERGE_ID"
 write_manifest complete

@@ -33,6 +33,7 @@ manifest = {
     "timings": {"started_at": os.environ["MANIFEST_STARTED_AT"], "ended_at": os.environ["MANIFEST_ENDED_AT"]},
     "artifact_paths": values("ARTIFACT_PATHS"), "fallback_reason": os.environ.get("ATTENTION_FALLBACK_REASON", "none"),
     "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
+    "thinking_mode_selection": {"path": os.environ["THINKING_MODE_SELECTION"], "sha256": os.environ["THINKING_MODE_SELECTION_SHA256"]},
     "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
     "shard": {key: os.environ[key] for key in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_INPUT_SHA256", "MERGE_ID")},
     "generation": {"query_batch_size": int(os.environ["QUERY_BATCH_SIZE"]), "response_batch_size": int(os.environ["RESPONSE_BATCH_SIZE"]), "query_max_new_tokens": int(os.environ["QUERY_MAX_NEW_TOKENS"]), "response_max_new_tokens": int(os.environ["RESPONSE_MAX_NEW_TOKENS"]), "student_thinking_mode": os.environ["STUDENT_THINKING_MODE"], "scratchpad_max_new_tokens": int(os.environ["SCRATCHPAD_MAX_NEW_TOKENS"]), "query_temperature": float(os.environ["QUERY_TEMPERATURE"]), "response_temperature": float(os.environ["RESPONSE_TEMPERATURE"]), "top_p": float(os.environ["TOP_P"]), "top_k": int(os.environ["TOP_K"]), "k1": float(os.environ["BM25_K1"]), "b": float(os.environ["BM25_B"]), "max_length": 4096},
@@ -78,6 +79,8 @@ ACTUAL_SHARD_INPUT_SHA256="$(sha256sum "$DATA" | awk '{print $1}')"
 : "${BM25_B:?BM25_B must be explicit and match the frozen decision}"
 : "${OPTIMIZATION_DECISION:?OPTIMIZATION_DECISION must be supplied with --export}"
 : "${OPTIMIZATION_DECISION_SHA256:?OPTIMIZATION_DECISION_SHA256 must be supplied with --export}"
+: "${THINKING_MODE_SELECTION:?THINKING_MODE_SELECTION must be the selected-thinking-mode.manifest.json from prompt preflight}"
+: "${THINKING_MODE_SELECTION_SHA256:?THINKING_MODE_SELECTION_SHA256 must hash THINKING_MODE_SELECTION}"
 
 PROBE_RUNNER="$PROJECT_DIR/scripts/turing_probe_runner.py"
 [[ -x "$PROBE_RUNNER" ]] || fail "repository probe runner is not executable: $PROBE_RUNNER" probe_runner_missing
@@ -93,6 +96,15 @@ IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE 
     --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
 ) || fail "frozen optimization decision validation failed" optimization_decision_invalid
 [[ "$VALIDATED_DECISION_SHA256" == "$OPTIMIZATION_DECISION_SHA256" ]] || fail "validated decision hash changed" optimization_decision_hash_drift
+IFS=$'\t' read -r SELECTED_THINKING_MODE VALIDATED_SELECTION_SHA256 SELECTION_FALLBACK_REASON < <(
+  run_probe_runner validate-thinking-selection --manifest "$THINKING_MODE_SELECTION" --expected-sha256 "$THINKING_MODE_SELECTION_SHA256" \
+    --expected-mode "$STUDENT_THINKING_MODE" --optimization-decision-sha256 "$OPTIMIZATION_DECISION_SHA256" \
+    --commit-hash "$COMMIT_HASH" --config-sha256 "$CONFIG_IDENTITY" --model "$MODEL" --model-revision "$MODEL_REVISION" \
+    --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --dataset-sha256 "$ACTUAL_SHARD_INPUT_SHA256" \
+    --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
+) || fail "selected thinking mode manifest validation failed" thinking_mode_selection_invalid
+[[ "$SELECTED_THINKING_MODE" == "$FROZEN_THINKING_MODE" ]] || fail "selected thinking mode does not match optimization decision" thinking_mode_selection_mismatch
+STUDENT_THINKING_MODE="$SELECTED_THINKING_MODE"
 
 module load u22/cuda/12.4
 cd "$PROJECT_DIR"
@@ -102,7 +114,7 @@ export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1
 export HF_HOME="${HF_CACHE_ROOT:-/scratch/$(hostname)/$USER/searchqa-dpo/hf}" HF_DATASETS_CACHE="$HF_HOME/datasets" HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$HF_HOME" logs "$(dirname "$OUTPUT")"
 
-export ATTENTION_FALLBACK_REASON QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B
+export ATTENTION_FALLBACK_REASON QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE QUERY_MAX_NEW_TOKENS RESPONSE_MAX_NEW_TOKENS STUDENT_THINKING_MODE SCRATCHPAD_MAX_NEW_TOKENS QUERY_TEMPERATURE RESPONSE_TEMPERATURE TOP_P TOP_K BM25_K1 BM25_B THINKING_MODE_SELECTION THINKING_MODE_SELECTION_SHA256
 CONFIG_HASH="$CONFIG_IDENTITY" MODEL_HASH="${MODEL_HASH:-$(hash_value "$MODEL|$MODEL_REVISION")}" DATASET_HASH="$ACTUAL_SHARD_INPUT_SHA256"
 RUN_MANIFEST="${RUN_MANIFEST:-$OUTPUT.manifest.json}" GPU_TELEMETRY="${GPU_TELEMETRY:-logs/gpu-${SLURM_JOB_ID}.csv}" ARTIFACT_PATHS="$OUTPUT|$DATA|$CONFIG"
 PACKAGE_VERSIONS="$(uv run --frozen python - <<'PY'
@@ -122,14 +134,14 @@ trap cleanup EXIT
 GEN_ARGS=(
   --data "$DATA" --output "$OUTPUT" --model "$MODEL" --model-revision "$MODEL_REVISION"
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --attention-implementation "$ATTENTION_IMPLEMENTATION"
-  --prompt-version "$PROMPT_VERSION" --policy-hash "$POLICY_HASH" --student-thinking-mode "$STUDENT_THINKING_MODE"
+  --prompt-version "$PROMPT_VERSION" --policy-hash "$POLICY_HASH" --student-thinking-mode "$SELECTED_THINKING_MODE"
   --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS" --query-batch-size "$QUERY_BATCH_SIZE"
   --response-batch-size "$RESPONSE_BATCH_SIZE" --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS"
   --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS" --query-temperature "$QUERY_TEMPERATURE"
   --response-temperature "$RESPONSE_TEMPERATURE" --top-p "$TOP_P" --top-k "$TOP_K" --k1 "$BM25_K1" --b "$BM25_B"
   --context-budget 4096
 )
-log_event generation_launch cli=generate-searchqa protocol=active-search attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON"
+log_event generation_launch cli=generate-searchqa protocol=active-search attention_implementation="$ATTENTION_IMPLEMENTATION" student_thinking_mode="$SELECTED_THINKING_MODE" selection_sha256="$VALIDATED_SELECTION_SHA256" fallback_reason="$ATTENTION_FALLBACK_REASON"
 uv run --frozen python -m text_feedback_dpo.cli generate-searchqa "${GEN_ARGS[@]}"
 log_event generation_complete artifact="$OUTPUT"
 write_manifest complete

@@ -37,6 +37,7 @@ def valid_probe_result(*, throughput: float = 10.0, compile_: bool = False, gpu_
             "measured_duration_seconds": 6.0,
             "coverage_ratio": 1.0,
             "monitored_uuids": [f"GPU-{index:032x}" for index in range(gpu_count)],
+            "query_errors": [],
             "utilization_mean_percent": 70.0,
             "utilization_peak_percent": 90.0,
             "nvidia_smi_peak_memory_mb": 1100.0,
@@ -137,7 +138,8 @@ def write_realistic_checkpoint(path: Path, step: int) -> None:
     )
     (path / "config.json").write_text(json.dumps({
         "model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"], "hidden_size": 8,
-        "num_hidden_layers": 2, "num_attention_heads": 2, "vocab_size": 16,
+        "num_hidden_layers": 2, "num_attention_heads": 2, "num_key_value_heads": 2,
+        "head_dim": 4, "intermediate_size": 16, "vocab_size": 16,
     }), encoding="utf-8")
     torch.save({
         "model.embed_tokens.weight": torch.ones(16, 8),
@@ -148,6 +150,13 @@ def write_realistic_checkpoint(path: Path, step: int) -> None:
         "model.layers.0.mlp.gate_proj.weight": torch.ones(16, 8),
         "model.layers.0.mlp.up_proj.weight": torch.ones(16, 8),
         "model.layers.0.mlp.down_proj.weight": torch.ones(8, 16),
+        "model.layers.1.self_attn.q_proj.weight": torch.ones(8, 8),
+        "model.layers.1.self_attn.k_proj.weight": torch.ones(8, 8),
+        "model.layers.1.self_attn.v_proj.weight": torch.ones(8, 8),
+        "model.layers.1.self_attn.o_proj.weight": torch.ones(8, 8),
+        "model.layers.1.mlp.gate_proj.weight": torch.ones(16, 8),
+        "model.layers.1.mlp.up_proj.weight": torch.ones(16, 8),
+        "model.layers.1.mlp.down_proj.weight": torch.ones(8, 16),
         "model.norm.weight": torch.ones(8),
         "lm_head.weight": torch.ones(16, 8),
     }, path / "pytorch_model.bin")
@@ -562,7 +571,7 @@ def test_scale_decision_rejects_non_a100_or_non_count_hardware_drift(tmp_path: P
 
 
 def test_collection_decision_freezes_largest_vram_teacher_and_distinct_student(tmp_path: Path):
-    hardware = valid_probe_result(gpu_count=3)
+    hardware = valid_probe_result(gpu_count=2)
     hardware["gpu_hardware"]["devices"][1]["free_memory_bytes"] += 1024
     result_path = tmp_path / "hardware.json"
     result_path.write_text(json.dumps(hardware), encoding="utf-8")
@@ -571,17 +580,18 @@ def test_collection_decision_freezes_largest_vram_teacher_and_distinct_student(t
         sys.executable, str(PROBE_RUNNER), "freeze-collection-decision", "--hardware-result", str(result_path),
         "--output", str(decision), "--teacher-model", "teacher", "--teacher-revision", "teacher-rev",
         "--student-model", "student", "--student-revision", "student-rev", "--teacher-device-index", "1",
-        "--student-device-index", "2",
+        "--student-device-index", "0",
     ], cwd=ROOT, text=True, capture_output=True, check=False)
     assert freeze.returncode == 0, freeze.stderr
     digest = hashlib.sha256(decision.read_bytes()).hexdigest()
     validate = subprocess.run([
         sys.executable, str(PROBE_RUNNER), "validate-collection-decision", "--decision", str(decision),
         "--expected-sha256", digest, "--teacher-model", "teacher", "--teacher-revision", "teacher-rev",
-        "--student-model", "student", "--student-revision", "student-rev", "--allocated-gpus", "3",
+        "--student-model", "student", "--student-revision", "student-rev", "--allocated-gpus", "2",
+        "--current-hardware", str(result_path),
     ], cwd=ROOT, text=True, capture_output=True, check=False)
     assert validate.returncode == 0, validate.stderr
-    assert validate.stdout.split("\t")[:2] == ["cuda:1", "cuda:2"]
+    assert validate.stdout.split("\t")[:2] == ["cuda:1", "cuda:0"]
 
 
 def test_collection_decision_rejects_non_largest_or_same_device(tmp_path: Path):
@@ -615,7 +625,103 @@ def test_checkpoint_rejects_exact_padding_weight_attack(tmp_path: Path):
         "--source-schema-sha256", "schema", "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "sft",
     ], cwd=ROOT, text=True, capture_output=True, check=False)
     assert result.returncode == 2
-    assert json.loads(result.stderr)["fallback_reason"] == "checkpoint_model_semantics_invalid"
+    assert json.loads(result.stderr)["fallback_reason"] in {
+        "checkpoint_model_semantics_invalid",
+        "checkpoint_model_layer_set_invalid",
+    }
+
+
+def checkpoint_manifest_command(initial: Path, resumed: Path, output: Path) -> list[str]:
+    return [
+        sys.executable, str(PROBE_RUNNER), "create-smoke-manifest", "--initial-checkpoint", str(initial),
+        "--resumed-checkpoint", str(resumed), "--output", str(output), "--commit-hash", "commit",
+        "--config-sha256", "config", "--model", "model", "--model-revision", "revision",
+        "--dataset-source", "source", "--dataset-revision", "revision", "--dataset-sha256", "data",
+        "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
+        "--optimization-decision-sha256", "decision", "--scale-decision-sha256", "scale", "--method", "sft",
+    ]
+
+
+@pytest.mark.parametrize("attack", ("wrong_shape", "nonexistent_layer"))
+def test_checkpoint_rejects_qwen3_architecture_shape_and_layer_attacks(tmp_path: Path, attack: str):
+    initial = tmp_path / "checkpoint-1"
+    resumed = tmp_path / "checkpoint-2"
+    write_realistic_checkpoint(initial, 1)
+    write_realistic_checkpoint(resumed, 2)
+    state = torch.load(initial / "pytorch_model.bin", map_location="cpu", weights_only=True)
+    if attack == "wrong_shape":
+        state["model.layers.0.self_attn.q_proj.weight"] = torch.ones(7, 8)
+    else:
+        state["model.layers.999.self_attn.q_proj.weight"] = torch.ones(8, 8)
+    torch.save(state, initial / "pytorch_model.bin")
+    result = subprocess.run(checkpoint_manifest_command(initial, resumed, tmp_path / "manifest.json"), cwd=ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] in {"checkpoint_model_shape_invalid", "checkpoint_model_layer_out_of_range"}
+
+
+def test_training_probe_rejects_nonpositive_max_steps_before_cuda_or_subprocess(tmp_path: Path):
+    data = tmp_path / "data.jsonl"
+    data.write_text('{"question":"q"}\n', encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text("{}\n", encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "benchmark", "--result", str(tmp_path / "result.json"),
+        "--commit-hash", "commit", "--probe-name", "bad-steps", "--config", str(config), "--data", str(data),
+        "--eval-data", str(data), "--output-dir", str(tmp_path / "run"), "--deepspeed-config", str(config),
+        "--model", "model", "--model-revision", "revision", "--dataset-source", "source", "--dataset-revision", "revision",
+        "--prompt-sha256", "prompt", "--retrieval-sha256", "retrieval", "--source-schema-sha256", "schema",
+        "--probe-kind", "training", "--training-method", "sft", "--max-steps", "0", "--num-generations", "1",
+        "--rl-generation-batch-size", "1", "--max-completion-length", "8",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["fallback_reason"] == "max_steps_invalid"
+
+
+def test_prompt_preflight_requires_exact_sample_before_generation(tmp_path: Path):
+    data = tmp_path / "31.jsonl"
+    data.write_text("".join(json.dumps({"question": f"q-{index}"}) + "\n" for index in range(31)), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text("training: {}\n", encoding="utf-8")
+    decision = tmp_path / "decision.json"
+    identities = {
+        "commit_hash": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "config_sha256": hashlib.sha256(config.read_bytes()).hexdigest(), "model": "model", "model_revision": "revision",
+        "dataset_source": "source", "dataset_revision": "revision", "dataset_sha256": hashlib.sha256(data.read_bytes()).hexdigest(),
+        "prompt_sha256": "prompt", "retrieval_sha256": "retrieval", "source_schema_sha256": "schema",
+    }
+    write_identity_decision(decision, identities)
+    decision_sha = hashlib.sha256(decision.read_bytes()).hexdigest()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "module").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    (fake_bin / "uv").write_text("#!/bin/bash\necho generate-called >&2\nexit 99\n", encoding="utf-8")
+    for item in fake_bin.iterdir():
+        item.chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}", "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "DATA": str(data),
+        "MODEL": "model", "MODEL_REVISION": "revision", "OUTPUT_ROOT": str(tmp_path / "out"), "POLICY_HASH": "policy",
+        "CONFIG": str(config), "DATASET_SOURCE": "source", "DATASET_REVISION": "revision", "PROMPT_HASH": "prompt",
+        "RETRIEVAL_HASH": "retrieval", "SOURCE_SCHEMA_HASH": "schema", "OPTIMIZATION_DECISION": str(decision),
+        "OPTIMIZATION_DECISION_SHA256": decision_sha, "STUDENT_THINKING_MODE": "direct", "SCRATCHPAD_MAX_NEW_TOKENS": "8",
+        "QUERY_TEMPERATURE": "0", "RESPONSE_TEMPERATURE": "0", "TOP_P": "1", "TOP_K": "8", "BM25_K1": "1.2", "BM25_B": "0.75",
+        "SLURM_NNODES": "1", "SLURM_NTASKS": "1", "SLURM_GPUS_ON_NODE": "1",
+    }
+    result = subprocess.run(["bash", str(SCRIPTS / "turing_prompt_preflight.sh")], cwd=ROOT, env={**os.environ, **env}, text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert "prompt_preflight_sample_too_small" in result.stderr
+    assert "generate-called" not in result.stderr
+
+
+def test_prompt_preflight_and_collection_contracts_are_explicit():
+    prompt = (SCRIPTS / "turing_prompt_preflight.sh").read_text(encoding="utf-8")
+    for field in ("query-temperature", "response-temperature", "top-p", "top-k", "k1", "b"):
+        assert f"--{field} \"$FROZEN_" in prompt
+    assert '"row_count":32' in prompt
+    assert 'ALLOCATED_GPU_COUNT" != "2"' in (SCRIPTS / "turing_collect.sh").read_text(encoding="utf-8")
+    collection = (SCRIPTS / "turing_collect.sh").read_text(encoding="utf-8")
+    assert "probe-hardware" in collection
+    assert "current-hardware" in collection
+    assert "uuid" in collection
 
 
 def test_generation_missing_explicit_thinking_mode_fails_before_launch(tmp_path: Path):
@@ -789,7 +895,10 @@ def test_checkpoint_gate_rejects_large_padded_arbitrary_mappings(tmp_path: Path)
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert result.returncode == 2
-    assert json.loads(result.stderr)["fallback_reason"] == "checkpoint_model_semantics_invalid"
+    assert json.loads(result.stderr)["fallback_reason"] in {
+        "checkpoint_model_semantics_invalid",
+        "checkpoint_model_config_invalid",
+    }
 
 
 def test_checkpoint_gate_rejects_tiny_named_placeholders(tmp_path: Path):
