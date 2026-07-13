@@ -3,6 +3,7 @@ import unittest
 from text_feedback_dpo.runtime import (
     RuntimeErrorExplicit,
     GeneratedText,
+    bounded_teacher_outputs,
     decode_generated_records,
     extract_qwen_final_content,
     generate_student_batch,
@@ -21,6 +22,48 @@ class FakeTeacherTokenizer:
 
 
 class ThinkingRuntimeTest(unittest.TestCase):
+    def test_teacher_retries_only_budget_exhausted_rows_with_explicit_larger_cap(self):
+        calls = []
+
+        def generate(prompts, *, max_new_tokens):
+            calls.append((list(prompts), max_new_tokens))
+            if max_new_tokens == 1024:
+                return [
+                    '<think>done</think>{"hint":"Inspect the date."}',
+                    "<think>unfinished",
+                    '<think>done</think>{"hint":"Inspect the title."}',
+                ]
+            return ['<think>done</think>{"hint":"Inspect the entity."}']
+
+        outputs, report = bounded_teacher_outputs(
+            ["p0", "p1", "p2"],
+            prompt_token_counts=[100, 200, 300],
+            primary_max_new_tokens=1024,
+            retry_max_new_tokens=2048,
+            generate=generate,
+            token_count=lambda text: 1024 if "unfinished" in text else len(text),
+        )
+        self.assertEqual(calls, [(["p0", "p1", "p2"], 1024), (["p1"], 2048)])
+        self.assertEqual(report["retry_indices"], [1])
+        self.assertEqual(report["retry_reason"], "teacher_thinking_budget_exhausted")
+        self.assertEqual(len(outputs), 3)
+
+    def test_teacher_bounded_retry_fails_if_retry_prompt_or_output_exhausts_contract(self):
+        with self.assertRaisesRegex(RuntimeErrorExplicit, "retry prompt budget"):
+            bounded_teacher_outputs(
+                ["p"], prompt_token_counts=[3000], primary_max_new_tokens=1024,
+                retry_max_new_tokens=2048,
+                generate=lambda _prompts, **_kwargs: ["<think>unfinished"],
+                token_count=lambda _text: 1024,
+            )
+        with self.assertRaisesRegex(RuntimeErrorExplicit, "retry exhausted"):
+            bounded_teacher_outputs(
+                ["p"], prompt_token_counts=[100], primary_max_new_tokens=1024,
+                retry_max_new_tokens=2048,
+                generate=lambda _prompts, **_kwargs: ["<think>unfinished"],
+                token_count=lambda _text: 1024,
+            )
+
     def test_teacher_identity_is_pinned_qwen3_instruct_with_explicit_fallback(self):
         self.assertEqual(
             validate_teacher_identity("Qwen/Qwen3-32B", revision="teacher-rev", quantization="4bit", fallback_reason=None),

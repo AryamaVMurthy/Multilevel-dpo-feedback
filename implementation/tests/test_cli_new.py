@@ -103,6 +103,7 @@ class CLITest(unittest.TestCase):
         self.assertEqual(collected.query_max_new_tokens, 32)
         self.assertEqual(collected.response_max_new_tokens, 256)
         self.assertEqual(collected.teacher_max_new_tokens, 1024)
+        self.assertEqual(collected.teacher_retry_max_new_tokens, 2048)
         self.assertEqual(collected.student_batch_size, 32)
         self.assertEqual(collected.teacher_batch_size, 8)
         self.assertEqual(collected.dataset_revision, "data-rev")

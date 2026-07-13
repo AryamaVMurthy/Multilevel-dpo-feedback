@@ -30,6 +30,82 @@ class GeneratedText:
     truncated: bool
 
 
+def bounded_teacher_outputs(
+    prompts: list[str],
+    *,
+    prompt_token_counts: list[int],
+    primary_max_new_tokens: int,
+    retry_max_new_tokens: int,
+    generate: Callable[..., list[str]],
+    token_count: Callable[[str], int],
+) -> tuple[list[str], dict[str, object]]:
+    """Retry only outputs proven to have exhausted the primary thinking budget."""
+    if not prompts or len(prompt_token_counts) != len(prompts):
+        raise ValueError("teacher retry requires nonempty prompt/token-count parity")
+    if not 0 < primary_max_new_tokens < retry_max_new_tokens < TOTAL_CONTEXT_TOKENS:
+        raise ValueError("teacher retry caps must satisfy 0 < primary < retry < 4096")
+    raw = generate(prompts, max_new_tokens=primary_max_new_tokens)
+    if not isinstance(raw, list) or len(raw) != len(prompts) or any(not isinstance(item, str) for item in raw):
+        raise RuntimeErrorExplicit("primary teacher generation cardinality/type mismatch")
+    primary_output_token_counts = [token_count(item) for item in raw]
+    final: list[str | None] = []
+    malformed: list[int] = []
+    for index, text in enumerate(raw):
+        try:
+            final.append(extract_qwen_final_content(text))
+        except RuntimeErrorExplicit:
+            malformed.append(index)
+            final.append(None)
+    non_exhausted = [index for index in malformed if primary_output_token_counts[index] < primary_max_new_tokens]
+    if non_exhausted:
+        raise RuntimeErrorExplicit(
+            "malformed teacher thinking did not exhaust the primary budget at indices: "
+            + ",".join(str(index) for index in non_exhausted)
+        )
+    report: dict[str, object] = {
+        "primary_max_new_tokens": primary_max_new_tokens,
+        "primary_output_token_counts": primary_output_token_counts,
+        "primary_malformed_indices": malformed,
+        "malformed_thinking_indices": malformed,
+        "retry_max_new_tokens": retry_max_new_tokens,
+        "retry_indices": malformed,
+        "retry_reason": "teacher_thinking_budget_exhausted" if malformed else "none",
+        "retry_output_token_counts": [],
+    }
+    if malformed:
+        retry_prompt_counts = [prompt_token_counts[index] for index in malformed]
+        retry_input_limit = TOTAL_CONTEXT_TOKENS - retry_max_new_tokens
+        if max(retry_prompt_counts) > retry_input_limit:
+            raise RuntimeErrorExplicit(
+                "teacher retry prompt budget exceeded: "
+                f"max_prompt_tokens={max(retry_prompt_counts)} max_input_tokens={retry_input_limit}"
+            )
+        retry_prompts = [prompts[index] for index in malformed]
+        retry_raw = generate(retry_prompts, max_new_tokens=retry_max_new_tokens)
+        if not isinstance(retry_raw, list) or len(retry_raw) != len(retry_prompts) or any(
+            not isinstance(item, str) for item in retry_raw
+        ):
+            raise RuntimeErrorExplicit("retry teacher generation cardinality/type mismatch")
+        retry_counts = [token_count(item) for item in retry_raw]
+        report["retry_output_token_counts"] = retry_counts
+        retry_malformed: list[int] = []
+        for retry_position, (original_index, text) in enumerate(zip(malformed, retry_raw, strict=True)):
+            try:
+                final[original_index] = extract_qwen_final_content(text)
+            except RuntimeErrorExplicit:
+                retry_malformed.append(retry_position)
+        report["retry_malformed_indices"] = retry_malformed
+        if retry_malformed:
+            original_indices = [malformed[position] for position in retry_malformed]
+            raise RuntimeErrorExplicit(
+                "teacher thinking retry exhausted or remained malformed at original indices: "
+                + ",".join(str(index) for index in original_indices)
+            )
+    if any(item is None for item in final):
+        raise RuntimeErrorExplicit("teacher retry did not populate every final output")
+    return [str(item) for item in final], report
+
+
 def validate_teacher_identity(
     model_id: str,
     *,

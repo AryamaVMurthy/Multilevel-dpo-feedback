@@ -618,7 +618,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
-        extract_qwen_final_content,
+        bounded_teacher_outputs,
         generate_batch,
         generate_batch_records,
         generate_student_batch,
@@ -628,7 +628,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
         render_teacher_prompts,
         set_generation_seed,
         validate_teacher_identity,
-        RuntimeErrorExplicit,
     )
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
@@ -643,6 +642,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
         raise ValueError("student_batch_size and teacher_batch_size must be positive")
     if args.teacher_max_new_tokens <= 0 or args.teacher_max_new_tokens >= 4096:
         raise ValueError("teacher_max_new_tokens must be between 1 and 4095")
+    if not args.teacher_max_new_tokens < args.teacher_retry_max_new_tokens < 4096:
+        raise ValueError("teacher_retry_max_new_tokens must be larger than primary and below 4096")
     teacher_identity = validate_teacher_identity(
         args.teacher_model,
         revision=args.teacher_revision,
@@ -767,35 +768,28 @@ def cmd_collect(args: argparse.Namespace) -> None:
                     f"teacher prompt budget exceeded: max_prompt_tokens={max(prompt_token_counts)} "
                     f"max_input_tokens={max_input_tokens} max_total_tokens=4096"
                 )
-            raw = batched_generate(
-                teacher, teacher_tokenizer, rendered,
-                batch_size=args.teacher_batch_size,
-                max_new_tokens=args.teacher_max_new_tokens,
-                temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+            final_outputs, output_report = bounded_teacher_outputs(
+                rendered,
+                prompt_token_counts=prompt_token_counts,
+                primary_max_new_tokens=args.teacher_max_new_tokens,
+                retry_max_new_tokens=args.teacher_retry_max_new_tokens,
+                generate=lambda active_prompts, max_new_tokens: batched_generate(
+                    teacher, teacher_tokenizer, active_prompts,
+                    batch_size=args.teacher_batch_size,
+                    max_new_tokens=max_new_tokens,
+                    temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                ),
+                token_count=lambda text: len(
+                    teacher_tokenizer.encode(text, add_special_tokens=False)
+                ),
             )
-            final_outputs: list[str | None] = []
-            malformed_thinking_indices: list[int] = []
-            output_token_counts: list[int] = []
-            for index, text in enumerate(raw):
-                output_token_counts.append(len(teacher_tokenizer.encode(text, add_special_tokens=False)))
-                try:
-                    final_outputs.append(extract_qwen_final_content(text))
-                except RuntimeErrorExplicit:
-                    malformed_thinking_indices.append(index)
-                    final_outputs.append(None)
             print(json.dumps({
                 "event": "teacher_output_contract",
-                "output_count": len(raw),
-                "output_token_counts": output_token_counts,
-                "malformed_thinking_indices": malformed_thinking_indices,
-                "fallback_reason": "teacher_thinking_budget_exhausted" if malformed_thinking_indices else "none",
+                "output_count": len(final_outputs),
+                **output_report,
+                "fallback_reason": "none",
             }, sort_keys=True), file=sys.stderr, flush=True)
-            if malformed_thinking_indices:
-                raise RuntimeErrorExplicit(
-                    "unterminated or malformed Qwen thinking blocks at teacher batch indices: "
-                    + ",".join(str(index) for index in malformed_thinking_indices)
-                )
-            return [output for output in final_outputs if output is not None]
+            return final_outputs
 
         return collect_dataset_batchwise(
             examples=pending,
@@ -849,6 +843,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             "student_temperature": args.student_temperature,
             "student_top_p": args.student_top_p,
             "teacher_max_new_tokens": args.teacher_max_new_tokens,
+            "teacher_retry_max_new_tokens": args.teacher_retry_max_new_tokens,
             "teacher_temperature": 0.0,
             "teacher_top_p": 1.0,
             "student_batch_size": args.student_batch_size,
@@ -1109,6 +1104,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--student-temperature", type=float, default=0.7)
     collect.add_argument("--student-top-p", type=float, default=0.9)
     collect.add_argument("--teacher-max-new-tokens", type=int, default=1024)
+    collect.add_argument("--teacher-retry-max-new-tokens", type=int, default=2048)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)

@@ -61,7 +61,9 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("RESPONSE_BATCH_SIZE", text)
         self.assertIn("TEACHER_BATCH_SIZE", text)
         self.assertIn("TEACHER_MAX_NEW_TOKENS", text)
+        self.assertIn("TEACHER_RETRY_MAX_NEW_TOKENS", text)
         self.assertIn('--teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS"', text)
+        self.assertIn('--teacher-retry-max-new-tokens "$TEACHER_RETRY_MAX_NEW_TOKENS"', text)
         self.assertNotIn("GENERATION_BATCH_SIZE", text)
 
     def test_gpu_scripts_use_conservative_uv_and_verify_source_root(self):

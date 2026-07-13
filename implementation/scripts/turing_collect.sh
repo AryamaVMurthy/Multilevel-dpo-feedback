@@ -70,6 +70,7 @@ PY
 : "${COLLECTION_DECISION_SHA256:?COLLECTION_DECISION_SHA256 must be supplied}"
 : "${TEACHER_BATCH_SIZE:?TEACHER_BATCH_SIZE must be supplied}"
 : "${TEACHER_MAX_NEW_TOKENS:?TEACHER_MAX_NEW_TOKENS must be supplied}"
+: "${TEACHER_RETRY_MAX_NEW_TOKENS:?TEACHER_RETRY_MAX_NEW_TOKENS must be supplied}"
 : "${TEACHER_TEMPERATURE:?TEACHER_TEMPERATURE must be supplied}"
 : "${TEACHER_TOP_P:?TEACHER_TOP_P must be supplied}"
 : "${TEACHER_THINKING:?TEACHER_THINKING must be true or false}"
@@ -156,7 +157,8 @@ COLLECT_ARGS=(
   --student-thinking-mode "$STUDENT_THINKING_MODE" --scratchpad-max-new-tokens "$SCRATCHPAD_MAX_NEW_TOKENS"
   --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS"
   --student-temperature "$QUERY_TEMPERATURE" --student-top-p "$TOP_P"
-  --teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS" --sibling-count "$SIBLING_COUNT" --sibling-seeds "${SIBLING_SEED_ARGS[@]}"
+  --teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS" --teacher-retry-max-new-tokens "$TEACHER_RETRY_MAX_NEW_TOKENS"
+  --sibling-count "$SIBLING_COUNT" --sibling-seeds "${SIBLING_SEED_ARGS[@]}"
 )
 if [[ "$TEACHER_THINKING" == true ]]; then COLLECT_ARGS+=(--teacher-thinking); else COLLECT_ARGS+=(--no-teacher-thinking); fi
 if [[ "$TEACHER_FALLBACK_REASON" != none ]]; then COLLECT_ARGS+=(--teacher-fallback-reason "$TEACHER_FALLBACK_REASON"); fi

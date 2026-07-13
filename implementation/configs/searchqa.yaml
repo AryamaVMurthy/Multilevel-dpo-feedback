@@ -59,5 +59,6 @@ generation:
 teacher_generation:
   enable_thinking: true
   max_new_tokens: 1024
+  retry_max_new_tokens: 2048
   temperature: 0.0
   top_p: 1.0
