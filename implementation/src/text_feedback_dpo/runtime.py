@@ -7,7 +7,6 @@ from typing import Any
 
 
 TOTAL_CONTEXT_TOKENS = 4096
-RETRY_CAP_BUCKET_TOKENS = 256
 PRIMARY_TEACHER_MODEL = "Qwen/Qwen3-32B"
 FALLBACK_TEACHER_MODEL = "Qwen/Qwen3-14B"
 
@@ -109,9 +108,7 @@ def bounded_teacher_outputs(
                     f"prompt_tokens={prompt_count} available_output_tokens={available} "
                     f"primary_max_new_tokens={primary_max_new_tokens}"
                 )
-            cap = min(retry_max_new_tokens, available)
-            bucketed = (cap // RETRY_CAP_BUCKET_TOKENS) * RETRY_CAP_BUCKET_TOKENS
-            return bucketed if bucketed > primary_max_new_tokens else cap
+            return min(retry_max_new_tokens, available)
 
         retry_caps_by_index = {index: retry_cap(prompt_token_counts[index]) for index in retry_indices}
         report["retry_output_caps"] = [retry_caps_by_index[index] for index in retry_indices]

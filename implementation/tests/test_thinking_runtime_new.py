@@ -93,7 +93,7 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(report["retry_indices"], [0])
         self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
 
-    def test_teacher_retry_caps_are_batched_within_each_row_context_budget(self):
+    def test_teacher_retry_caps_use_each_row_context_budget(self):
         calls = []
 
         def generate(prompts, *, max_new_tokens):
@@ -111,7 +111,7 @@ class ThinkingRuntimeTest(unittest.TestCase):
             token_count=lambda text: 12,
         )
         self.assertEqual(calls[0], (["short", "long"], 128))
-        self.assertEqual({call[1] for call in calls[1:]}, {1536, 3072})
+        self.assertEqual({call[1] for call in calls[1:]}, {1596, 3072})
         self.assertEqual(report["retry_indices"], [0, 1])
         self.assertEqual(len(report["retry_output_caps"]), 2)
         self.assertEqual(outputs, [
