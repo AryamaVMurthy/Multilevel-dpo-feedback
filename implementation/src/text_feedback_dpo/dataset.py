@@ -159,8 +159,7 @@ def attach_evidence(rows: list[dict], *, max_evidence_tokens: int, token_count) 
 
 
 def build_sft_rows(rows: list[dict]) -> list[dict]:
-    if any("attempts" in row or "no_hint_siblings" in row for row in rows):
-        return build_sft_rows_from_trajectories(rows)[0]
+    """Archival compatibility helper; no production CLI calls this path."""
     return [build_sft_row(row) for row in rows]
 
 
@@ -246,18 +245,30 @@ def _completion(value: object, *, task: str) -> str:
     return f" {value}"
 
 
-def _token_count(tokenizer: object, text: str) -> int:
-    if hasattr(tokenizer, "encode"):
+def _token_ids(tokenizer: object, text: str) -> Sequence:
+    if callable(tokenizer):
+        encoded = tokenizer(text=text, truncation=False).get("input_ids")
+    elif hasattr(tokenizer, "encode"):
         encoded = tokenizer.encode(text, add_special_tokens=False)
-    elif callable(tokenizer):
-        encoded = tokenizer(text, add_special_tokens=False, truncation=False).get("input_ids")
     else:
         raise TypeError("Task 7 length validation requires a tokenizer with encode or call support")
     if isinstance(encoded, dict):
         encoded = encoded.get("input_ids")
     if not isinstance(encoded, Sequence) or isinstance(encoded, (str, bytes)):
         raise TypeError("tokenizer must return an input_ids sequence without truncation")
-    return len(encoded)
+    return encoded
+
+
+def _sft_combined_token_count(tokenizer: object, prompt: str, completion: str) -> int:
+    eos = getattr(tokenizer, "eos_token", None)
+    if not isinstance(eos, str) or not eos:
+        raise ValueError("Task 7 SFT pinned tokenizer requires a non-empty eos_token")
+    rendered_completion = completion if completion.endswith(eos) else completion + eos
+    prompt_ids = _token_ids(tokenizer, prompt)
+    combined_ids = _token_ids(tokenizer, prompt + rendered_completion)
+    if combined_ids[: len(prompt_ids)] != prompt_ids:
+        raise ValueError("Task 7 SFT tokenizer boundary mismatch between prompt and prompt+completion")
+    return len(combined_ids)
 
 
 def _select_task7_candidate(trajectory: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -308,6 +319,8 @@ def build_sft_rows_from_trajectories(
     """
     if examples is None:
         raise ValueError("Task 7 SFT requires dataset-owned examples for canonical artifact validation")
+    if tokenizer is None:
+        raise ValueError("Task 7 SFT requires a pinned tokenizer for no-truncation validation")
     if not isinstance(examples, Mapping):
         raise TypeError("Task 7 dataset examples must be a mapping keyed by trajectory id")
     if max_length != SFT_MAX_LENGTH:
@@ -326,7 +339,7 @@ def build_sft_rows_from_trajectories(
         "exclusions": [],
         "exclusion_counts": {},
         "max_length": max_length,
-        "length_validation": "tokenizer" if tokenizer is not None else "deferred_to_trainer",
+        "length_validation": "pinned_tokenizer_no_truncation",
     }
     output: list[dict] = []
     for index, trajectory in enumerate(trajectories):
@@ -385,11 +398,12 @@ def build_sft_rows_from_trajectories(
             except ValueError:
                 _record_exclusion(report, example_id, task, f"invalid_student_{task}")
                 continue
-            if tokenizer is not None:
-                combined_tokens = _token_count(tokenizer, str(candidate[prompt_field]) + completion)
-                if combined_tokens > max_length:
-                    _record_exclusion(report, example_id, task, "combined_token_length_exceeds_max_length")
-                    continue
+            combined_tokens = _sft_combined_token_count(
+                tokenizer, str(candidate[prompt_field]), completion,
+            )
+            if combined_tokens > max_length:
+                _record_exclusion(report, example_id, task, "combined_token_length_exceeds_max_length")
+                continue
             metadata = {
                 "trajectory_id": example_id,
                 "task": task,
@@ -423,7 +437,7 @@ def build_rl_rows_from_trajectories(
     trajectories: list[dict],
     *,
     examples: Mapping[str, Mapping[str, object]],
-    tokenizer: object | None = None,
+    tokenizer: object,
     max_length: int = SFT_MAX_LENGTH,
 ) -> tuple[list[dict], dict]:
     """Build task-tagged GRPO/DAPO rows from the same verified student artifacts.
@@ -452,6 +466,7 @@ def build_rl_rows_from_trajectories(
             "gold_answer": example["gold_answer"],
             "sources": json.loads(json.dumps(example["sources"], ensure_ascii=False, sort_keys=True)),
             "canonical_ranked_search_results": json.loads(json.dumps(candidate["canonical_ranked_search_results"], ensure_ascii=False, sort_keys=True)),
+            "stored_query": candidate["raw_query"],
             "future_sibling_gain": candidate.get("future_sibling_gain"),
             "metadata": dict(sft_row["metadata"]),
         })

@@ -1,5 +1,6 @@
 import json
 import unittest
+from types import SimpleNamespace
 from dataclasses import fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +15,8 @@ from text_feedback_dpo.trainers import (
     _sft_args,
     build_component_reward_functions,
     evaluate_reward_components,
+    precompute_reference_log_probs,
+    validate_prompt_completion_lengths,
     validate_rl_prompt_budget,
 )
 from text_feedback_dpo.dataset import build_rl_rows_from_trajectories
@@ -48,12 +51,27 @@ def _task7_candidate():
     return artifact
 
 
+class _Tokenizer:
+    eos_token = "<eos>"
+    eos_token_id = 2
+    pad_token_id = 0
+
+    def __call__(self, text, **kwargs):
+        return {"input_ids": list(range(1, len(text.split()) + 1))}
+
+    def encode(self, text, add_special_tokens=False):
+        return self(text)["input_ids"]
+
+
 class Task7TrainingTest(unittest.TestCase):
     def test_grpo_constructor_wiring_passes_eval_dataset_all_rewards_and_no_peft(self):
         from text_feedback_dpo.trainers import run_grpo
 
         class Tokenizer:
-            def __call__(self, prompt, **kwargs):
+            eos_token_id = 2
+            pad_token_id = 0
+
+            def __call__(self, text, **kwargs):
                 return {"input_ids": [1]}
 
         train = [{"id": "q::rl::query", "task": "query", "prompt": "query", "gold_answer": "Ada", "sources": [], "canonical_ranked_search_results": []}]
@@ -75,6 +93,7 @@ class Task7TrainingTest(unittest.TestCase):
         rows, report = build_rl_rows_from_trajectories(
             [{"id": "q1", "training_eligible": True, "query_prompt": candidate["query_prompt"], "query_prompt_hash": candidate["query_prompt_hash"], "no_hint_siblings": [candidate]}],
             examples={"q1": _example()},
+            tokenizer=_Tokenizer(),
         )
         self.assertEqual({row["task"] for row in rows}, {"query", "response"})
         self.assertEqual({row["gold_answer"] for row in rows}, {"Ada Lovelace"})
@@ -105,11 +124,22 @@ class Task7TrainingTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Liger"):
             _dpo_args({"max_steps": 1, "use_liger_kernel": True}, "out")
 
+    def test_dpo_ref_artifacts_are_mandatory_with_no_live_fallback(self):
+        from text_feedback_dpo.trainers import run_dpo
+
+        with patch("text_feedback_dpo.trainers._tokenizer", return_value=_Tokenizer()):
+            with self.assertRaisesRegex(ValueError, "both train and eval"):
+                run_dpo(
+                    model_id="Qwen/Qwen3-4B-Base", train_path=Path("train.jsonl"),
+                    eval_path=Path("eval.jsonl"), output_dir=Path("out"),
+                    config={"max_steps": 1, "model_revision": "rev"},
+                )
+
     def test_rl_prompt_budget_rejects_overlong_prompts_without_truncation(self):
         class Tokenizer:
-            def __call__(self, prompt, **kwargs):
+            def __call__(self, text, **kwargs):
                 self.kwargs = kwargs
-                return {"input_ids": list(range(len(prompt.split())))}
+                return {"input_ids": list(range(len(text.split())))}
 
         tokenizer = Tokenizer()
         with self.assertRaisesRegex(ValueError, "prompt token budget"):
@@ -117,20 +147,46 @@ class Task7TrainingTest(unittest.TestCase):
         validate_rl_prompt_budget([{"prompt": "one", "task": "query", "gold_answer": "x"}], tokenizer, 4094)
         self.assertFalse(tokenizer.kwargs.get("truncation", True))
 
+    def test_dpo_boundary_merge_is_rejected_before_training_or_precompute(self):
+        class BoundaryMergingTokenizer(_Tokenizer):
+            def __call__(self, text, **kwargs):
+                if text == "prompt":
+                    return {"input_ids": [1]}
+                return {"input_ids": [9, 2]}
+
+        with self.assertRaisesRegex(ValueError, "boundary mismatch"):
+            validate_prompt_completion_lengths(
+                [{"prompt": "prompt", "chosen": " chosen", "rejected": " rejected"}],
+                BoundaryMergingTokenizer(), method="dpo",
+            )
+        with self.assertRaisesRegex(ValueError, "boundary mismatch"):
+            validate_prompt_completion_lengths(
+                [{"prompt": "prompt", "completion": " completion"}],
+                BoundaryMergingTokenizer(), method="sft",
+            )
+
     def test_reward_components_use_strict_evaluator_and_verbosity_is_never_positive(self):
-        ranked = [{
-            "retrieval_rank": 1, "source_id": "S001", "original_rank": 1, "bm25_score": 1.0,
-            "query_hash": "q", "corpus_hash": "c", "requested_top_k": 1, "effective_top_k": 1,
-            "source_count": 1, "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada Lovelace wrote the first algorithm.",
-        }]
+        candidate = _task7_candidate()
+        ranked = candidate["canonical_ranked_search_results"]
         response = "Answer: Ada Lovelace\nReasoning: The source identifies Ada Lovelace [S001].\nSources: S001"
-        score = evaluate_reward_components(response, "Ada Lovelace", ranked)
+        score = evaluate_reward_components(
+            response, "Ada Lovelace", ranked, sources=_example()["sources"], stored_query=candidate["raw_query"],
+        )
         self.assertEqual(score["components"]["exact_answer"], 1.0)
         self.assertIn("weighted_total", score)
         self.assertLessEqual(score["components"]["verbosity_penalty"], 0.0)
-        malformed = evaluate_reward_components("Answer: Ada Lovelace\nReasoning: forged [S999].\nSources: S999", "Ada Lovelace", ranked)
+        forged = [dict(ranked[0], title="forged dataset context")]
+        with self.assertRaisesRegex(ValueError, "retrieval mismatch"):
+            evaluate_reward_components(
+                response, "Ada Lovelace", forged,
+                sources=_example()["sources"], stored_query=candidate["raw_query"],
+            )
+        malformed = evaluate_reward_components(
+            "Answer: Ada Lovelace\nReasoning: forged [S999].\nSources: S999", "Ada Lovelace", ranked,
+            sources=_example()["sources"], stored_query=candidate["raw_query"],
+        )
         self.assertLess(malformed["weighted_total"], score["weighted_total"])
-        funcs = build_component_reward_functions()
+        funcs = build_component_reward_functions(_Tokenizer())
         self.assertEqual({func.__name__ for func in funcs}, {
             "exact_answer_reward", "bounded_f1_reward", "retrieval_recall_reward", "retrieval_mrr_reward", "future_retrieval_proxy_reward",
             "valid_citations_reward", "lexical_support_reward", "concise_reasoning_reward",
@@ -138,32 +194,34 @@ class Task7TrainingTest(unittest.TestCase):
         })
 
     def test_reward_functions_branch_on_task_and_penalize_fabrication_and_truncation(self):
-        ranked = [{
-            "retrieval_rank": 1, "source_id": "S001", "original_rank": 1, "bm25_score": 1.0,
-            "query_hash": "q", "corpus_hash": "c", "requested_top_k": 1, "effective_top_k": 1,
-            "source_count": 1, "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada Lovelace wrote the first algorithm.",
-        }]
-        funcs = {func.__name__: func for func in build_component_reward_functions()}
+        candidate = _task7_candidate()
+        ranked = candidate["canonical_ranked_search_results"]
+        funcs = {func.__name__: func for func in build_component_reward_functions(_Tokenizer())}
         values = funcs["retrieval_recall_reward"](
             ["Ada algorithm", "Answer: Ada Lovelace\nReasoning: The source identifies Ada Lovelace [S001].\nSources: S001"],
             task=["query", "response"], gold_answer=["Ada Lovelace", "Ada Lovelace"],
             sources=[[_example()["sources"][0]], [_example()["sources"][0]]],
-            canonical_ranked_search_results=[ranked, ranked], truncated=[False, False],
+            canonical_ranked_search_results=[ranked, ranked],
+            stored_query=[candidate["raw_query"], candidate["raw_query"]], completion_ids=[[1, 2], [1, 2]],
         )
         self.assertGreater(values[0], 0.0)
         self.assertGreater(values[1], 0.0)
         fabricated = funcs["fabricated_citation_penalty"](
             ["Answer: Ada Lovelace\nReasoning: forged [S999].\nSources: S999"], task=["response"],
             gold_answer=["Ada Lovelace"], sources=[[_example()["sources"][0]]],
-            canonical_ranked_search_results=[ranked], truncated=[False],
+            canonical_ranked_search_results=[ranked], stored_query=[candidate["raw_query"]], completion_ids=[[1, 2]],
         )
         truncated = funcs["truncation_penalty"](
             ["Answer: Ada Lovelace"], task=["response"], gold_answer=["Ada Lovelace"],
             sources=[[_example()["sources"][0]]], canonical_ranked_search_results=[ranked], truncated=[True],
+            stored_query=[candidate["raw_query"]], completion_ids=[[1, 9]],
         )
         self.assertLess(fabricated[0], 0.0)
         self.assertLess(truncated[0], 0.0)
-        self.assertLessEqual(funcs["verbosity_penalty"](["x"], task=["query"], gold_answer=["Ada"], sources=[[]], canonical_ranked_search_results=[[]], truncated=[False])[0], 0.0)
+        self.assertLessEqual(funcs["verbosity_penalty"](
+            ["x"], task=["query"], gold_answer=["Ada"], sources=[[_example()["sources"][0]]],
+            canonical_ranked_search_results=[ranked], stored_query=[candidate["raw_query"]], completion_ids=[[2]],
+        )[0], 0.0)
 
     def test_reference_manifest_requires_exact_identity_match(self):
         manifest = build_reference_manifest(
@@ -198,6 +256,42 @@ class Task7TrainingTest(unittest.TestCase):
             mismatch["data_hash"] = "b" * 64
             with self.assertRaisesRegex(ValueError, "manifest mismatch"):
                 load_precomputed_reference_log_probs(path, mismatch)
+
+    def test_precompute_writes_real_finite_rows_with_exact_data_identity(self):
+        import torch
+
+        class CharacterTokenizer:
+            eos_token = "!"
+
+            def __call__(self, text, **kwargs):
+                return {"input_ids": [ord(character) % 31 + 1 for character in text]}
+
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(1))
+
+            def forward(self, input_ids, attention_mask, use_cache):
+                batch, length = input_ids.shape
+                return SimpleNamespace(logits=torch.zeros(batch, length, 64, device=input_ids.device))
+
+        rows = [{"id": "r1", "prompt": "P", "chosen": " C", "rejected": " R"}]
+        manifest = build_reference_manifest(
+            model="Qwen/Qwen3-4B-Base", model_revision="model-rev",
+            reference_checkpoint_hash="a" * 64, tokenizer="Qwen/Qwen3-4B-Base",
+            tokenizer_revision="model-rev", data_hash=dataset_identity_hash(rows),
+            prompt_context_schema={"schema": 1}, max_length=4096,
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "refs.jsonl"
+            result = precompute_reference_log_probs(
+                model=Model(), tokenizer=CharacterTokenizer(), rows=rows,
+                output_path=path, manifest=manifest,
+            )
+            loaded = load_precomputed_reference_log_probs(path, manifest)
+        self.assertEqual(result["rows"], 1)
+        self.assertEqual(dataset_identity_hash(loaded), dataset_identity_hash(rows))
+        self.assertTrue(all(isinstance(loaded[0][key], float) for key in ("ref_chosen_logps", "ref_rejected_logps")))
 
     def test_model_override_and_fallback_require_pinned_or_authorized_oom(self):
         config = {"student_model": "Qwen/Qwen3-4B-Base", "student_revision": "906bfd4b4dc7f14ee4320094d8b41684abff8539", "training": {}}

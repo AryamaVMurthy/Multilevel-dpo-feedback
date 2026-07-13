@@ -50,9 +50,18 @@ def _trajectory(candidate=None, **overrides):
     return trajectory
 
 
+class _Tokenizer:
+    eos_token = "<eos>"
+
+    def encode(self, text, add_special_tokens=False):
+        return list(range(len(text.split())))
+
+
 class Task7DatasetTest(unittest.TestCase):
     def test_builds_separate_student_query_and_visible_response_rows(self):
-        rows, report = build_sft_rows_from_trajectories([_trajectory()], examples={"q1": _example()})
+        rows, report = build_sft_rows_from_trajectories(
+            [_trajectory()], examples={"q1": _example()}, tokenizer=_Tokenizer(),
+        )
 
         self.assertEqual([row["task"] for row in rows], ["query", "response"])
         self.assertEqual(rows[0]["prompt"], _candidate()["query_prompt"])
@@ -77,7 +86,9 @@ class Task7DatasetTest(unittest.TestCase):
         ]
         for reason, overrides in cases:
             with self.subTest(reason=reason):
-                rows, report = build_sft_rows_from_trajectories([_trajectory(_candidate(**overrides))], examples={"q1": _example()})
+                rows, report = build_sft_rows_from_trajectories(
+                    [_trajectory(_candidate(**overrides))], examples={"q1": _example()}, tokenizer=_Tokenizer(),
+                )
                 self.assertEqual(rows, [])
                 expected_count = 1 if reason in {"hinted_prompt", "response_prompt_hash_mismatch", "retrieval_context_hash_mismatch"} else 2
                 self.assertEqual(report["exclusion_counts"].get(reason), expected_count)
@@ -85,6 +96,8 @@ class Task7DatasetTest(unittest.TestCase):
 
     def test_length_gate_never_silently_truncates_and_reports_coverage(self):
         class Tokenizer:
+            eos_token = "<eos>"
+
             def encode(self, text, add_special_tokens=False):
                 return list(range(4097))
 
@@ -105,7 +118,7 @@ class Task7DatasetTest(unittest.TestCase):
         ):
             with self.subTest(overrides=overrides):
                 rows, report = build_sft_rows_from_trajectories(
-                    [_trajectory(_candidate(**overrides))], examples={"q1": _example()}
+                    [_trajectory(_candidate(**overrides))], examples={"q1": _example()}, tokenizer=_Tokenizer(),
                 )
                 self.assertEqual(rows, [])
                 self.assertEqual(report["exclusion_counts"].get("canonical_artifact_validation_failed"), 2)

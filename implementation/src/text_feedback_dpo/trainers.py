@@ -62,7 +62,7 @@ def _common_args(config: dict, output_dir: Path) -> dict:
         "max_steps": max_steps,
         "bf16": True,
         "tf32": True,
-        "gradient_checkpointing": True,
+        "gradient_checkpointing": bool(config.get("gradient_checkpointing", True)),
         "gradient_checkpointing_kwargs": {"use_reentrant": False},
         "optim": "adamw_torch_fused",
         "dataloader_num_workers": workers,
@@ -150,12 +150,14 @@ def _rl_args(config: dict, output_dir: Path, *, method: str) -> dict:
     if completion_budget <= 32 or completion_budget > MAX_SEQUENCE_LENGTH:
         raise ValueError("RL max_completion_length must use the cited-response budget between 33 and 4096 tokens")
     common.update(
+        model_init_kwargs=_model_init_kwargs(config),
         num_generations=num_generations,
         generation_batch_size=generation_batch_size,
         per_device_eval_batch_size=eval_batch_size,
         max_completion_length=completion_budget,
         loss_type="grpo" if method == "grpo" else "dapo",
         reward_weights=[REWARD_COMPONENT_WEIGHTS[name] for name in REWARD_COMPONENT_WEIGHTS],
+        mask_truncated_completions=method == "dapo",
     )
     if method == "dapo":
         common.update(epsilon=0.2, epsilon_high=0.28, mask_truncated_completions=True, beta=0.0)
@@ -165,7 +167,7 @@ def _rl_args(config: dict, output_dir: Path, *, method: str) -> dict:
 def _token_count_without_truncation(tokenizer: object, prompt: str) -> int:
     if not callable(tokenizer):
         raise TypeError("RL prompt validation requires a callable pinned tokenizer")
-    encoded = tokenizer(prompt, add_special_tokens=False, truncation=False)
+    encoded = tokenizer(text=prompt, truncation=False)
     if not isinstance(encoded, Mapping) or not isinstance(encoded.get("input_ids"), Sequence):
         raise TypeError("pinned tokenizer must return input_ids without truncation")
     return len(encoded["input_ids"])
@@ -187,13 +189,73 @@ def validate_rl_prompt_budget(dataset: Sequence[Mapping[str, object]], tokenizer
 
 
 def _token_ids_without_truncation(tokenizer: object, text: str) -> list[int]:
-    encoded = tokenizer(text, add_special_tokens=False, truncation=False)
+    encoded = tokenizer(text=text, truncation=False)
     if not isinstance(encoded, Mapping) or not isinstance(encoded.get("input_ids"), Sequence):
         raise TypeError("pinned tokenizer must return input_ids without truncation")
     ids = encoded["input_ids"]
     if any(isinstance(token, bool) or not isinstance(token, int) for token in ids):
         raise TypeError("tokenizer input_ids must be integer token IDs")
     return list(ids)
+
+
+def _dpo_token_ids(tokenizer: object, prompt: str, completion: str, *, row_index: int, label: str) -> tuple[list[int], list[int]]:
+    """Mirror TRL 1.8 plain-text tokenization and reject unsafe boundary merges."""
+    eos = getattr(tokenizer, "eos_token", None)
+    if not isinstance(eos, str) or not eos:
+        raise ValueError("pinned DPO tokenizer requires a non-empty eos_token")
+    rendered_completion = completion if completion.endswith(eos) else completion + eos
+    prompt_ids = _token_ids_without_truncation(tokenizer, prompt)
+    combined_ids = _token_ids_without_truncation(tokenizer, prompt + rendered_completion)
+    if not prompt_ids:
+        raise ValueError(f"DPO row {row_index} prompt tokenization is empty")
+    if combined_ids[: len(prompt_ids)] != prompt_ids:
+        raise ValueError(
+            f"DPO row {row_index} {label} tokenizer boundary mismatch; prompt+completion does not preserve "
+            "the standalone prompt token prefix"
+        )
+    completion_ids = combined_ids[len(prompt_ids) :]
+    if not completion_ids:
+        raise ValueError(f"DPO row {row_index} {label} has no completion tokens")
+    return combined_ids, completion_ids
+
+
+def validate_prompt_completion_lengths(
+    rows: Sequence[Mapping[str, object]], tokenizer: object, *, method: str,
+) -> Sequence[Mapping[str, object]]:
+    if method not in {"sft", "dpo"}:
+        raise ValueError("length validation method must be sft or dpo")
+    for index, row in enumerate(rows):
+        prompt = row.get("prompt") if isinstance(row, Mapping) else None
+        if not isinstance(prompt, str) or not prompt:
+            raise ValueError(f"{method.upper()} row {index} requires a non-empty prompt")
+        labels = ("completion",) if method == "sft" else ("chosen", "rejected")
+        for label in labels:
+            completion = row.get(label)
+            if (
+                not isinstance(completion, str)
+                or not completion.startswith(" ")
+                or completion.startswith("  ")
+            ):
+                raise ValueError(f"{method.upper()} row {index} {label} must begin with one boundary space")
+            if method == "dpo":
+                combined_ids, _ = _dpo_token_ids(tokenizer, prompt, completion, row_index=index, label=label)
+            else:
+                eos = getattr(tokenizer, "eos_token", None)
+                if not isinstance(eos, str) or not eos:
+                    raise ValueError("pinned SFT tokenizer requires a non-empty eos_token")
+                rendered_completion = completion if completion.endswith(eos) else completion + eos
+                prompt_ids = _token_ids_without_truncation(tokenizer, prompt)
+                combined_ids = _token_ids_without_truncation(tokenizer, prompt + rendered_completion)
+                if combined_ids[: len(prompt_ids)] != prompt_ids:
+                    raise ValueError(
+                        f"SFT row {index} tokenizer boundary mismatch; prompt+completion does not preserve "
+                        "the standalone prompt token prefix"
+                    )
+            if len(combined_ids) > MAX_SEQUENCE_LENGTH:
+                raise ValueError(
+                    f"{method.upper()} row {index} {label} exceeds max_length=4096; truncation is forbidden"
+                )
+    return rows
 
 
 def precompute_reference_log_probs(
@@ -230,16 +292,13 @@ def precompute_reference_log_probs(
         rejected = row.get("rejected")
         if not all(isinstance(value, str) and value for value in (prompt, chosen, rejected)):
             raise ValueError(f"reference precompute row {index} requires prompt/chosen/rejected text")
-        prompt_ids = _token_ids_without_truncation(tokenizer, prompt)
-        if not prompt_ids:
-            raise ValueError(f"reference precompute row {index} prompt tokenization is empty")
         values: dict[str, float] = {}
         for label, completion in (("chosen", chosen), ("rejected", rejected)):
-            input_ids = _token_ids_without_truncation(tokenizer, prompt + completion)
+            input_ids, completion_ids = _dpo_token_ids(
+                tokenizer, prompt, completion, row_index=index, label=label,
+            )
             if len(input_ids) > MAX_SEQUENCE_LENGTH:
                 raise ValueError(f"reference precompute row {index} {label} exceeds max_length=4096; truncation is forbidden")
-            if len(input_ids) <= len(prompt_ids):
-                raise ValueError(f"reference precompute row {index} {label} has no completion tokens")
             input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
             attention_mask = torch.ones_like(input_tensor)
             with torch.inference_mode():
@@ -247,7 +306,7 @@ def precompute_reference_log_probs(
             logits = outputs.logits[:, :-1, :]
             labels = input_tensor[:, 1:]
             token_logps = torch.log_softmax(logits, dim=-1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
-            completion_logps = token_logps[:, len(prompt_ids) - 1 :]
+            completion_logps = token_logps[:, -len(completion_ids) :]
             values[label] = float(completion_logps.sum().item())
         computed.append({**dict(row), "ref_chosen_logps": values["chosen"], "ref_rejected_logps": values["rejected"]})
     return write_precomputed_reference_log_probs(output_path, computed, manifest)
@@ -266,6 +325,7 @@ def evaluate_reward_components(
     *,
     task: str = "response",
     sources: Sequence[Mapping[str, object]] | None = None,
+    stored_query: str | None = None,
     truncated: bool = False,
 ) -> dict[str, object]:
     from text_feedback_dpo.batch_generation import canonical_cited_score, parse_search_query
@@ -297,10 +357,14 @@ def evaluate_reward_components(
             malformed = True
             components["verbosity_penalty"] = -max(0.0, len(completion.split()) - 16) / 16.0
     else:
-        if not source_records:
-            raise ValueError("response reward requires canonical retrieved source records")
-        score = canonical_cited_score(completion, gold_answer, source_records, truncated=truncated)
-        metrics = retrieval_metrics(source_records, gold_answer)
+        corpus = _ranked_sources(sources)
+        if not corpus or not isinstance(stored_query, str) or not stored_query.strip():
+            raise ValueError("response reward requires dataset-owned sources and the stored canonical query")
+        canonical_ranked = FixedBM25Retriever(corpus).search(stored_query, top_k=8)
+        if source_records != canonical_ranked:
+            raise ValueError("response reward canonical retrieval mismatch; ranked context is forged or stale")
+        score = canonical_cited_score(completion, gold_answer, canonical_ranked, truncated=truncated)
+        metrics = retrieval_metrics(canonical_ranked, gold_answer)
         components["exact_answer"] = float(score.get("answer_correct", False) and score.get("parse_valid", False) and not truncated)
         components["bounded_f1"] = min(0.25, float(score.get("f1", 0.0)) * 0.25)
         components["retrieval_recall"] = float(metrics["recall@8"])
@@ -333,7 +397,22 @@ def _batch_value(value: object, index: int, size: int, *, name: str) -> object:
     return value
 
 
-def build_component_reward_functions() -> list:
+def _completion_is_truncated(completion_ids: object, *, eos_token_id: int, pad_token_id: int) -> bool:
+    if not isinstance(completion_ids, Sequence) or isinstance(completion_ids, (str, bytes)) or not completion_ids:
+        raise ValueError("GRPO reward requires non-empty generated completion_ids")
+    last = completion_ids[-1]
+    if hasattr(last, "item"):
+        last = last.item()
+    return int(last) not in {eos_token_id, pad_token_id}
+
+
+def build_component_reward_functions(tokenizer: object) -> list:
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if isinstance(eos_token_id, bool) or not isinstance(eos_token_id, int):
+        raise ValueError("pinned RL tokenizer requires integer eos_token_id")
+    if isinstance(pad_token_id, bool) or not isinstance(pad_token_id, int):
+        raise ValueError("pinned RL tokenizer requires integer pad_token_id")
     functions = []
     for component_name in REWARD_COMPONENT_WEIGHTS:
         def reward_func(completions, _component_name=component_name, **kwargs):
@@ -345,9 +424,14 @@ def build_component_reward_functions() -> list:
                 gold = _batch_value(kwargs.get("gold_answer"), index, len(completions), name="gold_answer")
                 sources = _batch_value(kwargs.get("sources"), index, len(completions), name="sources")
                 ranked = _batch_value(kwargs.get("canonical_ranked_search_results"), index, len(completions), name="canonical_ranked_search_results")
-                truncated = _batch_value(kwargs.get("truncated", False), index, len(completions), name="truncated")
+                stored_query = _batch_value(kwargs.get("stored_query"), index, len(completions), name="stored_query")
+                completion_ids = _batch_value(kwargs.get("completion_ids"), index, len(completions), name="completion_ids")
+                truncated = _completion_is_truncated(
+                    completion_ids, eos_token_id=eos_token_id, pad_token_id=pad_token_id,
+                )
                 audit = evaluate_reward_components(
-                    completion, gold, ranked, task=task, sources=sources, truncated=truncated,
+                    completion, gold, ranked, task=task, sources=sources,
+                    stored_query=stored_query, truncated=truncated,
                 )
                 values.append(float(audit["components"][_component_name]))
             return values
@@ -369,7 +453,7 @@ class PersistedReferenceDPOTrainerMixin:
         required = {"ref_chosen_logps", "ref_rejected_logps"}
         if required <= set(dataset.column_names):
             return dataset
-        return super()._precompute_ref_logps(dataset, name, batch_size)
+        raise ValueError(f"{name} dataset is missing mandatory persisted reference log probabilities")
 
 
 def _load_rl_dataset(path: Path, tokenizer: object, completion_budget: int):
@@ -385,6 +469,8 @@ def run_sft(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
     tokenizer = _tokenizer(config, model_id)
     train_dataset = _load_dataset(train_path)
     eval_dataset = _load_dataset(eval_path)
+    validate_prompt_completion_lengths(train_dataset, tokenizer, method="sft")
+    validate_prompt_completion_lengths(eval_dataset, tokenizer, method="sft")
     args = SFTConfig(**_sft_args(config, output_dir))
     trainer = SFTTrainer(model=model_id, processing_class=tokenizer, peft_config=None, args=args, train_dataset=train_dataset, eval_dataset=eval_dataset)
     trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
@@ -397,24 +483,27 @@ def run_dpo(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
 
     build_method_config("dpo", max_length=MAX_SEQUENCE_LENGTH, max_steps=config["max_steps"])
     tokenizer = _tokenizer(config, model_id)
-    if config.get("precomputed_ref_log_probs_path"):
-        rows = _load_dataset(Path(config["precomputed_ref_log_probs_path"]))
-        raw_rows = [dict(row) for row in rows]
+    artifact_paths = {
+        "train": config.get("precomputed_ref_log_probs_path"),
+        "eval": config.get("precomputed_eval_ref_log_probs_path"),
+    }
+    if not all(artifact_paths.values()):
+        raise ValueError("DPO requires persisted reference-log-probability artifacts for both train and eval")
+    datasets = {}
+    for name, source_path in (("train", train_path), ("eval", eval_path)):
+        raw_rows = [dict(row) for row in _load_dataset(source_path)]
+        validate_prompt_completion_lengths(raw_rows, tokenizer, method="dpo")
         expected = build_reference_manifest(
             model=model_id, model_revision=config["model_revision"],
             reference_checkpoint_hash=config["reference_checkpoint_hash"],
             tokenizer=config.get("tokenizer_model", model_id), tokenizer_revision=config.get("tokenizer_revision", config["model_revision"]),
             data_hash=dataset_identity_hash(raw_rows), prompt_context_schema=config["prompt_context_schema"], max_length=MAX_SEQUENCE_LENGTH,
         )
-        persisted_rows = load_precomputed_reference_log_probs(Path(config["precomputed_ref_log_probs_path"]), expected)
-        train_dataset = Dataset.from_list(persisted_rows)
-    else:
-        train_dataset = _load_dataset(train_path)
-    eval_dataset = _load_dataset(eval_path)
+        persisted_rows = load_precomputed_reference_log_probs(Path(artifact_paths[name]), expected)
+        datasets[name] = Dataset.from_list(persisted_rows)
+    train_dataset, eval_dataset = datasets["train"], datasets["eval"]
     args = DPOConfig(**_dpo_args(config, output_dir))
-    trainer_class = DPOTrainer
-    if config.get("precomputed_ref_log_probs_path"):
-        trainer_class = type("PersistedReferenceDPOTrainer", (PersistedReferenceDPOTrainerMixin, DPOTrainer), {})
+    trainer_class = type("PersistedReferenceDPOTrainer", (PersistedReferenceDPOTrainerMixin, DPOTrainer), {})
     trainer = trainer_class(model=model_id, processing_class=tokenizer, peft_config=None, args=args, train_dataset=train_dataset, eval_dataset=eval_dataset)
     trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     _save_final(trainer, output_dir)
@@ -432,7 +521,7 @@ def _run_rl(*, method: str, model_id: str, train_path: Path, eval_path: Path, ou
     args = GRPOConfig(**args_dict)
     trainer = GRPOTrainer(
         model=model_id,
-        reward_funcs=build_component_reward_functions(),
+        reward_funcs=build_component_reward_functions(tokenizer),
         peft_config=None,
         args=args,
         train_dataset=train_dataset,

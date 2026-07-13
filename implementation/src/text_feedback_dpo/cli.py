@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from text_feedback_dpo.config import load_config
-from text_feedback_dpo.dataset import attach_evidence, build_sft_row, load_searchqa_split_with_stats, write_jsonl
+from text_feedback_dpo.dataset import attach_evidence, build_sft_rows_from_trajectories, load_searchqa_split_with_stats, write_jsonl
 from text_feedback_dpo.scoring import score_searchqa
 
 
@@ -124,15 +124,52 @@ def cmd_probe_model(args: argparse.Namespace) -> None:
 
 
 def cmd_build_sft(args: argparse.Namespace) -> None:
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with args.output.open("w", encoding="utf-8") as handle:
-        for row in iter_jsonl(args.data):
-            handle.write(json.dumps(build_sft_row(row), sort_keys=True, ensure_ascii=False) + "\n")
-            count += 1
-    if count == 0:
-        args.output.unlink(missing_ok=True)
-        raise ValueError("SFT input produced zero rows")
+    from text_feedback_dpo.runtime import load_tokenizer
+    from text_feedback_dpo.training import validate_student_model_selection
+
+    config = load_config(args.config)
+    model_id, revision = validate_student_model_selection(config)
+    examples = {row["id"]: row for row in read_unique_jsonl(args.data, label="SFT canonical dataset")}
+    trajectories = read_unique_jsonl(args.trajectories, label="SFT trajectories")
+    tokenizer = load_tokenizer(model_id, revision=revision)
+    rows, report = build_sft_rows_from_trajectories(
+        trajectories, examples=examples, tokenizer=tokenizer,
+        min_coverage=args.min_coverage, min_rows=args.min_rows,
+    )
+    write_jsonl(rows, args.output)
+    write_json(args.report, report)
+
+
+def cmd_precompute_dpo_refs(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.runtime import load_student, load_tokenizer
+    from text_feedback_dpo.trainers import precompute_reference_log_probs, validate_prompt_completion_lengths
+    from text_feedback_dpo.training import (
+        build_reference_manifest,
+        dataset_identity_hash,
+        validate_student_model_selection,
+    )
+
+    config = load_config(args.config)
+    model_id, revision = validate_student_model_selection(
+        config, requested_model=args.model, requested_revision=args.model_revision,
+    )
+    rows = read_unique_jsonl(args.data, label="DPO reference precompute")
+    tokenizer = load_tokenizer(model_id, revision=revision)
+    validate_prompt_completion_lengths(rows, tokenizer, method="dpo")
+    schema = json.loads(args.prompt_context_schema.read_text(encoding="utf-8"))
+    manifest = build_reference_manifest(
+        model=model_id, model_revision=revision,
+        reference_checkpoint_hash=args.reference_checkpoint_hash,
+        tokenizer=model_id, tokenizer_revision=revision,
+        data_hash=dataset_identity_hash(rows), prompt_context_schema=schema, max_length=4096,
+    )
+    model = load_student(
+        model_id, revision=revision,
+        attention_implementation=args.attention_implementation, device=args.device,
+    )
+    precompute_reference_log_probs(
+        model=model, tokenizer=tokenizer, rows=rows, output_path=args.output, manifest=manifest,
+    )
 
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -437,6 +474,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
     )
     from text_feedback_dpo.collection import collect_dataset_batchwise
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
+    from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
         extract_qwen_final_content,
         generate_batch,
@@ -588,7 +626,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         "identity": "fixed_bm25", "schema_version": 1,
         "requested_top_k": FIXED_TOP_K, "k1": FIXED_K1, "b": FIXED_B,
     }
-    prompt_identity = {"identity": PROMPT_VERSION}
+    prompt_identity = {"identity": PROMPT_VERSION, "builders": prompt_builder_identity()}
     response_identity = {"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION}
     evaluator_identity = {"identity": EVALUATOR_VERSION}
 
@@ -650,12 +688,51 @@ def cmd_collect(args: argparse.Namespace) -> None:
 def cmd_train(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     from text_feedback_dpo.trainers import run_dapo, run_dpo, run_grpo, run_sft
+    from text_feedback_dpo.training import validate_student_model_selection
 
-    model_id = args.model or config["student_model"]
-    common = {"learning_rate": args.learning_rate, "epochs": args.epochs, "gradient_accumulation_steps": args.gradient_accumulation_steps, "deepspeed_config": args.deepspeed_config, "resume_from_checkpoint": args.resume_from_checkpoint, "save_steps": args.save_steps, "eval_steps": args.eval_steps, "dapo_enabled": args.method == "dapo", "attention_implementation": config["training"]["attention_implementation"], "model_revision": args.model_revision if args.model else config["student_revision"]}
-    kwargs = {"model_id": model_id, "train_path": args.train, "output_dir": args.output, "config": common}
-    if args.method in {"sft", "dpo"}:
-        kwargs["eval_path"] = args.eval
+    if args.max_length != 4096:
+        raise ValueError("Task 7 combined max_length is fixed at exactly 4096")
+    if args.use_liger_kernel:
+        raise ValueError("Liger is explicitly disabled for Task 7 training")
+    if args.method != "sft" and (args.packing or args.padding_free):
+        raise ValueError("packing and padding-free controls are supported only for SFT")
+    model_id, revision = validate_student_model_selection(
+        config, requested_model=args.model, requested_revision=args.model_revision,
+    )
+    common = {
+        "learning_rate": args.learning_rate, "epochs": args.epochs,
+        "max_steps": args.max_steps,
+        "per_device_train_batch_size": args.per_device_train_batch_size,
+        "per_device_eval_batch_size": args.per_device_eval_batch_size,
+        "dataloader_num_workers": args.dataloader_num_workers,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "gradient_checkpointing": args.gradient_checkpointing,
+        "deepspeed_config": args.deepspeed_config,
+        "resume_from_checkpoint": args.resume_from_checkpoint,
+        "save_steps": args.save_steps, "eval_steps": args.eval_steps,
+        "dapo_enabled": args.method == "dapo",
+        "attention_implementation": args.attention_implementation,
+        "model_revision": revision,
+        "packing": args.packing, "padding_free": args.padding_free,
+        "num_generations": args.num_generations,
+        "generation_batch_size": args.generation_batch_size,
+        "max_completion_length": args.max_completion_length,
+        "use_liger_kernel": args.use_liger_kernel,
+    }
+    if args.method == "dpo":
+        schema = json.loads(args.prompt_context_schema.read_text(encoding="utf-8"))
+        common.update(
+            precomputed_ref_log_probs_path=args.ref_log_probs,
+            precomputed_eval_ref_log_probs_path=args.eval_ref_log_probs,
+            reference_checkpoint_hash=args.reference_checkpoint_hash,
+            prompt_context_schema=schema,
+            tokenizer_model=model_id,
+            tokenizer_revision=revision,
+        )
+    kwargs = {
+        "model_id": model_id, "train_path": args.train, "eval_path": args.eval,
+        "output_dir": args.output, "config": common,
+    }
     {"sft": run_sft, "dpo": run_dpo, "grpo": run_grpo, "dapo": run_dapo}[args.method](**kwargs)
 
 
@@ -758,9 +835,25 @@ def build_parser() -> argparse.ArgumentParser:
     preferences.add_argument("--output", required=True, type=Path)
     preferences.set_defaults(func=cmd_build_preferences)
     sft_data = sub.add_parser("build-sft-data")
+    sft_data.add_argument("--config", required=True, type=Path)
     sft_data.add_argument("--data", required=True, type=Path)
+    sft_data.add_argument("--trajectories", required=True, type=Path)
     sft_data.add_argument("--output", required=True, type=Path)
+    sft_data.add_argument("--report", required=True, type=Path)
+    sft_data.add_argument("--min-coverage", required=True, type=float)
+    sft_data.add_argument("--min-rows", required=True, type=int)
     sft_data.set_defaults(func=cmd_build_sft)
+    refs = sub.add_parser("precompute-dpo-ref-log-probs")
+    refs.add_argument("--config", required=True, type=Path)
+    refs.add_argument("--data", required=True, type=Path)
+    refs.add_argument("--output", required=True, type=Path)
+    refs.add_argument("--model")
+    refs.add_argument("--model-revision")
+    refs.add_argument("--reference-checkpoint-hash", required=True)
+    refs.add_argument("--prompt-context-schema", required=True, type=Path)
+    refs.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
+    refs.add_argument("--device", required=True)
+    refs.set_defaults(func=cmd_precompute_dpo_refs)
     report = sub.add_parser("report")
     report.add_argument("--metrics", required=True, type=Path)
     report.add_argument("--output", required=True, type=Path)
@@ -812,20 +905,40 @@ def build_parser() -> argparse.ArgumentParser:
         train = sub.add_parser(f"train-{method}")
         train.add_argument("--config", required=True, type=Path)
         train.add_argument("--train", required=True, type=Path)
-        if method in {"sft", "dpo"}:
-            train.add_argument("--eval", required=True, type=Path)
-        else:
-            train.set_defaults(eval=None)
+        train.add_argument("--eval", required=True, type=Path)
         train.add_argument("--output", required=True, type=Path)
         train.add_argument("--model")
         train.add_argument("--model-revision")
         train.add_argument("--learning-rate", type=float, default=1e-6)
         train.add_argument("--epochs", type=float, default=1.0)
-        train.add_argument("--gradient-accumulation-steps", type=int, default=32)
+        train.add_argument("--max-steps", required=True, type=int)
+        train.add_argument("--max-length", required=True, type=int)
+        train.add_argument("--per-device-train-batch-size", required=True, type=int)
+        train.add_argument("--per-device-eval-batch-size", required=True, type=int)
+        train.add_argument("--dataloader-num-workers", required=True, type=int)
+        train.add_argument("--gradient-accumulation-steps", required=True, type=int)
+        train.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=True)
+        train.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
         train.add_argument("--deepspeed-config", type=Path)
         train.add_argument("--resume-from-checkpoint")
         train.add_argument("--save-steps", type=int, default=100)
         train.add_argument("--eval-steps", type=int, default=100)
+        train.add_argument("--packing", action=argparse.BooleanOptionalAction, default=False)
+        train.add_argument("--padding-free", action=argparse.BooleanOptionalAction, default=False)
+        train.add_argument("--use-liger-kernel", action=argparse.BooleanOptionalAction, default=False)
+        train.add_argument("--num-generations", type=int, default=4)
+        train.add_argument("--generation-batch-size", type=int, default=32)
+        train.add_argument("--max-completion-length", type=int, default=256)
+        if method == "dpo":
+            train.add_argument("--ref-log-probs", required=True, type=Path)
+            train.add_argument("--eval-ref-log-probs", required=True, type=Path)
+            train.add_argument("--reference-checkpoint-hash", required=True)
+            train.add_argument("--prompt-context-schema", required=True, type=Path)
+        else:
+            train.set_defaults(
+                ref_log_probs=None, eval_ref_log_probs=None,
+                reference_checkpoint_hash=None, prompt_context_schema=None,
+            )
         train.set_defaults(func=cmd_train, method=method)
     return parser
 

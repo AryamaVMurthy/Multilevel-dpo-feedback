@@ -11,7 +11,7 @@ from text_feedback_dpo.cli import build_parser
 class CLITest(unittest.TestCase):
     def test_exposes_only_searchqa_training_commands(self):
         parser = build_parser()
-        for command in ("prepare-searchqa", "shard-jsonl", "merge-predictions", "probe-model", "collect", "build-preferences", "build-sft-data", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
+        for command in ("prepare-searchqa", "shard-jsonl", "merge-predictions", "probe-model", "collect", "build-preferences", "build-sft-data", "precompute-dpo-ref-log-probs", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
             parsed = parser.parse_args([command] + self._required_args(command))
             self.assertEqual(parsed.command, command)
 
@@ -201,7 +201,9 @@ class CLITest(unittest.TestCase):
         if command == "build-preferences":
             return ["--data", "data.jsonl", "--trajectories", "x.jsonl", "--output", "y.jsonl"]
         if command == "build-sft-data":
-            return ["--data", "x.jsonl", "--output", "y.jsonl"]
+            return ["--config", "config.yaml", "--data", "x.jsonl", "--trajectories", "t.jsonl", "--output", "y.jsonl", "--report", "report.json", "--min-coverage", "0.5", "--min-rows", "2"]
+        if command == "precompute-dpo-ref-log-probs":
+            return ["--config", "config.yaml", "--data", "x.jsonl", "--output", "refs.jsonl", "--reference-checkpoint-hash", "a" * 64, "--prompt-context-schema", "schema.json", "--attention-implementation", "sdpa", "--device", "cuda:0"]
         if command == "evaluate":
             return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json", "--protocol", "archival"]
         if command == "preflight-quality":
@@ -214,7 +216,15 @@ class CLITest(unittest.TestCase):
             return ["--metrics", "x.json", "--output", "y.html"]
         if command == "validate-run":
             return ["--directory", "run", "--output", "y.json"]
-        return ["--config", "config.yaml", "--train", "train.jsonl", "--output", "out"] + (["--eval", "eval.jsonl"] if command in {"train-sft", "train-dpo"} else [])
+        args = [
+            "--config", "config.yaml", "--train", "train.jsonl", "--eval", "eval.jsonl", "--output", "out",
+            "--max-steps", "1", "--max-length", "4096", "--per-device-train-batch-size", "1",
+            "--per-device-eval-batch-size", "4", "--dataloader-num-workers", "2",
+            "--gradient-accumulation-steps", "8", "--attention-implementation", "sdpa",
+        ]
+        if command == "train-dpo":
+            args += ["--ref-log-probs", "train.refs.jsonl", "--eval-ref-log-probs", "eval.refs.jsonl", "--reference-checkpoint-hash", "a" * 64, "--prompt-context-schema", "schema.json"]
+        return args
 
 
 if __name__ == "__main__":
