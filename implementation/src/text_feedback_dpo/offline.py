@@ -48,6 +48,7 @@ def build_cache_manifest(
         EVALUATOR_VERSION, FIXED_B, FIXED_K1, FIXED_TOP_K, PROMPT_VERSION, RESPONSE_SCHEMA_VERSION,
     )
     from text_feedback_dpo.runtime import validate_teacher_identity
+    from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
     actual_teacher_identity = validate_teacher_identity(
@@ -74,10 +75,11 @@ def build_cache_manifest(
         "identity": "fixed_bm25", "schema_version": 1,
         "requested_top_k": FIXED_TOP_K, "k1": FIXED_K1, "b": FIXED_B,
     }
+    prompt_builders = prompt_builder_identity()
     expected_identities = {
         "source_schema_hash": _identity_hash({"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}),
         "retrieval_hash": _identity_hash(expected_retrieval),
-        "prompt_hash": _identity_hash({"identity": PROMPT_VERSION}),
+        "prompt_hash": _identity_hash({"identity": PROMPT_VERSION, "builders": prompt_builders}),
         "response_schema_hash": _identity_hash({"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION}),
         "evaluator_hash": _identity_hash({"identity": EVALUATOR_VERSION}),
     }
@@ -93,8 +95,8 @@ def build_cache_manifest(
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("cache manifest seed must be a nonnegative integer")
     manifest = {
-        "manifest_version": 3,
-        "schema_version": 3,
+        "manifest_version": 4,
+        "schema_version": 4,
         "student_model": student_model,
         "student_revision": student_revision,
         "teacher_model": teacher_model,
@@ -110,6 +112,7 @@ def build_cache_manifest(
         "retrieval_config": retrieval_config,
         "retrieval_hash": retrieval_hash,
         "prompt_version": prompt_version,
+        "prompt_builders": prompt_builders,
         "prompt_hash": prompt_hash,
         "response_schema_version": response_schema_version,
         "response_schema_hash": response_schema_hash,
@@ -190,15 +193,27 @@ def _write_cache(cache_path: Path, rows: list[dict], manifest: dict) -> None:
     _manifest_path(cache_path).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _read_cache_objects(cache_path: Path) -> list[dict]:
+    rows: list[dict] = []
+    for line_number, line in enumerate(cache_path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            raise ValueError(f"cache JSONL contains a blank record: {cache_path.name}:{line_number}")
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"cache JSONL contains invalid JSON: {cache_path.name}:{line_number}: {exc}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"cache JSONL record must be an object: {cache_path.name}:{line_number}")
+        rows.append(row)
+    return rows
+
+
 def load_or_build_rollouts(*, examples: list[dict], cache_path: Path, cache_manifest: dict, generate: Callable[[dict], dict]) -> list[dict]:
     expected_identity = {str(example["id"]): _row_identity(example, cache_manifest) for example in examples}
     cached: dict[str, dict] = {}
     if cache_path.exists():
         _verify_existing_manifest(cache_path, cache_manifest)
-        for line in cache_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
+        for row in _read_cache_objects(cache_path):
             example_id = row.get("example_id")
             if not isinstance(example_id, str) or not example_id:
                 raise ValueError("cached rollout missing example_id")
@@ -226,18 +241,21 @@ def load_or_build_rollouts(*, examples: list[dict], cache_path: Path, cache_mani
 
 
 def load_or_build_trajectories(*, examples: list[dict], cache_path: Path, cache_manifest: dict, generate: Callable[[list[dict]], list[dict]]) -> list[dict]:
+    from text_feedback_dpo.retrieval import validate_source_records
     from text_feedback_dpo.trajectories import revalidate_cached_trajectory
 
+    for example in examples:
+        try:
+            validate_source_records(example.get("sources"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"trajectory example {example.get('id')} has invalid canonical sources: {exc}") from exc
     expected_ids = [str(example["id"]) for example in examples]
     example_by_id = {str(example["id"]): example for example in examples}
     expected_identity = {str(example["id"]): _row_identity(example, cache_manifest) for example in examples}
     cached: dict[str, dict] = {}
     if cache_path.exists():
         _verify_existing_manifest(cache_path, cache_manifest)
-        for line in cache_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
+        for row in _read_cache_objects(cache_path):
             row_id = row.get("id")
             if str(row_id) not in expected_identity:
                 raise ValueError(f"cached trajectory has unexpected id: {row_id}")
@@ -263,7 +281,20 @@ def load_or_build_trajectories(*, examples: list[dict], cache_path: Path, cache_
             row_id = str(row["id"])
             if row_id in cached:
                 raise ValueError(f"duplicate generated trajectory: {row_id}")
-            cached[row_id] = {"cache_hash": cache_manifest["cache_hash"], "row_identity": expected_identity[row_id], **row}
+            forbidden_wrapper_fields = [field for field in ("cache_hash", "row_identity") if field in row]
+            if forbidden_wrapper_fields:
+                raise ValueError(
+                    f"generated trajectory {row_id} must not provide {forbidden_wrapper_fields[0]}"
+                )
+            wrapped = {
+                **row,
+                "cache_hash": cache_manifest["cache_hash"],
+                "row_identity": expected_identity[row_id],
+            }
+            cached[row_id] = revalidate_cached_trajectory(
+                wrapped, example=example_by_id[row_id],
+                expected_sibling_seeds=cache_manifest["sibling_seeds"],
+            )
     rows = [cached[example_id] for example_id in expected_ids]
     _write_cache(cache_path, rows, cache_manifest)
     return rows

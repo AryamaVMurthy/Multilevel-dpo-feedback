@@ -108,14 +108,21 @@ def _ranked_pairs(
             continue
         if _gain(best) <= _gain(rejected):
             continue
+        metadata = _pair_metadata(
+            trajectory, best, rejected, kind=kind, canonical_context=canonical_context
+        )
+        supervision = {
+            "prompt": prompt, "chosen": chosen_text, "rejected": rejected_text,
+            "metadata": metadata,
+        }
         rows.append({
             "id": f"{trajectory['id']}::{kind}::{best.get('seed')}::{rejected.get('seed')}",
             "prompt": prompt,
             "chosen": chosen_text,
             "rejected": rejected_text,
-            "metadata": _pair_metadata(
-                trajectory, best, rejected, kind=kind, canonical_context=canonical_context
-            ),
+            "metadata": metadata,
+            "canonical_hashes": {field: _hash(value) for field, value in supervision.items()},
+            "supervision_hash": _hash(supervision),
         })
     return rows
 

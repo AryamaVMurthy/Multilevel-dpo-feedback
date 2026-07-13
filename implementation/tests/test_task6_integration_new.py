@@ -58,6 +58,12 @@ def wrong_response() -> str:
 
 
 class Task6ArtifactValidationTest(unittest.TestCase):
+    def test_rejects_forged_canonical_derived_hash(self):
+        artifact = active_artifact(response=correct_response())
+        artifact["canonical_hashes"]["raw_response"] = "f" * 64
+        with self.assertRaisesRegex(TrajectoryError, "canonical_hashes"):
+            validate_active_artifact(artifact, example=example(), hints=[])
+
     def test_requires_explicit_provenance_and_recomputes_all_context_hashes(self):
         artifact = active_artifact(response=correct_response())
         validated = validate_active_artifact(artifact, example=example(), hints=[])
@@ -189,6 +195,8 @@ class Task6PreferenceContextTest(unittest.TestCase):
         }
         rows = build_response_preference_rows(trajectory)
         self.assertEqual(len(rows), 1)
+        self.assertEqual(set(rows[0]["canonical_hashes"]), {"prompt", "chosen", "rejected", "metadata"})
+        self.assertRegex(rows[0]["supervision_hash"], r"^[0-9a-f]{64}$")
         self.assertEqual(trajectory["preference_exclusion_counts"], {"identical_response_completion": 1})
         self.assertEqual(trajectory["preference_exclusions"][0]["rejected_seed"], 102)
 

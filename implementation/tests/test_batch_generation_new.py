@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +21,33 @@ def source_records(prefix: str) -> list[dict]:
 
 
 class BatchGenerationTest(unittest.TestCase):
+    def test_active_artifact_persists_hashes_for_every_canonical_derived_field(self):
+        row = {
+            "id": "hashes", "question": "What fact?", "gold_answer": "relevant fact",
+            "sources": source_records("hash"),
+        }
+        artifact = run_fixed_retrieval_pipeline(
+            [row],
+            query_generate_batch=lambda _prompts: [GeneratedText("relevant fact", False)],
+            response_generate_batch=lambda _prompts: [GeneratedText(
+                "Answer: relevant fact\nReasoning: The source contains the relevant fact [S001].\nSources: S001",
+                False,
+            )],
+            policy_hash="policy-v1",
+        )[0]
+        required = {
+            "raw_query", "raw_response", "parsed_response", "rendered_visible_response",
+            "error_code", "cited_score", "query_prompt", "response_prompt",
+            "canonical_ranked_search_results", "retrieval_context_hash", "retrieval_metrics",
+            "truncation", "private_scratchpad", "private_scratchpad_truncated",
+        }
+        self.assertEqual(set(artifact["canonical_hashes"]), required)
+        for field in required:
+            encoded = json.dumps(
+                artifact[field], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            self.assertEqual(artifact["canonical_hashes"][field], hashlib.sha256(encoded).hexdigest())
+
     def test_active_rows_validate_nonempty_canonical_sources_before_generation(self):
         base = {"id": "bad", "question": "Who?", "gold_answer": "Ada"}
         invalid_sources = (
@@ -30,6 +59,12 @@ class BatchGenerationTest(unittest.TestCase):
                 {"source_id": "S001", "original_rank": 1, "title": "Ada", "url": "https://example.test/1", "snippet": "Ada"},
                 {"source_id": "S001", "original_rank": 2, "title": "Ada 2", "url": "https://example.test/2", "snippet": "Ada"},
             ],
+            [{"source_id": "source-1", "original_rank": 1, "title": "Ada", "url": "https://example.test/1", "snippet": "Ada"}],
+            [{"source_id": "S001", "original_rank": True, "title": "Ada", "url": "https://example.test/1", "snippet": "Ada"}],
+            [{"source_id": "S001", "original_rank": 1, "title": 7, "url": "https://example.test/1", "snippet": "Ada"}],
+            [{"source_id": "S001", "original_rank": 1, "title": "Ada", "url": 7, "snippet": "Ada"}],
+            [{"source_id": "S001", "original_rank": 1, "title": "Ada", "url": "https://example.test/1", "snippet": "!!!"}],
+            [{"source_id": "S001", "original_rank": 1, "title": "Ada", "url": "https://example.test/1", "snippet": "Ada", "related_links": [7]}],
         )
         for sources in invalid_sources:
             calls = []

@@ -36,7 +36,7 @@ def _validate_identity_hash(section_name: str, section: dict) -> None:
         raise ValueError(f"active manifest {section_name} identity hash mismatch")
 
 
-def _parse_jsonl_objects(path: Path) -> list[dict]:
+def _parse_jsonl_objects(path: Path, *, require_id: bool = False) -> list[dict]:
     rows: list[dict] = []
     seen_ids: set[str] = set()
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -48,12 +48,15 @@ def _parse_jsonl_objects(path: Path) -> list[dict]:
             raise ValueError(f"artifact contains invalid JSON: {path.name}:{line_number}: {exc}") from exc
         if not isinstance(row, dict):
             raise ValueError(f"artifact JSONL row must be a JSON object: {path.name}:{line_number}")
-        row_id = row.get("id")
-        if not isinstance(row_id, str) or not row_id.strip():
+        row_id = row.get("id", row.get("example_id"))
+        if require_id and (not isinstance(row_id, str) or not row_id.strip()):
             raise ValueError(f"active prediction JSONL row requires a non-empty id: {path.name}:{line_number}")
-        if row_id in seen_ids:
+        if row_id is not None and (not isinstance(row_id, str) or not row_id.strip()):
+            raise ValueError(f"artifact JSONL row identity must be a non-empty string: {path.name}:{line_number}")
+        if row_id is not None and row_id in seen_ids:
             raise ValueError(f"artifact JSONL contains duplicate id: {row_id}")
-        seen_ids.add(row_id)
+        if row_id is not None:
+            seen_ids.add(row_id)
         rows.append(row)
     return rows
 
@@ -110,7 +113,7 @@ def _validate_active_manifest(directory: Path, manifest: dict) -> None:
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual_hash != artifact["sha256"]:
             raise ValueError(f"artifact sha256 mismatch: {artifact['path']}")
-        parsed_rows = _parse_jsonl_objects(path)
+        parsed_rows = _parse_jsonl_objects(path, require_id=True)
         row_count = len(parsed_rows)
         if row_count != artifact["rows"]:
             raise ValueError(f"artifact row count mismatch: {artifact['path']}")
@@ -129,8 +132,11 @@ def validate_artifacts(directory: Path) -> dict:
     if not isinstance(required_files, list) or not required_files or not all(isinstance(item, str) and item for item in required_files):
         raise ValueError("manifest required_files must be a nonempty list of paths")
     for required in required_files:
-        if not (directory / required).exists():
+        required_path = directory / required
+        if not required_path.exists():
             raise ValueError(f"required artifact is missing: {required}")
+        if required_path.suffix == ".jsonl":
+            _parse_jsonl_objects(required_path)
     if manifest.get("command") == "generate-searchqa":
         _validate_active_manifest(directory, manifest)
     return {"valid": True, "manifest": manifest}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import hashlib
 import json
 import re
@@ -9,7 +9,7 @@ from typing import Any
 
 from text_feedback_dpo.prompts import build_cited_response_prompt, build_search_query_prompt
 from text_feedback_dpo.responses import parse_cited_response, render_cited_response
-from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, tokenize_query
+from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, tokenize_query, validate_source_records
 from text_feedback_dpo.searchqa import SOURCE_SCHEMA_VERSION
 from text_feedback_dpo.scoring import score_cited_response
 
@@ -21,6 +21,12 @@ PROMPT_VERSION = "fixed-retrieval-cited-v1"
 RESPONSE_SCHEMA_VERSION = 1
 EVALUATOR_VERSION = "cited-response-evaluator-v1"
 MAX_QUERY_TOKENS = 16
+CANONICAL_ARTIFACT_HASH_FIELDS = (
+    "raw_query", "raw_response", "parsed_response", "rendered_visible_response",
+    "error_code", "cited_score", "query_prompt", "response_prompt",
+    "canonical_ranked_search_results", "retrieval_context_hash", "retrieval_metrics",
+    "truncation", "private_scratchpad", "private_scratchpad_truncated",
+)
 _TAG_PATTERN = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
 _TAG_FRAGMENT_PATTERN = re.compile(r"<\s*/?\s*[A-Za-z][\w:.-]*")
 _RESPONSE_LABEL_PATTERN = re.compile(r"^(?:answer|reasoning|sources|search\s+query)\s*:", re.IGNORECASE)
@@ -41,6 +47,15 @@ def _hash(value: Any, *, context: str = "structured input") -> str:
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{context} is not JSON-serializable: {exc}") from exc
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def canonical_artifact_hashes(artifact: Mapping[str, object]) -> dict[str, str]:
+    """Hash every persisted canonical artifact field used by evaluation or supervision."""
+    missing = [field for field in CANONICAL_ARTIFACT_HASH_FIELDS if field not in artifact]
+    if missing:
+        raise ValueError(f"active artifact is missing canonical hash field: {missing[0]}")
+    return {field: _hash(artifact[field], context=f"canonical artifact field {field}")
+            for field in CANONICAL_ARTIFACT_HASH_FIELDS}
 
 
 def _zero_cited_score(error_code: str, *, truncated: bool) -> dict:
@@ -130,7 +145,7 @@ def _validate_rows(rows: list[dict]) -> None:
         if not isinstance(sources, list) or not sources:
             raise ValueError(f"SearchQA row {example_id} requires a nonempty list of structured sources")
         try:
-            FixedBM25Retriever(sources, k1=FIXED_K1, b=FIXED_B)
+            validate_source_records(sources)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"SearchQA row {example_id} has invalid canonical sources: {exc}") from exc
 
@@ -372,4 +387,5 @@ def run_fixed_retrieval_pipeline(
         artifact["timings_ms"]["pipeline_wall_ms"] = pipeline_wall_ms
         if artifact["id"] not in gold_by_id:
             raise RuntimeError("internal active-search ID mismatch")
+        artifact["canonical_hashes"] = canonical_artifact_hashes(artifact)
     return results

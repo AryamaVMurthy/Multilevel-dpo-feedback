@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 from collections.abc import Mapping, Sequence
 
 from text_feedback_dpo.responses import validate_retrieved_sources
 
 EMPTY_RESPONSE_SENTINEL = "__EMPTY_RESPONSE__"
+
+
+def _implementation_hash(*objects: object, constants: Sequence[object] = ()) -> str:
+    source = "\n".join(inspect.getsource(item) for item in objects)
+    payload = json.dumps(
+        {"source": source, "constants": list(constants)},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def build_short_answer_prompt(example: dict, hints: list[str]) -> str:
@@ -136,3 +147,25 @@ The hint must be non-empty and at most 24 words.
 
 Private request:
 """ + json.dumps(request, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def prompt_builder_identity() -> dict[str, dict[str, str]]:
+    """Return implementation-bound identities for all active prompt builder mappings."""
+    return {
+        "query": {
+            "builder": "text_feedback_dpo.prompts.build_search_query_prompt",
+            "implementation_sha256": _implementation_hash(build_search_query_prompt, _question),
+        },
+        "response": {
+            "builder": "text_feedback_dpo.prompts.build_cited_response_prompt",
+            "implementation_sha256": _implementation_hash(
+                build_cited_response_prompt, _question, validate_retrieved_sources
+            ),
+        },
+        "teacher": {
+            "builder": "text_feedback_dpo.prompts.build_teacher_prompt",
+            "implementation_sha256": _implementation_hash(
+                build_teacher_prompt, constants=(EMPTY_RESPONSE_SENTINEL,)
+            ),
+        },
+    }

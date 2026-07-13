@@ -14,6 +14,7 @@ from text_feedback_dpo.scoring import normalize_answer
 
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
+_SOURCE_ID_PATTERN = re.compile(r"S\d{3}\Z")
 _CANONICAL_SOURCE_FIELDS = ("source_id", "original_rank", "title", "url", "snippet", "related_links")
 
 
@@ -30,7 +31,8 @@ def _hash_json(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _validate_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def validate_source_records(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Validate and normalize the complete dataset-owned fixed-source schema."""
     if isinstance(sources, (str, bytes)) or not isinstance(sources, (list, tuple)):
         raise TypeError("sources must be a list of source mappings")
     if not sources:
@@ -47,8 +49,8 @@ def _validate_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, An
             raise ValueError(f"source {index} is missing required fields: {', '.join(missing)}")
         source_id = source["source_id"]
         original_rank = source["original_rank"]
-        if not isinstance(source_id, str) or not source_id.strip():
-            raise ValueError(f"source {index} requires a non-empty source_id")
+        if not isinstance(source_id, str) or _SOURCE_ID_PATTERN.fullmatch(source_id.strip()) is None:
+            raise ValueError(f"source {index} requires canonical source_id S followed by three digits")
         source_id = source_id.strip()
         if source_id in source_ids:
             raise ValueError(f"source_id must be unique: {source_id}")
@@ -106,7 +108,7 @@ class FixedBM25Retriever:
 
     def __init__(self, sources: Sequence[Mapping[str, Any]], *, k1: float = 1.2, b: float = 0.75) -> None:
         _validate_parameters(k1, b)
-        self._sources = sorted(_validate_sources(sources), key=lambda source: (source["original_rank"], source["source_id"]))
+        self._sources = sorted(validate_source_records(sources), key=lambda source: (source["original_rank"], source["source_id"]))
         self.k1 = float(k1)
         self.b = float(b)
         self._tokens = [tokenize_query(source["snippet"]) for source in self._sources]

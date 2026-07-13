@@ -13,13 +13,14 @@ from text_feedback_dpo.batch_generation import (
     PROMPT_VERSION,
     RESPONSE_SCHEMA_VERSION,
     _zero_cited_score,
+    canonical_artifact_hashes,
     canonical_cited_score,
     parse_search_query,
 )
 from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
 from text_feedback_dpo.prompts import build_cited_response_prompt, build_search_query_prompt, build_teacher_prompt
 from text_feedback_dpo.responses import CitedResponseFormatError, parse_cited_response, render_cited_response
-from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics
+from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics, validate_source_records
 from text_feedback_dpo.searchqa import SOURCE_SCHEMA_VERSION
 
 
@@ -57,6 +58,12 @@ def _structured_hash(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _seal_supervision(record: dict[str, object]) -> dict[str, object]:
+    payload = {key: value for key, value in record.items() if key != "supervision_hash"}
+    record["supervision_hash"] = _structured_hash(payload)
+    return record
+
+
 def retrieval_context_hash(ranked_results: Sequence[Mapping[str, object]]) -> str:
     return _structured_hash(list(ranked_results))
 
@@ -87,6 +94,7 @@ def validate_active_artifact(
         "response_prompt", "response_prompt_hash", "retrieval_context_hash",
         "canonical_ranked_search_results", "provenance", "no_hint", "evaluator_version",
         "parsed_response", "rendered_visible_response", "error_code",
+        "canonical_hashes",
     )
     missing = [key for key in required if key not in artifact]
     if missing:
@@ -117,10 +125,9 @@ def validate_active_artifact(
         if not isinstance(artifact[key], str) or not artifact[key].strip():
             raise TrajectoryError(f"active artifact {example_id} requires non-empty {key}")
     sources = example.get("sources")
-    if not isinstance(sources, list) or not sources:
-        raise TrajectoryError(f"active artifact {example_id} requires nonempty canonical source records")
     try:
-        retriever = FixedBM25Retriever(sources, k1=FIXED_K1, b=FIXED_B)
+        validated_sources = validate_source_records(sources)
+        retriever = FixedBM25Retriever(validated_sources, k1=FIXED_K1, b=FIXED_B)
     except (TypeError, ValueError) as exc:
         raise TrajectoryError(f"active artifact {example_id} has invalid canonical source records: {exc}") from exc
 
@@ -167,6 +174,9 @@ def validate_active_artifact(
         _require_exact_field(artifact, "parsed_response", None, example_id=example_id)
         _require_exact_field(artifact, "rendered_visible_response", None, example_id=example_id)
         _require_exact_field(artifact, "error_code", expected_error, example_id=example_id)
+        _require_exact_field(
+            artifact, "canonical_hashes", canonical_artifact_hashes(artifact), example_id=example_id
+        )
         return dict(artifact)
 
     expected_retrieval_metrics = retrieval_metrics(expected_ranked, example["gold_answer"])
@@ -197,6 +207,9 @@ def validate_active_artifact(
     else:
         _require_exact_field(artifact, "parsed_response", None, example_id=example_id)
         _require_exact_field(artifact, "rendered_visible_response", None, example_id=example_id)
+    _require_exact_field(
+        artifact, "canonical_hashes", canonical_artifact_hashes(artifact), example_id=example_id
+    )
     normalized = dict(artifact)
     return normalized
 
@@ -277,6 +290,10 @@ def revalidate_cached_trajectory(
         for field, expected in expected_attempt_fields.items():
             if attempt.get(field) != expected:
                 raise TrajectoryError(f"cached trajectory {example_id} attempt {expected_index} {field} mismatch")
+        if attempt.get("supervision_hash") != _structured_hash(expected_attempt_fields):
+            raise TrajectoryError(
+                f"cached trajectory {example_id} attempt {expected_index} supervision_hash mismatch"
+            )
         validated_attempts.append({**dict(attempt), "artifact": artifact})
         if success and first_success is None:
             first_success = artifact
@@ -284,11 +301,35 @@ def revalidate_cached_trajectory(
         if intervention is not None:
             if success:
                 raise TrajectoryError(f"cached trajectory {example_id} has an intervention after success")
+            raw_teacher_response = intervention.get("raw_teacher_response")
+            if not isinstance(raw_teacher_response, str):
+                raise TrajectoryError(
+                    f"cached trajectory {example_id} intervention requires raw teacher feedback"
+                )
+            try:
+                parsed_feedback = parse_feedback(
+                    raw_teacher_response, gold_answer=str(example.get("gold_answer", ""))
+                )
+            except FeedbackFormatError as exc:
+                raise TrajectoryError(
+                    f"cached trajectory {example_id} intervention teacher feedback is invalid: {exc}"
+                ) from exc
+            if parsed_feedback.hint != intervention.get("hint"):
+                raise TrajectoryError(f"cached trajectory {example_id} intervention hint mismatch")
+            expected_teacher_prompt = build_teacher_prompt(
+                dict(example), str(artifact.get("raw_response") or ""), expected_interventions,
+                raw_query=str(artifact["raw_query"]),
+                retrieved_sources=artifact["ranked_search_results"], diagnostics=diagnostics,
+                repair_region=diagnostics["responsible_region"],
+                escalation_level=len(expected_interventions) + 1,
+            )
             expected_interventions.append(_intervention_metadata(
                 attempt_index=expected_index,
-                feedback_hint=str(intervention["hint"]),
+                feedback_hint=parsed_feedback.hint,
                 level=len(expected_interventions) + 1,
                 diagnostics=diagnostics,
+                teacher_prompt=expected_teacher_prompt,
+                raw_teacher_response=raw_teacher_response,
             ))
             hints.append(str(intervention["hint"]))
     if set(intervention_by_attempt) - set(range(len(attempts))):
@@ -345,6 +386,7 @@ def revalidate_cached_trajectory(
             expected_intervention["future_sibling_gain_denominator"] = denominator
             expected_intervention["efficiency_numerator"] = gain
             expected_intervention["efficiency_score"] = gain / expected_intervention["efficiency_denominator"]
+            _seal_supervision(expected_intervention)
     if trajectory.get("sibling_verification") != expected_verification:
         raise TrajectoryError(f"cached trajectory {example_id} sibling_verification mismatch")
     if interventions != expected_interventions:
@@ -370,15 +412,27 @@ def revalidate_cached_trajectory(
     return normalized
 
 
-def _intervention_metadata(*, attempt_index: int, feedback_hint: str, level: int, diagnostics: Mapping[str, object]) -> dict[str, object]:
+def _intervention_metadata(
+    *, attempt_index: int, feedback_hint: str, level: int, diagnostics: Mapping[str, object],
+    teacher_prompt: str, raw_teacher_response: str,
+) -> dict[str, object]:
     region = diagnostics.get("responsible_region")
     cost = repair_scope_cost(region if isinstance(region, str) else None)
     hint_tokens = len(feedback_hint.split())
     if hint_tokens <= 0:
         raise TrajectoryError("teacher hint token count must be positive")
-    return {
+    if not isinstance(teacher_prompt, str) or not teacher_prompt:
+        raise TrajectoryError("teacher prompt must be persisted as non-empty text")
+    if not isinstance(raw_teacher_response, str) or not raw_teacher_response:
+        raise TrajectoryError("raw teacher response must be persisted as non-empty text")
+    return _seal_supervision({
         "attempt_index": attempt_index,
         "hint": feedback_hint,
+        "hint_hash": _structured_hash(feedback_hint),
+        "teacher_prompt": teacher_prompt,
+        "teacher_prompt_hash": _structured_hash(teacher_prompt),
+        "raw_teacher_response": raw_teacher_response,
+        "raw_teacher_response_hash": _structured_hash(raw_teacher_response),
         "level": level,
         "escalation_level": level,
         "responsible_region": region,
@@ -391,7 +445,7 @@ def _intervention_metadata(*, attempt_index: int, feedback_hint: str, level: int
         "efficiency_denominator": hint_tokens + cost,
         "efficiency_score": None,
         "efficiency_components": {"privilege_tokens": hint_tokens, "repair_scope_cost": cost},
-    }
+    })
 
 
 def _verify_siblings(
@@ -506,6 +560,7 @@ def _finish_trajectory(
         intervention["future_sibling_gain_denominator"] = verification["future_sibling_gain_denominator"]
         intervention["efficiency_numerator"] = verification["future_sibling_gain"]
         intervention["efficiency_score"] = verification["future_sibling_gain"] / intervention["efficiency_denominator"]
+        _seal_supervision(intervention)
     result["ranked_interventions"] = rank_interventions(interventions)
     return result
 
@@ -521,8 +576,10 @@ def collect_trajectory(
 ) -> dict:
     if not isinstance(max_interventions, int) or max_interventions < 0:
         raise ValueError("max_interventions must be a nonnegative integer")
-    if not isinstance(example.get("sources"), list) or not example["sources"]:
-        raise TrajectoryError("active trajectory requires complete SearchQA source records")
+    try:
+        validate_source_records(example.get("sources"))
+    except (TypeError, ValueError) as exc:
+        raise TrajectoryError(f"active trajectory has invalid canonical source records: {exc}") from exc
     query_prompt = build_search_query_prompt(example, [])
     hints: list[str] = []
     attempts: list[dict[str, Any]] = []
@@ -533,7 +590,7 @@ def collect_trajectory(
         artifact = validate_active_artifact(raw_artifact, example=example, hints=hints)
         diagnostics = diagnose_attempt(artifact)
         correct = _success(artifact)
-        attempts.append({
+        attempt = {
             "attempt_index": attempt_index,
             "artifact": artifact,
             "response": artifact.get("raw_response"),
@@ -543,7 +600,11 @@ def collect_trajectory(
             "responsible_region": diagnostics["responsible_region"],
             "no_hint": not hints,
             "provenance": "student",
+        }
+        attempt["supervision_hash"] = _structured_hash({
+            key: value for key, value in attempt.items() if key not in {"attempt_index", "artifact"}
         })
+        attempts.append(attempt)
         if correct:
             return _finish_trajectory(
                 example=example, query_prompt=query_prompt, attempts=attempts,
@@ -553,18 +614,17 @@ def collect_trajectory(
         if attempt_index == max_interventions:
             break
         try:
-            raw_feedback = teacher_generate(
-                build_teacher_prompt(
-                    example,
-                    str(artifact.get("raw_response") or ""),
-                    interventions,
-                    raw_query=artifact["raw_query"],
-                    retrieved_sources=artifact["ranked_search_results"],
-                    diagnostics=diagnostics,
-                    repair_region=diagnostics["responsible_region"],
-                    escalation_level=len(interventions) + 1,
-                )
+            teacher_prompt = build_teacher_prompt(
+                example,
+                str(artifact.get("raw_response") or ""),
+                interventions,
+                raw_query=artifact["raw_query"],
+                retrieved_sources=artifact["ranked_search_results"],
+                diagnostics=diagnostics,
+                repair_region=diagnostics["responsible_region"],
+                escalation_level=len(interventions) + 1,
             )
+            raw_feedback = teacher_generate(teacher_prompt)
             feedback = parse_feedback(raw_feedback, gold_answer=example["gold_answer"])
         except FeedbackFormatError as exc:
             raise TrajectoryError(
@@ -575,6 +635,8 @@ def collect_trajectory(
             feedback_hint=feedback.hint,
             level=len(interventions) + 1,
             diagnostics=diagnostics,
+            teacher_prompt=teacher_prompt,
+            raw_teacher_response=raw_feedback,
         )
         interventions.append(intervention)
         hints.append(feedback.hint)

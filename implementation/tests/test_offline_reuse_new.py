@@ -1,6 +1,7 @@
 import json
 import hashlib
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -8,6 +9,7 @@ from text_feedback_dpo.offline import build_cache_manifest, load_or_build_rollou
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.runtime import GeneratedText
 from text_feedback_dpo.feedback import diagnose_attempt
+from text_feedback_dpo.prompts import prompt_builder_identity
 
 
 def _hash(value):
@@ -27,7 +29,9 @@ def manifest(**overrides):
         "dataset_revision": "data-rev",
         "dataset_hash": "a" * 64,
         "prompt_version": "fixed-retrieval-cited-v1",
-        "prompt_hash": _hash({"identity": "fixed-retrieval-cited-v1"}),
+        "prompt_hash": _hash({
+            "identity": "fixed-retrieval-cited-v1", "builders": prompt_builder_identity(),
+        }),
         "student_thinking_mode": "direct",
         "teacher_thinking": True,
         "decoding": {"answer_max_new_tokens": 32, "temperature": 0.7, "top_p": 0.9},
@@ -66,12 +70,16 @@ def active_trajectory():
         policy_hash="b" * 64,
     )[0]
     diagnostics = diagnose_attempt(artifact)
+    attempt_supervision = {
+        "response": artifact["raw_response"], "correct": True,
+        "score": artifact["cited_score"], "diagnostics": diagnostics,
+        "responsible_region": None, "no_hint": True, "provenance": "student",
+    }
     return {
         "id": "1", "prompt": artifact["query_prompt"], "query_prompt": artifact["query_prompt"],
         "query_prompt_hash": artifact["query_prompt_hash"], "example_identity": _hash(example),
-        "attempts": [{"attempt_index": 0, "artifact": artifact, "response": artifact["raw_response"], "correct": True,
-                      "score": artifact["cited_score"], "diagnostics": diagnostics,
-                      "responsible_region": None, "no_hint": True, "provenance": "student"}],
+        "attempts": [{"attempt_index": 0, "artifact": artifact, **attempt_supervision,
+                      "supervision_hash": _hash(attempt_supervision)}],
         "interventions": [], "ranked_interventions": [], "chosen": artifact, "resolved": True,
         "no_hint_siblings": [], "sibling_verification": {"status": "not_required", "eligible": True},
         "training_eligible": True, "sft_eligible": True, "preference_eligible": False,
@@ -168,6 +176,75 @@ class OfflineReuseTest(unittest.TestCase):
                         generate=lambda _missing: self.fail("tampered cache must not regenerate silently"),
                     )
 
+    def test_new_trajectory_is_fully_revalidated_before_cache_write(self):
+        with TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "trajectories.jsonl"
+            generated = active_trajectory()
+            generated["query_prompt_hash"] = "f" * 64
+
+            with self.assertRaisesRegex(ValueError, "query_prompt_hash"):
+                load_or_build_trajectories(
+                    examples=[active_example()], cache_path=cache, cache_manifest=manifest(),
+                    generate=lambda _missing: [generated],
+                )
+            self.assertFalse(cache.exists())
+
+    def test_new_trajectory_cannot_override_cache_wrapper_identity(self):
+        for field in ("cache_hash", "row_identity"):
+            with self.subTest(field=field), TemporaryDirectory() as tmp:
+                cache = Path(tmp) / "trajectories.jsonl"
+                generated = active_trajectory()
+                generated[field] = "forged"
+                with self.assertRaisesRegex(ValueError, field):
+                    load_or_build_trajectories(
+                        examples=[active_example()], cache_path=cache, cache_manifest=manifest(),
+                        generate=lambda _missing: [generated],
+                    )
+                self.assertFalse(cache.exists())
+
+    def test_trajectory_cache_validates_sources_before_generator(self):
+        with TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "trajectories.jsonl"
+            malformed = active_example()
+            malformed["sources"][0]["original_rank"] = True
+            calls = []
+            with self.assertRaisesRegex(ValueError, "original_rank"):
+                load_or_build_trajectories(
+                    examples=[malformed], cache_path=cache, cache_manifest=manifest(),
+                    generate=lambda missing: calls.append(missing),
+                )
+            self.assertEqual(calls, [])
+            self.assertFalse(cache.exists())
+
+    def test_cache_loaders_reject_blank_jsonl_records(self):
+        with TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "trajectories.jsonl"
+            identity = manifest()
+            load_or_build_trajectories(
+                examples=[active_example()], cache_path=cache, cache_manifest=identity,
+                generate=lambda _missing: [active_trajectory()],
+            )
+            cache.write_text(cache.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "blank"):
+                load_or_build_trajectories(
+                    examples=[active_example()], cache_path=cache, cache_manifest=identity,
+                    generate=lambda _missing: self.fail("blank cache must not regenerate"),
+                )
+
+        with TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "rollouts.jsonl"
+            identity = manifest()
+            load_or_build_rollouts(
+                examples=[{"id": "1"}], cache_path=cache, cache_manifest=identity,
+                generate=lambda _example: {"response": "x"},
+            )
+            cache.write_text(cache.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "blank"):
+                load_or_build_rollouts(
+                    examples=[{"id": "1"}], cache_path=cache, cache_manifest=identity,
+                    generate=lambda _example: self.fail("blank cache must not regenerate"),
+                )
+
     def test_cache_manifest_rejects_invalid_teacher_seed_and_hash_semantics(self):
         for overrides, message in (
             ({"teacher_model": "Qwen/Qwen3-14B"}, "teacher"),
@@ -201,6 +278,19 @@ class OfflineReuseTest(unittest.TestCase):
         for change in changes:
             with self.subTest(change=change):
                 self.assertNotEqual(manifest(**change)["cache_hash"], baseline)
+
+    def test_prompt_builder_implementation_identity_invalidates_cache_without_version_bump(self):
+        baseline = manifest()
+        changed_builders = {**prompt_builder_identity(), "query": {"implementation_sha256": "f" * 64}}
+        with patch(
+            "text_feedback_dpo.prompts.prompt_builder_identity", return_value=changed_builders
+        ):
+            changed = manifest(prompt_hash=_hash({
+                "identity": "fixed-retrieval-cited-v1", "builders": changed_builders,
+            }))
+        self.assertEqual(changed["prompt_version"], baseline["prompt_version"])
+        self.assertNotEqual(changed["prompt_builders"], baseline["prompt_builders"])
+        self.assertNotEqual(changed["cache_hash"], baseline["cache_hash"])
 
 
 if __name__ == "__main__":

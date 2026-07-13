@@ -6,8 +6,10 @@ from typing import Any
 from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
 from text_feedback_dpo.preferences import build_preference_rows
 from text_feedback_dpo.prompts import build_search_query_prompt, build_teacher_prompt
+from text_feedback_dpo.retrieval import validate_source_records
 from text_feedback_dpo.trajectories import (
     TrajectoryError,
+    _seal_supervision,
     _structured_hash,
     _intervention_metadata,
     _success,
@@ -25,8 +27,10 @@ def _validate_ids(examples: Sequence[Mapping[str, object]]) -> list[str]:
             raise ValueError("each collection example requires a non-empty string id")
         if example_id in seen:
             raise ValueError(f"duplicate collection example id: {example_id}")
-        if not isinstance(example.get("sources"), list) or not example["sources"]:
-            raise ValueError(f"collection example {example_id} requires complete source records")
+        try:
+            validate_source_records(example.get("sources"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"collection example {example_id} has invalid canonical sources: {exc}") from exc
         seen.add(example_id)
         ids.append(example_id)
     return ids
@@ -99,6 +103,7 @@ def _batch_siblings(
             intervention["future_sibling_gain_denominator"] = denominator
             intervention["efficiency_numerator"] = gain
             intervention["efficiency_score"] = gain / intervention["efficiency_denominator"]
+            _seal_supervision(intervention)
         state["ranked_interventions"] = rank_interventions(state["interventions"])
 
 
@@ -151,12 +156,16 @@ def collect_dataset_batchwise(
             artifact = validate_active_artifact(output, example=state["example"], hints=state["hints"])
             diagnostics = diagnose_attempt(artifact)
             correct = _success(artifact)
-            state["attempts"].append({
+            attempt = {
                 "attempt_index": attempt_index, "artifact": artifact, "response": artifact.get("raw_response"),
                 "correct": correct, "score": dict(artifact["cited_score"]), "diagnostics": diagnostics,
                 "responsible_region": diagnostics["responsible_region"], "no_hint": not state["hints"],
                 "provenance": "student",
+            }
+            attempt["supervision_hash"] = _structured_hash({
+                key: value for key, value in attempt.items() if key not in {"attempt_index", "artifact"}
             })
+            state["attempts"].append(attempt)
             if correct:
                 state["resolved"] = True
                 state["chosen"] = artifact
@@ -173,7 +182,9 @@ def collect_dataset_batchwise(
         feedback_rows = teacher_generate_batch(teacher_prompts, max_new_tokens=512, temperature=0.0, top_p=1.0)
         if not isinstance(feedback_rows, list) or len(feedback_rows) != len(failed_ids):
             raise ValueError(f"teacher batch cardinality mismatch at attempt {attempt_index}")
-        for example_id, raw_feedback in zip(failed_ids, feedback_rows, strict=True):
+        for example_id, teacher_prompt, raw_feedback in zip(
+            failed_ids, teacher_prompts, feedback_rows, strict=True
+        ):
             if not isinstance(raw_feedback, str):
                 raise ValueError(f"teacher output for {example_id} must be strict JSON text")
             state = states[example_id]
@@ -186,6 +197,7 @@ def collect_dataset_batchwise(
             state["interventions"].append(_intervention_metadata(
                 attempt_index=attempt_index, feedback_hint=feedback.hint,
                 level=len(state["interventions"]) + 1, diagnostics=diagnostic,
+                teacher_prompt=teacher_prompt, raw_teacher_response=raw_feedback,
             ))
             state["hints"].append(feedback.hint)
         active = failed_ids

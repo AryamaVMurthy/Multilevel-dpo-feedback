@@ -20,10 +20,15 @@ class FeedbackContractTest(unittest.TestCase):
             parse_feedback('{"hint":"Focus specifically on Lovelace."}', gold_answer="Ada Lovelace")
         with self.assertRaisesRegex(FeedbackFormatError, "meaningful"):
             parse_feedback('{"hint":"Recheck the entity."}', gold_answer="!!!")
-        self.assertEqual(
-            parse_feedback('{"hint":"Check who is directly associated."}', gold_answer="The Who").hint,
-            "Check who is directly associated.",
-        )
+        for hint, gold in (
+            ('{"hint":"Check WHO is directly associated."}', "The Who"),
+            ('{"hint":"Focus on ADA, regardless of punctuation."}', "Ada-Lovelace"),
+            ('{"hint":"Choose a narrower source."}', "A"),
+        ):
+            with self.subTest(hint=hint, gold=gold), self.assertRaisesRegex(
+                FeedbackFormatError, "gold answer"
+            ):
+                parse_feedback(hint, gold_answer=gold)
 
     def test_rejects_duplicate_json_keys(self):
         with self.assertRaisesRegex(FeedbackFormatError, "duplicate JSON key: hint"):

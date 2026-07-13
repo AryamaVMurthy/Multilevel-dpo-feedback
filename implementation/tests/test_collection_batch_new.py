@@ -1,8 +1,10 @@
+import copy
 import unittest
 
 from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.collection import collect_dataset_batchwise
 from text_feedback_dpo.runtime import GeneratedText
+from text_feedback_dpo.trajectories import revalidate_cached_trajectory
 
 
 def _example():
@@ -30,12 +32,31 @@ def _artifact(*, hints=(), query="writer", correct=False):
 
 
 class CollectionBatchTest(unittest.TestCase):
+    def test_malformed_canonical_source_fails_before_any_model_call(self):
+        malformed = _example()
+        malformed["sources"][0]["source_id"] = "not-canonical"
+        student_calls = []
+        teacher_calls = []
+
+        with self.assertRaisesRegex(ValueError, "source_id"):
+            collect_dataset_batchwise(
+                examples=[malformed],
+                student_generate_batch=lambda requests, **_kwargs: student_calls.append(requests),
+                teacher_generate_batch=lambda prompts, **_kwargs: teacher_calls.append(prompts),
+                max_interventions=1,
+                sibling_generate_batch=None,
+                sibling_seeds=(101, 102),
+                student_seed=7,
+            )
+        self.assertEqual(student_calls, [])
+        self.assertEqual(teacher_calls, [])
+
     def test_collection_requires_complete_sources_before_generation(self):
         for incomplete in (
             {"id": "q1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada evidence"},
             {"id": "1", "question": "Who?", "gold_answer": "Ada"},
         ):
-            with self.subTest(incomplete=incomplete), self.assertRaisesRegex(ValueError, "complete source records"):
+            with self.subTest(incomplete=incomplete), self.assertRaisesRegex(ValueError, "invalid canonical sources"):
                 collect_dataset_batchwise(
                     examples=[incomplete], student_generate_batch=lambda _requests, **_kwargs: [],
                     teacher_generate_batch=lambda _prompts, **_kwargs: [], max_interventions=1,
@@ -83,6 +104,27 @@ class CollectionBatchTest(unittest.TestCase):
         self.assertGreater(row["interventions"][0]["efficiency_score"], 0)
         self.assertEqual(row["ranked_interventions"], row["interventions"])
         self.assertNotIn("Ada", row["interventions"][0]["hint"])
+        intervention = row["interventions"][0]
+        self.assertEqual(intervention["raw_teacher_response"], '{"hint":"Recheck the associated person."}')
+        self.assertIn("Private request:", intervention["teacher_prompt"])
+        for field in ("raw_teacher_response_hash", "teacher_prompt_hash", "hint_hash", "supervision_hash"):
+            self.assertRegex(intervention[field], r"^[0-9a-f]{64}$")
+        for attempt in row["attempts"]:
+            self.assertRegex(attempt["supervision_hash"], r"^[0-9a-f]{64}$")
+
+        forged = copy.deepcopy(row)
+        forged["interventions"][0]["raw_teacher_response"] = '{"hint":"Inspect the chronology."}'
+        with self.assertRaisesRegex(ValueError, "teacher feedback|hint"):
+            revalidate_cached_trajectory(
+                forged, example=_example(), expected_sibling_seeds=(101, 102)
+            )
+        leaked = copy.deepcopy(row)
+        leaked["interventions"][0]["raw_teacher_response"] = '{"hint":"Recheck Ada directly."}'
+        leaked["interventions"][0]["hint"] = "Recheck Ada directly."
+        with self.assertRaisesRegex(ValueError, "teacher feedback.*gold answer"):
+            revalidate_cached_trajectory(
+                leaked, example=_example(), expected_sibling_seeds=(101, 102)
+            )
 
 
 if __name__ == "__main__":

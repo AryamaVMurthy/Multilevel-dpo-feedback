@@ -155,6 +155,23 @@ class ArtifactTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, message):
                         validate_artifacts(root)
 
+    def test_collect_manifest_parses_every_required_jsonl_including_cache_artifacts(self):
+        for filename, text, message in (
+            ("trajectories.jsonl", '{"id":"1"}\n\n', "blank"),
+            ("trajectory-cache.jsonl", '{"id":"1"\n', "invalid JSON"),
+            ("trajectory-cache.jsonl", '[{"id":"1"}]\n', "JSON object"),
+        ):
+            with self.subTest(filename=filename, message=message), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                artifact = root / filename
+                artifact.write_text(text, encoding="utf-8")
+                (root / "manifest.json").write_text(json.dumps({
+                    "command": "collect", "max_length": 4096,
+                    "required_files": [filename],
+                }), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    validate_artifacts(root)
+
 
 if __name__ == "__main__":
     unittest.main()
