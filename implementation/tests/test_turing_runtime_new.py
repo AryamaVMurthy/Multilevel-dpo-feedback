@@ -135,6 +135,20 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertNotIn("#SBATCH --gres=gpu:", text)
         self.assertNotIn("|| true", text)
 
+    def test_sft_scale_preparation_is_train_hash_bound_cpu_only_and_deterministically_sharded(self):
+        text = Path("scripts/turing_prepare_sft_scale.sh").read_text(encoding="utf-8")
+        for required in (
+            "PROJECT_DIR", "EXPECTED_COMMIT", "TRAIN", "TRAIN_SHA256", "OUTPUT_ROOT",
+            "POOL_COUNT", "POOL_SEED", "SHARD_COUNT",
+        ):
+            self.assertIn(f'require_env "{required}"', text)
+        self.assertIn("select_bootstrap_pool.py", text)
+        self.assertIn("shard-jsonl", text)
+        self.assertIn("run-manifest.json", text)
+        self.assertIn("#SBATCH --cpus-per-task=2", text)
+        self.assertNotIn("#SBATCH --gres=gpu:", text)
+        self.assertNotIn("|| true", text)
+
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):
