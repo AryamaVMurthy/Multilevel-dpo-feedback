@@ -1,5 +1,7 @@
 # SearchQA Plain-Answer Thinking Implementation Plan
 
+> **Superseded:** Do not execute remaining tasks from this answer-only plan. The active executable plan is [2026-07-13-fixed-retrieval-cited-reasoning.md](2026-07-13-fixed-retrieval-cited-reasoning.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace the invalid XML student contract with plain short answers, add explicit teacher and student thinking modes, and execute a reproducible full-finetuning SearchQA comparison through final test reporting.

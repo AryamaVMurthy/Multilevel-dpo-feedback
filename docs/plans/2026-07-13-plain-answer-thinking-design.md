@@ -1,5 +1,7 @@
 # SearchQA Plain-Answer Thinking Design
 
+> **Superseded:** This answer-only design is retained solely to interpret the archival short-answer baseline. The active design is [2026-07-13-fixed-retrieval-cited-reasoning-design.md](2026-07-13-fixed-retrieval-cited-reasoning-design.md). Do not launch new training from this document.
+
 ## Objective
 
 Train `Qwen/Qwen3-4B-Base` with full-parameter SFT and minimal-intervention DPO on SearchQA, while keeping every externally scored student response as a plain short answer. Compare the primary method against raw-base, SFT, GRPO, and DAPO baselines under the same teacher-free evaluator.
