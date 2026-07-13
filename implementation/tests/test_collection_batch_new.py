@@ -19,7 +19,7 @@ class CollectionBatchTest(unittest.TestCase):
 
         def teacher(prompts, **_kwargs):
             self.assertIn("__EMPTY_RESPONSE__", prompts[0])
-            return ["<feedback><error_span>__EMPTY_RESPONSE__</error_span><hint>Provide the short answer rather than no answer.</hint><scope>verification</scope></feedback>"]
+            return ['{"hint":"Provide the short answer rather than no answer."}']
 
         rows = collect_dataset_batchwise(
             examples=examples,
@@ -28,8 +28,8 @@ class CollectionBatchTest(unittest.TestCase):
             max_interventions=1,
         )
         self.assertTrue(rows[0]["resolved"])
-        self.assertEqual(rows[0]["interventions"][0]["error_span"], "__EMPTY_RESPONSE__")
-        self.assertEqual(rows[0]["preference_rows"][0]["rejected"], "__EMPTY_RESPONSE__")
+        self.assertEqual(rows[0]["interventions"][0]["level"], 1)
+        self.assertEqual(rows[0]["preference_rows"], [])
 
     def test_collection_batches_each_attempt_and_preserves_first_correct(self):
         student_calls = []
@@ -46,7 +46,7 @@ class CollectionBatchTest(unittest.TestCase):
 
         def teacher(prompts, **_kwargs):
             teacher_calls.append(len(prompts))
-            return ["<feedback><error_span>Wrong</error_span><hint>Recheck the entity.</hint><scope>entity</scope></feedback>"]
+            return ['{"hint":"Recheck the entity."}']
 
         rows = collect_dataset_batchwise(
             examples=[

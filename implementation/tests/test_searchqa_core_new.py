@@ -42,7 +42,7 @@ class SearchQACoreContractTest(unittest.TestCase):
             return next(outputs)
 
         def teacher(_request):
-            return "<feedback><error_span>Grace Hopper</error_span><hint>Recheck the person associated with the algorithm.</hint><scope>entity</scope></feedback>"
+            return '{"hint":"Recheck the person associated with the algorithm."}'
 
         trajectory = collect_trajectory(
             example={
@@ -60,6 +60,7 @@ class SearchQACoreContractTest(unittest.TestCase):
         self.assertEqual(trajectory["chosen"], "Ada Lovelace")
         self.assertEqual(len(trajectory["interventions"]), 1)
         self.assertNotIn("Ada Lovelace", trajectory["interventions"][0]["hint"])
+        self.assertEqual(trajectory["interventions"][0]["level"], 1)
 
     def test_preference_builder_excludes_hints_from_prompt_and_keeps_all_failures(self):
         trajectory = {

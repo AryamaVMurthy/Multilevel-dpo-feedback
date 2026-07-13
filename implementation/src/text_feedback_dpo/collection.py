@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from text_feedback_dpo.formatting import XMLFormatError, parse_feedback
+from text_feedback_dpo.feedback import FeedbackFormatError, parse_feedback
 from text_feedback_dpo.preferences import build_preference_rows
-from text_feedback_dpo.prompts import EMPTY_RESPONSE_SENTINEL, build_student_prompt, build_teacher_prompt
+from text_feedback_dpo.prompts import build_student_prompt, build_teacher_prompt
 from text_feedback_dpo.scoring import score_searchqa
 
 
@@ -38,18 +38,12 @@ def collect_dataset_batchwise(*, examples: list[dict], student_generate_batch: C
             raise ValueError(f"teacher batch cardinality mismatch at attempt {attempt_index}")
         for example_id, raw_feedback in zip(failed_ids, feedback_rows, strict=True):
             state = states[example_id]
-            failed_response = state["attempts"][-1]["response"]
             try:
                 feedback = parse_feedback(raw_feedback, gold_answer=state["example"]["gold_answer"])
-            except XMLFormatError as exc:
+            except FeedbackFormatError as exc:
                 raise ValueError(f"invalid teacher feedback for {example_id}: {exc}") from exc
-            if failed_response:
-                error_span_valid = feedback.error_span in failed_response
-            else:
-                error_span_valid = feedback.error_span == EMPTY_RESPONSE_SENTINEL
-            if not error_span_valid:
-                raise ValueError(f"teacher error_span absent from failed response for {example_id}")
-            state["interventions"].append({"attempt_index": attempt_index, "error_span": feedback.error_span, "hint": feedback.hint, "scope": feedback.scope})
+            level = len(state["interventions"]) + 1
+            state["interventions"].append({"attempt_index": attempt_index, "hint": feedback.hint, "level": level})
             state["hints"].append(feedback.hint)
         active = [example_id for example_id in failed_ids]
     rows = []
