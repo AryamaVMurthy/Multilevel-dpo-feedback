@@ -14,6 +14,7 @@ def build_student_prompt(example: dict, hints: list[str]) -> str:
         "Use the evidence to answer the question.",
         "Think through the evidence carefully, then return only the short answer in plain text only with no explanation.",
         "The entire answer must be at most 8 words.",
+        "Return a noun phrase, not a sentence. Never restate the question or clue; if uncertain, give your best short guess.",
         "Do not use XML, JSON, tags, code fences, labels, or evidence quotations.",
         "",
         "Evidence:",

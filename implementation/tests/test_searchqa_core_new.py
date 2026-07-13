@@ -117,6 +117,8 @@ class SearchQACoreContractTest(unittest.TestCase):
         self.assertIn("plain text only", prompt)
         self.assertIn("Do not use XML", prompt)
         self.assertIn("at most 8 words", prompt)
+        self.assertIn("noun phrase", prompt)
+        self.assertIn("Never restate", prompt)
         self.assertNotIn("<response>", prompt)
         self.assertNotIn("<student_task>", prompt)
 

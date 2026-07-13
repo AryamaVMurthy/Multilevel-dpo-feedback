@@ -82,6 +82,7 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertIn("The evidence points", calls[1][0][0])
         self.assertIn("Do not use XML", calls[1][0][0])
         self.assertIn("at most 8 words", calls[1][0][0])
+        self.assertIn("best short guess", calls[1][0][0])
         self.assertEqual(results[0].response, "Ada Lovelace")
         self.assertEqual(results[0].scratchpad, "The evidence points to the algorithm's author.")
         self.assertNotIn("evidence points", results[0].response)

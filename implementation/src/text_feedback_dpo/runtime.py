@@ -193,7 +193,7 @@ def generate_student_batch(
         raise RuntimeErrorExplicit("student scratchpad batch cardinality mismatch")
     scratchpads = [record.text for record in scratchpad_records]
     answer_prompts = [
-        f"{prompt}\n\nPrivate scratchpad (do not repeat or imitate its formatting):\n{scratchpad}\n\nReturn only the short answer in plain text with no explanation, using at most 8 words. Do not use XML, JSON, tags, code fences, or labels.\nAnswer:"
+        f"{prompt}\n\nPrivate scratchpad (do not repeat or imitate its formatting):\n{scratchpad}\n\nReturn only a noun-phrase answer in plain text with no explanation, using at most 8 words. Never restate the clue; if uncertain, give the best short guess. Do not use XML, JSON, tags, code fences, or labels.\nAnswer:"
         for prompt, scratchpad in zip(prompts, scratchpads, strict=True)
     ]
     response_records = generate(
