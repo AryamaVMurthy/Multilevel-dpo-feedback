@@ -50,6 +50,10 @@ class TuringOptimizationProbeTest(unittest.TestCase):
         self.assertIn("optimization-decision.json", text)
         self.assertIn("set -euo pipefail", text)
 
+    def test_decoder_only_generation_probe_uses_left_padding(self):
+        text = Path("scripts/turing_probe_runner.py").read_text(encoding="utf-8")
+        self.assertIn("tokenizer.padding_side = \"left\"", text)
+
     def test_probe_includes_liger_rejection_and_flash_padding_free_packing(self):
         text = self.probe_source()
         self.assertIn("liger", text.lower())

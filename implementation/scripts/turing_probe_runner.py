@@ -999,6 +999,8 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.model_revision)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
+        if tokenizer.padding_side != "left":
+            tokenizer.padding_side = "left"
         model = AutoModelForCausalLM.from_pretrained(
             args.model,
             revision=args.model_revision,
