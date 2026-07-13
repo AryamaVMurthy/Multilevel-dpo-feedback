@@ -4,8 +4,10 @@ import hashlib
 import json
 import math
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from numbers import Real
 from typing import Any
 
 from text_feedback_dpo.scoring import normalize_answer
@@ -19,7 +21,8 @@ def tokenize_query(text: str) -> tuple[str, ...]:
     """Tokenize retrieval text deterministically by case-folding and splitting punctuation."""
     if not isinstance(text, str):
         raise TypeError("retrieval text must be a string")
-    return tuple(_TOKEN_PATTERN.findall(text.casefold()))
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return tuple(_TOKEN_PATTERN.findall(normalized))
 
 
 def _hash_json(value: Any) -> str:
@@ -35,6 +38,7 @@ def _validate_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, An
 
     normalized: list[dict[str, Any]] = []
     source_ids: set[str] = set()
+    original_ranks: set[int] = set()
     for index, source in enumerate(sources, start=1):
         if not isinstance(source, Mapping):
             raise TypeError(f"source {index} must be a mapping")
@@ -50,6 +54,8 @@ def _validate_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, An
             raise ValueError(f"source_id must be unique: {source_id}")
         if isinstance(original_rank, bool) or not isinstance(original_rank, int) or original_rank < 1:
             raise ValueError(f"source {index} requires a positive integer original_rank")
+        if original_rank in original_ranks:
+            raise ValueError(f"original_rank must be unique: {original_rank}")
         for field in ("title", "url", "snippet"):
             value = source[field]
             if not isinstance(value, str) or not value.strip():
@@ -67,11 +73,13 @@ def _validate_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, An
             raise ValueError(f"source {index} snippet must contain at least one token")
         normalized.append(source_copy)
         source_ids.add(source_id)
+        original_ranks.add(original_rank)
     return normalized
 
 
 def _canonical_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    return [{field: source.get(field) for field in _CANONICAL_SOURCE_FIELDS} for source in sources]
+    ordered = sorted(sources, key=lambda source: (source["original_rank"], source["source_id"]))
+    return [{field: source.get(field) for field in _CANONICAL_SOURCE_FIELDS} for source in ordered]
 
 
 def _validate_top_k(top_k: int, source_count: int) -> None:
@@ -93,7 +101,7 @@ class FixedBM25Retriever:
 
     def __init__(self, sources: Sequence[Mapping[str, Any]], *, k1: float = 1.2, b: float = 0.75) -> None:
         _validate_parameters(k1, b)
-        self._sources = _validate_sources(sources)
+        self._sources = sorted(_validate_sources(sources), key=lambda source: (source["original_rank"], source["source_id"]))
         self.k1 = float(k1)
         self.b = float(b)
         self._tokens = [tokenize_query(source["snippet"]) for source in self._sources]
@@ -164,6 +172,59 @@ def _contains_answer(result: Mapping[str, Any], normalized_gold: str) -> bool:
     return any(source_tokens[index : index + width] == answer_tokens for index in range(len(source_tokens) - width + 1))
 
 
+def _validate_ranked_results(ranked_results: Sequence[Mapping[str, Any]]) -> None:
+    source_ids: set[str] = set()
+    original_ranks: set[int] = set()
+    expected_query_hash: str | None = None
+    expected_corpus_hash: str | None = None
+    required_fields = ("retrieval_rank", "source_id", "original_rank", "bm25_score", "query_hash", "corpus_hash", "title", "snippet")
+
+    for position, result in enumerate(ranked_results, start=1):
+        missing = [field for field in required_fields if field not in result]
+        if missing:
+            raise ValueError(f"ranked result {position} is missing required field: {missing[0]}")
+
+        retrieval_rank = result["retrieval_rank"]
+        if isinstance(retrieval_rank, bool) or not isinstance(retrieval_rank, int) or retrieval_rank != position:
+            raise ValueError(f"ranked result {position} retrieval_rank must equal its list position")
+
+        source_id = result["source_id"]
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValueError(f"ranked result {position} requires a non-empty source_id")
+        normalized_source_id = source_id.strip()
+        if normalized_source_id in source_ids:
+            raise ValueError(f"ranked result source_id must be unique: {normalized_source_id}")
+        source_ids.add(normalized_source_id)
+
+        original_rank = result["original_rank"]
+        if isinstance(original_rank, bool) or not isinstance(original_rank, int) or original_rank <= 0:
+            raise ValueError(f"ranked result {position} requires a positive integer original_rank")
+        if original_rank in original_ranks:
+            raise ValueError(f"ranked result original_rank must be unique: {original_rank}")
+        original_ranks.add(original_rank)
+
+        bm25_score = result["bm25_score"]
+        if isinstance(bm25_score, bool) or not isinstance(bm25_score, Real) or not math.isfinite(bm25_score) or bm25_score < 0:
+            raise ValueError(f"ranked result {position} bm25_score must be a finite nonnegative number")
+
+        for field in ("title", "snippet"):
+            value = result[field]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"ranked result {position} requires a non-empty {field}")
+
+        for field in ("query_hash", "corpus_hash"):
+            value = result[field]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"ranked result {position} requires a non-empty {field}")
+        if expected_query_hash is None:
+            expected_query_hash = result["query_hash"]
+            expected_corpus_hash = result["corpus_hash"]
+        elif result["query_hash"] != expected_query_hash:
+            raise ValueError(f"ranked result {position} query_hash does not match prior rows")
+        elif result["corpus_hash"] != expected_corpus_hash:
+            raise ValueError(f"ranked result {position} corpus_hash does not match prior rows")
+
+
 def retrieval_metrics(
     ranked_results: Sequence[Mapping[str, Any]],
     gold_answer: str,
@@ -192,6 +253,7 @@ def retrieval_metrics(
     for index, result in enumerate(ranked_results, start=1):
         if not isinstance(result, Mapping):
             raise TypeError(f"ranked result {index} must be a mapping")
+    _validate_ranked_results(ranked_results)
     answer_bearing_ranks = [index for index, result in enumerate(ranked_results, start=1) if _contains_answer(result, normalized_gold)]
     first_rank = answer_bearing_ranks[0] if answer_bearing_ranks else None
     metrics: dict[str, float | int | None] = {

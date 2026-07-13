@@ -67,6 +67,6 @@ def load_config(path: Path) -> dict[str, Any]:
         or not 0 <= retrieval["b"] <= 1
     ):
         raise ValueError("retrieval.b must be a finite number between zero and one")
-    if retrieval["schema_version"] != 1:
-        raise ValueError("retrieval.schema_version must be 1")
+    if isinstance(retrieval["schema_version"], bool) or not isinstance(retrieval["schema_version"], int) or retrieval["schema_version"] != 1:
+        raise ValueError("retrieval.schema_version must be integer 1")
     return data
