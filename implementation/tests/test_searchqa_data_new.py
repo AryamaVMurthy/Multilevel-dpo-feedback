@@ -169,6 +169,32 @@ class SearchQADataTest(unittest.TestCase):
             "drop_reasons": {"blank_snippet": 1, "missing_title": 1, "missing_url": 1},
         })
 
+    def test_materialize_row_filters_nonempty_tokenless_snippets_for_bm25(self):
+        row = materialize_row(
+            {
+                "question": "Who?",
+                "answer": "Ada",
+                "search_results": {
+                    "snippets": ["!!!", "Ada evidence", "—"],
+                    "titles": ["Punctuation one", "Ada title", "Punctuation two"],
+                    "urls": [
+                        "https://example.test/one",
+                        "https://example.test/ada",
+                        "https://example.test/two",
+                    ],
+                },
+            },
+            split="validation",
+            index=0,
+        )
+        self.assertEqual([source["source_id"] for source in row["sources"]], ["S002"])
+        self.assertEqual(row["source_filter_stats"], {
+            "input_records": 3,
+            "usable_records": 1,
+            "dropped_records": 2,
+            "drop_reasons": {"no_tokens_snippet": 2},
+        })
+
     def test_materialize_row_fails_only_when_no_source_has_required_metadata(self):
         with self.assertRaisesRegex(ValueError, "no usable"):
             materialize_row(

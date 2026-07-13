@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
+from text_feedback_dpo.retrieval import tokenize_query
+
 
 SOURCE_SCHEMA = "searchqa.search_results.v1"
 SOURCE_SCHEMA_VERSION = 1
@@ -94,7 +96,7 @@ def _sources(row: dict) -> tuple[list[dict], dict]:
         raise ValueError("SearchQA row requires search_results source provenance")
     snippets, titles, urls, related_links = _source_arrays(row["search_results"])
     sources = []
-    drop_reasons = {"blank_snippet": 0, "missing_title": 0, "missing_url": 0}
+    drop_reasons = {"blank_snippet": 0, "no_tokens_snippet": 0, "missing_title": 0, "missing_url": 0}
     for original_index, (snippet_value, title_value, url_value, related_links_value) in enumerate(
         zip(snippets, titles, urls, related_links, strict=True),
         start=1,
@@ -104,6 +106,9 @@ def _sources(row: dict) -> tuple[list[dict], dict]:
         url = _text_value(url_value, field="url", original_rank=original_index)
         if not snippet:
             drop_reasons["blank_snippet"] += 1
+            continue
+        if not tokenize_query(snippet):
+            drop_reasons["no_tokens_snippet"] += 1
             continue
         if not title:
             drop_reasons["missing_title"] += 1
