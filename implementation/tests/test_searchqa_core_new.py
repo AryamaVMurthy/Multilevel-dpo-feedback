@@ -77,8 +77,9 @@ class SearchQACoreContractTest(unittest.TestCase):
         }
         rows = build_preference_rows(trajectory)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0]["rejected"], "Grace Hopper")
-        self.assertEqual(rows[1]["rejected"], "Charles Babbage")
+        self.assertEqual(rows[0]["chosen"], " Ada Lovelace")
+        self.assertEqual(rows[0]["rejected"], " Grace Hopper")
+        self.assertEqual(rows[1]["rejected"], " Charles Babbage")
         for row in rows:
             self.assertNotIn("Recheck", row["prompt"])
             self.assertNotIn("Ada Lovelace", row["prompt"])

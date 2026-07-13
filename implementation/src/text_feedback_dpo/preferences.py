@@ -21,8 +21,8 @@ def build_preference_rows(trajectory: dict) -> list[dict]:
         rows.append({
             "id": f"{trajectory['id']}::attempt-{attempt['attempt_index']}",
             "prompt": prompt,
-            "chosen": chosen,
-            "rejected": rejected,
+            "chosen": f" {chosen.strip()}",
+            "rejected": f" {rejected.strip()}",
             "metadata": {
                 "example_id": trajectory["id"],
                 "rejected_attempt_index": attempt["attempt_index"],
