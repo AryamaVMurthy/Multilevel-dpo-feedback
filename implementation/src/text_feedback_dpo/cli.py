@@ -856,7 +856,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         run_fixed_retrieval_pipeline,
     )
     from text_feedback_dpo.collection import collect_dataset_batchwise
-    from text_feedback_dpo.feedback import is_feedback_shape_valid
+    from text_feedback_dpo.feedback import FeedbackFormatError, parse_feedback
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
@@ -989,7 +989,17 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 raise ValueError("sibling generation did not populate every requested artifact")
             return ordered_outputs
 
+        def _teacher_feedback_is_valid(text, gold_answer):
+            try:
+                parse_feedback(text, gold_answer=gold_answer)
+            except FeedbackFormatError:
+                return False
+            return True
+
         def teacher_batch(prompts, **kwargs):
+            gold_answers = kwargs.get("gold_answers")
+            if not isinstance(gold_answers, list) or len(gold_answers) != len(prompts):
+                raise ValueError("teacher gold-answer validator parity mismatch")
             rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
             prompt_token_counts = [
                 len(teacher_tokenizer.encode(prompt, add_special_tokens=False)) for prompt in rendered
@@ -1024,7 +1034,10 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 token_count=lambda text: len(
                     teacher_tokenizer.encode(text, add_special_tokens=False)
                 ),
-                validate_output=is_feedback_shape_valid,
+                validate_outputs=[
+                    lambda text, gold_answer=gold_answer: _teacher_feedback_is_valid(text, gold_answer)
+                    for gold_answer in gold_answers
+                ],
             )
             print(json.dumps({
                 "event": "teacher_output_contract",

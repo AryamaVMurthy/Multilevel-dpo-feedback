@@ -39,10 +39,15 @@ def bounded_teacher_outputs(
     generate: Callable[..., list[str]],
     token_count: Callable[[str], int],
     validate_output: Callable[[str], bool] | None = None,
+    validate_outputs: list[Callable[[str], bool]] | None = None,
 ) -> tuple[list[str], dict[str, object]]:
     """Retry outputs that violate the thinking or final-content contract."""
     if not prompts or len(prompt_token_counts) != len(prompts):
         raise ValueError("teacher retry requires nonempty prompt/token-count parity")
+    if validate_output is not None and validate_outputs is not None:
+        raise ValueError("teacher retry accepts either one validator or per-row validators, not both")
+    if validate_outputs is not None and len(validate_outputs) != len(prompts):
+        raise ValueError("teacher retry requires per-row validator parity")
     if not 0 < primary_max_new_tokens < retry_max_new_tokens < TOTAL_CONTEXT_TOKENS:
         raise ValueError("teacher retry caps must satisfy 0 < primary < retry < 4096")
     raw = generate(prompts, max_new_tokens=primary_max_new_tokens)
@@ -53,15 +58,16 @@ def bounded_teacher_outputs(
     malformed: list[int] = []
     invalid_content: list[int] = []
 
-    def extract_valid_content(text: str) -> str:
+    def extract_valid_content(text: str, index: int) -> str:
         content = extract_qwen_final_content(text)
-        if validate_output is not None and validate_output(content) is not True:
+        validator = validate_outputs[index] if validate_outputs is not None else validate_output
+        if validator is not None and validator(content) is not True:
             raise RuntimeErrorExplicit("teacher final content failed the output validator")
         return content
 
     for index, text in enumerate(raw):
         try:
-            final.append(extract_valid_content(text))
+            final.append(extract_valid_content(text, index))
         except RuntimeErrorExplicit:
             try:
                 extract_qwen_final_content(text)
@@ -116,7 +122,7 @@ def bounded_teacher_outputs(
         retry_invalid_content: list[int] = []
         for retry_position, (original_index, text) in enumerate(zip(retry_indices, retry_raw, strict=True)):
             try:
-                final[original_index] = extract_valid_content(text)
+                final[original_index] = extract_valid_content(text, original_index)
             except RuntimeErrorExplicit:
                 try:
                     extract_qwen_final_content(text)

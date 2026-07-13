@@ -183,7 +183,9 @@ def collect_dataset_batchwise(
         if not failed_ids:
             break
         feedback_rows = teacher_generate_batch(
-            teacher_prompts, max_new_tokens=teacher_max_new_tokens, temperature=0.0, top_p=1.0,
+            teacher_prompts,
+            gold_answers=[states[example_id]["example"]["gold_answer"] for example_id in failed_ids],
+            max_new_tokens=teacher_max_new_tokens, temperature=0.0, top_p=1.0,
         )
         if not isinstance(feedback_rows, list) or len(feedback_rows) != len(failed_ids):
             raise ValueError(f"teacher batch cardinality mismatch at attempt {attempt_index}")

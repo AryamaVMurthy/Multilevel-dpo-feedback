@@ -72,6 +72,29 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(report["retry_reason"], "teacher_feedback_contract")
         self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
 
+    def test_teacher_retries_per_row_gold_leakage_contract(self):
+        calls = []
+
+        def generate(prompts, *, max_new_tokens):
+            calls.append((list(prompts), max_new_tokens))
+            if max_new_tokens == 128:
+                return ['<think>done</think>{"hint":"Ada is the target."}']
+            return ['<think>done</think>{"hint":"Inspect the associated person."}']
+
+        outputs, report = bounded_teacher_outputs(
+            ["p0"],
+            prompt_token_counts=[100],
+            primary_max_new_tokens=128,
+            retry_max_new_tokens=256,
+            generate=generate,
+            token_count=lambda text: len(text),
+            validate_outputs=[lambda text: "Ada" not in text],
+        )
+        self.assertEqual(calls, [(["p0"], 128), (["p0"], 256)])
+        self.assertEqual(report["primary_invalid_content_indices"], [0])
+        self.assertEqual(report["retry_reason"], "teacher_feedback_contract")
+        self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
+
     def test_teacher_bounded_retry_fails_if_retry_prompt_or_output_exhausts_contract(self):
         with self.assertRaisesRegex(RuntimeErrorExplicit, "retry prompt budget"):
             bounded_teacher_outputs(
