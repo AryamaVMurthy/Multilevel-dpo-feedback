@@ -9,7 +9,7 @@ from text_feedback_dpo.bootstrap import (
     validate_bootstrap_rows,
 )
 from text_feedback_dpo.cli import build_parser
-from text_feedback_dpo.dataset import build_sft_rows_from_bootstrap
+from text_feedback_dpo.dataset import build_sft_rows_from_bootstrap, select_balanced_sft_rows
 from text_feedback_dpo.runtime import GeneratedText
 
 
@@ -45,6 +45,38 @@ class _Tokenizer:
 
 
 class BootstrapRolloutsTest(unittest.TestCase):
+    def test_balanced_sft_selection_is_exact_deterministic_and_student_only(self):
+        rows = []
+        for task, count in (("query", 7), ("response", 4)):
+            for index in range(count):
+                rows.append({
+                    "id": f"{task}-{index}",
+                    "task": task,
+                    "prompt": f"prompt {task} {index}",
+                    "completion": f" completion {task} {index}",
+                    "metadata": {"provenance": "student", "no_hint": True},
+                })
+        selected = select_balanced_sft_rows(rows, per_task=4, seed=20260713)
+        reversed_selected = select_balanced_sft_rows(reversed(rows), per_task=4, seed=20260713)
+        self.assertEqual(selected, reversed_selected)
+        self.assertEqual([row["task"] for row in selected].count("query"), 4)
+        self.assertEqual([row["task"] for row in selected].count("response"), 4)
+        self.assertEqual(len({row["id"] for row in selected}), 8)
+        self.assertTrue(all(row["metadata"] == {"provenance": "student", "no_hint": True} for row in selected))
+
+    def test_balanced_sft_selection_fails_on_short_or_unverified_task(self):
+        verified = {
+            "id": "q1", "task": "query", "prompt": "prompt", "completion": " completion",
+            "metadata": {"provenance": "student", "no_hint": True},
+        }
+        response = {**verified, "id": "r1", "task": "response"}
+        second_query = {**verified, "id": "q2"}
+        with self.assertRaisesRegex(ValueError, "requires 2 response rows.*only 1"):
+            select_balanced_sft_rows([verified, second_query, response], per_task=2, seed=1)
+        invalid = {**response, "metadata": {"provenance": "teacher", "no_hint": False}}
+        with self.assertRaisesRegex(ValueError, "student-generated no-hint"):
+            select_balanced_sft_rows([verified, invalid], per_task=1, seed=1)
+
     def test_query_sft_is_independent_when_response_is_invalid(self):
         example = _example()
         malformed = run_fixed_retrieval_pipeline(
@@ -99,6 +131,15 @@ class BootstrapRolloutsTest(unittest.TestCase):
         self.assertEqual(args.query_min_new_tokens, 2)
         self.assertEqual(args.response_min_new_tokens, 8)
         self.assertEqual(args.func.__name__, "cmd_bootstrap_rollouts")
+
+    def test_cli_exposes_explicit_balanced_sft_selection_contract(self):
+        args = build_parser().parse_args([
+            "select-balanced-sft", "--input", "sft.jsonl", "--output", "balanced.jsonl",
+            "--report", "balanced-report.json", "--per-task", "32", "--seed", "20260713",
+        ])
+        self.assertEqual(args.per_task, 32)
+        self.assertEqual(args.seed, 20260713)
+        self.assertEqual(args.func.__name__, "cmd_select_balanced_sft")
 
     def test_expands_each_seed_deterministically_and_records_no_teacher_provenance(self):
         examples = [_example("q1"), _example("q2")]

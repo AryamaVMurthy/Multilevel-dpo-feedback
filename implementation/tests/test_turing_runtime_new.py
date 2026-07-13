@@ -80,6 +80,28 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("sha256sum", text)
         self.assertIn("fallback_reason", text)
 
+    def test_sft_overfit_launcher_is_first_stage_full_finetune_with_real_resume(self):
+        text = Path("scripts/turing_sft_overfit.sh").read_text(encoding="utf-8")
+        self.assertIn("#SBATCH --gres=gpu:4", text)
+        self.assertIn('METHOD=sft', text)
+        self.assertIn('train-sft', text)
+        self.assertIn("EXPECTED_COMMIT", text)
+        self.assertIn("TRAIN_SHA256", text)
+        self.assertIn("EVAL_SHA256", text)
+        self.assertIn("INITIAL_MAX_STEPS", text)
+        self.assertIn("FINAL_MAX_STEPS", text)
+        self.assertIn('--resume-from-checkpoint "$INITIAL_CHECKPOINT"', text)
+        self.assertIn("--deepspeed-config", text)
+        self.assertIn("--max-length 4096", text)
+        self.assertIn("--gradient-checkpointing", text)
+        self.assertIn("--no-packing", text)
+        self.assertIn("--no-padding-free", text)
+        self.assertIn("--no-use-liger-kernel", text)
+        self.assertIn("nvidia-smi --query-gpu", text)
+        self.assertIn("run-manifest.json", text)
+        self.assertNotIn("OPTIMIZATION_DECISION", text)
+        self.assertNotIn("SCALE_DECISION", text)
+
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
         for value in ("STUDENT_REVISION", "DATASET_REVISION", "PROMPT_VERSION", "SEED", "--teacher-thinking"):

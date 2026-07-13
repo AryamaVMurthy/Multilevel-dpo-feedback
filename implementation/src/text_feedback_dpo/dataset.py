@@ -474,6 +474,57 @@ def build_sft_rows_from_trajectories(
 build_task7_sft_rows = build_sft_rows_from_trajectories
 
 
+def select_balanced_sft_rows(
+    rows: Iterable[Mapping[str, object]], *, per_task: int, seed: int,
+) -> list[dict]:
+    """Select equal query/response subsets without duplicating or inventing targets."""
+    if isinstance(per_task, bool) or not isinstance(per_task, int) or per_task <= 0:
+        raise ValueError("balanced SFT per_task must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("balanced SFT seed must be an integer")
+    grouped: dict[str, list[Mapping[str, object]]] = {"query": [], "response": []}
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"balanced SFT row {index} must be an object")
+        row_id = row.get("id")
+        task = row.get("task")
+        metadata = row.get("metadata")
+        if not isinstance(row_id, str) or not row_id.strip() or row_id in seen:
+            raise ValueError(f"balanced SFT row {index} requires a unique non-empty id")
+        seen.add(row_id)
+        if task not in grouped:
+            raise ValueError(f"balanced SFT row {row_id} requires task=query or task=response")
+        if (
+            not isinstance(row.get("prompt"), str)
+            or not str(row["prompt"]).strip()
+            or not isinstance(row.get("completion"), str)
+            or not str(row["completion"]).strip()
+        ):
+            raise ValueError(f"balanced SFT row {row_id} requires non-empty prompt and completion")
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("provenance") != "student"
+            or metadata.get("no_hint") is not True
+        ):
+            raise ValueError(f"balanced SFT row {row_id} must be student-generated no-hint supervision")
+        grouped[str(task)].append(row)
+    for task, candidates in grouped.items():
+        if len(candidates) < per_task:
+            raise ValueError(f"balanced SFT requires {per_task} {task} rows but only {len(candidates)} are available")
+
+    def key(row: Mapping[str, object]) -> tuple[str, str]:
+        row_id = str(row["id"])
+        digest = hashlib.sha256(f"{seed}\0{row_id}".encode()).hexdigest()
+        return digest, row_id
+
+    selected = {task: sorted(candidates, key=key)[:per_task] for task, candidates in grouped.items()}
+    output: list[dict] = []
+    for index in range(per_task):
+        output.extend((dict(selected["query"][index]), dict(selected["response"][index])))
+    return output
+
+
 def build_sft_rows_from_bootstrap(
     bootstrap_rows: list[dict],
     *,

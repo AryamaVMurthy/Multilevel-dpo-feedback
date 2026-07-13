@@ -15,6 +15,7 @@ from text_feedback_dpo.dataset import (
     load_searchqa_split_with_stats,
     stream_searchqa_split_with_stats,
     stream_stats_report,
+    select_balanced_sft_rows,
     write_jsonl,
 )
 from text_feedback_dpo.io import iter_jsonl as _iter_jsonl
@@ -202,6 +203,32 @@ def cmd_build_sft(args: argparse.Namespace) -> None:
         )
         report["input_schema"] = "minimal-intervention-trajectories-v1"
     write_jsonl(rows, args.output)
+    write_json(args.report, report)
+
+
+def cmd_select_balanced_sft(args: argparse.Namespace) -> None:
+    rows = read_unique_jsonl(args.input, label="balanced SFT input")
+    selected = select_balanced_sft_rows(rows, per_task=args.per_task, seed=args.seed)
+    write_jsonl(selected, args.output)
+    selected_ids = [row["id"] for row in selected]
+    report = {
+        "command": "select-balanced-sft",
+        "input_rows": len(rows),
+        "input_sha256": _sha256_file(args.input),
+        "output_rows": len(selected),
+        "output_sha256": _sha256_file(args.output),
+        "per_task": args.per_task,
+        "seed": args.seed,
+        "selected_ids_sha256": hashlib.sha256(
+            json.dumps(selected_ids, ensure_ascii=False, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "task_counts": {
+            "query": sum(row["task"] == "query" for row in selected),
+            "response": sum(row["task"] == "response" for row in selected),
+        },
+        "selection_policy": "sha256(seed,id),without_replacement,interleaved_query_response",
+        "provenance": "student_no_hint_only",
+    }
     write_json(args.report, report)
 
 
@@ -1082,6 +1109,16 @@ def build_parser() -> argparse.ArgumentParser:
     sft_data.add_argument("--min-coverage", required=True, type=float)
     sft_data.add_argument("--min-rows", required=True, type=int)
     sft_data.set_defaults(func=cmd_build_sft)
+    balanced_sft = sub.add_parser(
+        "select-balanced-sft",
+        help="select an exact deterministic query/response-balanced student-only SFT subset",
+    )
+    balanced_sft.add_argument("--input", required=True, type=Path)
+    balanced_sft.add_argument("--output", required=True, type=Path)
+    balanced_sft.add_argument("--report", required=True, type=Path)
+    balanced_sft.add_argument("--per-task", required=True, type=int)
+    balanced_sft.add_argument("--seed", required=True, type=int)
+    balanced_sft.set_defaults(func=cmd_select_balanced_sft)
     refs = sub.add_parser("precompute-dpo-ref-log-probs")
     refs.add_argument("--config", required=True, type=Path)
     refs.add_argument("--data", required=True, type=Path)
