@@ -184,6 +184,8 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(calls, [(["p0"], 128), (["p0"], 256)])
         self.assertEqual(fallback_calls, [[0]])
         self.assertEqual(report["fallback_indices"], [0])
+        self.assertEqual(report["fallback_malformed_indices"], [])
+        self.assertEqual(report["fallback_invalid_content_indices"], [])
         self.assertEqual(
             report["fallback_reason"],
             "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery",

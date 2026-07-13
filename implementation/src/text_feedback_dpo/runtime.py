@@ -157,6 +157,8 @@ def bounded_teacher_outputs(
             ):
                 raise RuntimeErrorExplicit("explicit teacher fallback cardinality/type mismatch")
             fallback_invalid: list[int] = []
+            fallback_malformed: list[int] = []
+            fallback_invalid_content: list[int] = []
             fallback_output_counts: dict[int, int] = {}
             for original_index, text in zip(original_indices, fallback_raw, strict=True):
                 fallback_output_counts[original_index] = token_count(text)
@@ -164,12 +166,20 @@ def bounded_teacher_outputs(
                     final[original_index] = extract_valid_content(text, original_index)
                 except RuntimeErrorExplicit:
                     fallback_invalid.append(original_index)
+                    try:
+                        extract_qwen_final_content(text)
+                    except RuntimeErrorExplicit:
+                        fallback_malformed.append(original_index)
+                    else:
+                        fallback_invalid_content.append(original_index)
             report["fallback_indices"] = original_indices
             report["fallback_reason"] = fallback_reason
             report["fallback_output_token_counts"] = [
                 fallback_output_counts[index] for index in original_indices
             ]
             report["fallback_invalid_indices"] = fallback_invalid
+            report["fallback_malformed_indices"] = fallback_malformed
+            report["fallback_invalid_content_indices"] = fallback_invalid_content
             if fallback_invalid:
                 raise RuntimeErrorExplicit(
                     "explicit teacher fallback failed the output contract at original indices: "

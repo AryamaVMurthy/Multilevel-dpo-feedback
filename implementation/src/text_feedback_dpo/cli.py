@@ -1022,8 +1022,29 @@ def cmd_collect(args: argparse.Namespace) -> None:
                     f"max_input_tokens={max_input_tokens} max_total_tokens=4096"
                 )
 
+            def redact_teacher_gold(prompt: str) -> str:
+                marker = "Private request:\n"
+                if marker not in prompt:
+                    raise RuntimeErrorExplicit(
+                        "explicit teacher recovery cannot locate the private request payload"
+                    )
+                prefix, payload_text = prompt.split(marker, maxsplit=1)
+                try:
+                    payload = json.loads(payload_text)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeErrorExplicit(
+                        "explicit teacher recovery cannot parse the private request payload"
+                    ) from exc
+                if not isinstance(payload, dict) or "private_gold_answer" not in payload:
+                    raise RuntimeErrorExplicit(
+                        "explicit teacher recovery requires a private gold field to redact"
+                    )
+                payload["private_gold_answer"] = "[redacted for explicit recovery]"
+                return prefix + marker + json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+
+            fallback_source_prompts = [redact_teacher_gold(prompt) for prompt in prompts] if args.teacher_thinking else []
             fallback_rendered = render_teacher_prompts(
-                teacher_tokenizer, prompts, enable_thinking=False
+                teacher_tokenizer, fallback_source_prompts, enable_thinking=False
             ) if args.teacher_thinking else []
 
             def explicit_nonthinking_fallback(indices):
@@ -1046,7 +1067,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
                     "original_indices": indices,
                     "prompt_token_counts": fallback_prompt_counts,
                     "max_new_tokens": legal_max_new_tokens,
-                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery",
+                    "gold_redacted": True,
+                    "fallback_reason": "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted",
                 }, sort_keys=True), file=sys.stderr, flush=True)
                 return batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
@@ -1075,7 +1097,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 ],
                 fallback_generate=explicit_nonthinking_fallback if args.teacher_thinking else None,
                 fallback_reason=(
-                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery"
+                    "teacher_thinking_retry_exhausted_explicit_nonthinking_recovery_gold_redacted"
                     if args.teacher_thinking else None
                 ),
             )
