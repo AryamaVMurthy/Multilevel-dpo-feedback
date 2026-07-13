@@ -180,6 +180,7 @@ Localize the earliest responsible region and provide one minimal, answer-free di
 At level 1 be slight and directional. Only after failed retries may specificity and repair scope increase.
 Never reveal, quote, spell, restate, encode, or imply the private gold answer.
 Never provide a critique, answer, solution, source text, citation choice, or extra field.
+Keep the private reasoning brief (at most 80 tokens); close the thinking block before emitting the JSON.
 Return exactly one strict JSON object with exactly this shape: {\"hint\":\"...\"}.
 The hint must be non-empty and at most 24 words.
 

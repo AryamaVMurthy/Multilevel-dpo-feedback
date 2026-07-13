@@ -57,6 +57,8 @@ class FeedbackContractTest(unittest.TestCase):
         )
         self.assertIn('"escalation_level": 2', prompt)
         self.assertIn('Return exactly one strict JSON object with exactly this shape: {"hint":"..."}', prompt)
+        self.assertIn("Keep the private reasoning brief (at most 80 tokens)", prompt)
+        self.assertIn("close the thinking block before emitting the JSON", prompt)
         self.assertIn("Grace", prompt)
         self.assertIn('"available_source_count": 2', prompt)
         self.assertNotIn('"complete_source_records"', prompt)
