@@ -152,6 +152,18 @@ class CLITest(unittest.TestCase):
         teacher_probe = parser.parse_args(["probe-model"] + self._required_args("probe-model"))
         self.assertEqual(teacher_probe.teacher_max_new_tokens, 1024)
 
+    def test_sft_reproduction_cli_requires_checkpoint_and_explicit_generation_contract(self):
+        parsed = build_parser().parse_args([
+            "evaluate-sft-reproduction", "--data", "balanced.jsonl", "--checkpoint", "checkpoint-20",
+            "--checkpoint-sha256", "a" * 64, "--output", "records.jsonl", "--report", "report.json",
+            "--batch-size", "4", "--query-max-new-tokens", "32", "--query-min-new-tokens", "2",
+            "--response-max-new-tokens", "256", "--response-min-new-tokens", "8", "--seed", "20260713",
+        ])
+        self.assertEqual(parsed.checkpoint.name, "checkpoint-20")
+        self.assertEqual(parsed.query_min_new_tokens, 2)
+        self.assertEqual(parsed.response_min_new_tokens, 8)
+        self.assertEqual(parsed.func.__name__, "cmd_evaluate_sft_reproduction")
+
     def test_teacher_probe_supplies_bounded_retrieved_context_to_private_prompt(self):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "teacher-probe.json"

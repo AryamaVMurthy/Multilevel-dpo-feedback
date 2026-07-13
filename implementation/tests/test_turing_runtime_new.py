@@ -99,8 +99,27 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("--no-use-liger-kernel", text)
         self.assertIn("nvidia-smi --query-gpu", text)
         self.assertIn("run-manifest.json", text)
+        self.assertIn("INITIAL_CHECKPOINT_HASH_FILE", text)
+        self.assertLess(text.index("INITIAL_CHECKPOINT_HASH_FILE"), text.index("overfit_resume_start"))
+        self.assertIn("initial_checkpoint_retained", text)
         self.assertNotIn("OPTIMIZATION_DECISION", text)
         self.assertNotIn("SCALE_DECISION", text)
+
+    def test_sft_reproduction_launcher_binds_checkpoint_data_and_generation_contract(self):
+        text = Path("scripts/turing_sft_reproduction.sh").read_text(encoding="utf-8")
+        for required in (
+            "EXPECTED_COMMIT", "SFT_DATA", "SFT_DATA_HASH", "CHECKPOINT",
+            "CHECKPOINT_MODEL_HASH", "OUTPUT", "REPORT", "QUERY_MIN_NEW_TOKENS",
+            "QUERY_MAX_NEW_TOKENS", "RESPONSE_MIN_NEW_TOKENS",
+            "RESPONSE_MAX_NEW_TOKENS", "BATCH_SIZE", "SEED",
+        ):
+            self.assertIn(f'require_env "{required}"', text)
+        self.assertIn("evaluate-sft-reproduction", text)
+        self.assertIn("--checkpoint-sha256", text)
+        self.assertIn("sha256sum", text)
+        self.assertIn("fallback_reason=none", text)
+        self.assertIn("#SBATCH --gres=gpu:1", text)
+        self.assertNotIn("|| true", text)
 
     def test_collection_uses_one_explicit_teacher_identity_and_complete_cache_key(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")

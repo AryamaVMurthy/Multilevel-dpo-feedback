@@ -56,6 +56,14 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _sha256_file_streaming(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _identity_hash(value: dict) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -230,6 +238,83 @@ def cmd_select_balanced_sft(args: argparse.Namespace) -> None:
         "provenance": "student_no_hint_only",
     }
     write_json(args.report, report)
+
+
+def cmd_evaluate_sft_reproduction(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.monitoring import build_sft_reproduction_report
+    from text_feedback_dpo.runtime import (
+        generate_batch_records,
+        load_student,
+        load_tokenizer,
+        set_generation_seed,
+    )
+
+    if args.batch_size <= 0:
+        raise ValueError("SFT reproduction batch_size must be positive")
+    for task in ("query", "response"):
+        minimum = getattr(args, f"{task}_min_new_tokens")
+        maximum = getattr(args, f"{task}_max_new_tokens")
+        if minimum < 0 or maximum <= 0 or minimum > maximum:
+            raise ValueError(f"SFT reproduction {task} token limits are invalid")
+    model_file = args.checkpoint / "model.safetensors"
+    if not model_file.is_file():
+        raise FileNotFoundError(f"SFT checkpoint model is missing: {model_file}")
+    actual_checkpoint_sha256 = _sha256_file_streaming(model_file)
+    if actual_checkpoint_sha256 != args.checkpoint_sha256:
+        raise ValueError(
+            f"SFT checkpoint hash mismatch: expected {args.checkpoint_sha256}, got {actual_checkpoint_sha256}"
+        )
+    rows = read_unique_jsonl(args.data, label="SFT reproduction input")
+    for row in rows:
+        metadata = row.get("metadata")
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("provenance") != "student"
+            or metadata.get("no_hint") is not True
+        ):
+            raise ValueError(f"SFT reproduction row {row['id']} is not student-generated no-hint supervision")
+    tokenizer = load_tokenizer(str(args.checkpoint))
+    model = load_student(
+        str(args.checkpoint), attention_implementation=args.attention_implementation, device=args.device,
+    )
+    set_generation_seed(args.seed)
+    generated_by_id = {}
+    for task in ("query", "response"):
+        task_rows = [row for row in rows if row.get("task") == task]
+        for start in range(0, len(task_rows), args.batch_size):
+            batch = task_rows[start : start + args.batch_size]
+            generated = generate_batch_records(
+                model,
+                tokenizer,
+                [str(row["prompt"]) for row in batch],
+                max_new_tokens=getattr(args, f"{task}_max_new_tokens"),
+                min_new_tokens=getattr(args, f"{task}_min_new_tokens"),
+                temperature=0.0,
+                top_p=1.0,
+                context_budget=4096,
+            )
+            if len(generated) != len(batch):
+                raise RuntimeError(f"SFT reproduction {task} generation cardinality mismatch")
+            generated_by_id.update({str(row["id"]): record for row, record in zip(batch, generated, strict=True)})
+    records, summary = build_sft_reproduction_report(rows, generated_by_id)
+    summary.update({
+        "checkpoint": str(args.checkpoint),
+        "checkpoint_model_sha256": actual_checkpoint_sha256,
+        "data_sha256": _sha256_file(args.data),
+        "seed": args.seed,
+        "batch_size": args.batch_size,
+        "max_length": 4096,
+        "generation": {
+            "query_min_new_tokens": args.query_min_new_tokens,
+            "query_max_new_tokens": args.query_max_new_tokens,
+            "response_min_new_tokens": args.response_min_new_tokens,
+            "response_max_new_tokens": args.response_max_new_tokens,
+            "temperature": 0.0,
+            "top_p": 1.0,
+        },
+    })
+    write_jsonl(records, args.output)
+    write_json(args.report, summary)
 
 
 def cmd_precompute_dpo_refs(args: argparse.Namespace) -> None:
@@ -1119,6 +1204,24 @@ def build_parser() -> argparse.ArgumentParser:
     balanced_sft.add_argument("--per-task", required=True, type=int)
     balanced_sft.add_argument("--seed", required=True, type=int)
     balanced_sft.set_defaults(func=cmd_select_balanced_sft)
+    reproduction = sub.add_parser(
+        "evaluate-sft-reproduction",
+        help="generate and exactly compare all verified SFT completions from a checkpoint",
+    )
+    reproduction.add_argument("--data", required=True, type=Path)
+    reproduction.add_argument("--checkpoint", required=True, type=Path)
+    reproduction.add_argument("--checkpoint-sha256", required=True)
+    reproduction.add_argument("--output", required=True, type=Path)
+    reproduction.add_argument("--report", required=True, type=Path)
+    reproduction.add_argument("--batch-size", required=True, type=int)
+    reproduction.add_argument("--query-max-new-tokens", required=True, type=int)
+    reproduction.add_argument("--query-min-new-tokens", required=True, type=int)
+    reproduction.add_argument("--response-max-new-tokens", required=True, type=int)
+    reproduction.add_argument("--response-min-new-tokens", required=True, type=int)
+    reproduction.add_argument("--seed", required=True, type=int)
+    reproduction.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
+    reproduction.add_argument("--device", default="cuda:0")
+    reproduction.set_defaults(func=cmd_evaluate_sft_reproduction)
     refs = sub.add_parser("precompute-dpo-ref-log-probs")
     refs.add_argument("--config", required=True, type=Path)
     refs.add_argument("--data", required=True, type=Path)

@@ -93,6 +93,21 @@ nvidia-smi
 uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=4 -m text_feedback_dpo.cli train-sft "${COMMON_ARGS[@]}" --max-steps "$INITIAL_MAX_STEPS"
 INITIAL_CHECKPOINT="$OUTPUT/checkpoint-$INITIAL_MAX_STEPS"
 [[ -d "$INITIAL_CHECKPOINT" ]] || fail "initial checkpoint is missing: $INITIAL_CHECKPOINT" checkpoint_save_missing
+INITIAL_CHECKPOINT_HASH_FILE="$OUTPUT/initial-checkpoint.sha256"
+uv run --frozen python - "$INITIAL_CHECKPOINT" "$INITIAL_CHECKPOINT_HASH_FILE" <<'PY'
+import hashlib, sys
+from pathlib import Path
+
+root, output = Path(sys.argv[1]), Path(sys.argv[2])
+digest = hashlib.sha256()
+files = sorted(item for item in root.rglob("*") if item.is_file())
+if not files:
+    raise SystemExit(f"checkpoint has no files: {root}")
+for item in files:
+    digest.update(str(item.relative_to(root)).encode())
+    digest.update(hashlib.sha256(item.read_bytes()).digest())
+output.write_text(digest.hexdigest() + "\n", encoding="utf-8")
+PY
 
 log_event overfit_resume_start max_steps="$FINAL_MAX_STEPS" resume_from="$INITIAL_CHECKPOINT" fallback_reason=none
 uv run --frozen python -m torch.distributed.run --standalone --nproc_per_node=4 -m text_feedback_dpo.cli train-sft "${COMMON_ARGS[@]}" --max-steps "$FINAL_MAX_STEPS" --resume-from-checkpoint "$INITIAL_CHECKPOINT"
@@ -101,7 +116,7 @@ FINAL_CHECKPOINT="$OUTPUT/checkpoint-$FINAL_MAX_STEPS"
 
 cleanup
 trap - EXIT
-export MANIFEST_PATH="$OUTPUT/run-manifest.json" INITIAL_CHECKPOINT FINAL_CHECKPOINT GPU_TELEMETRY
+export MANIFEST_PATH="$OUTPUT/run-manifest.json" INITIAL_CHECKPOINT INITIAL_CHECKPOINT_HASH_FILE FINAL_CHECKPOINT GPU_TELEMETRY
 uv run --frozen python - <<'PY'
 import hashlib, json, os, platform, socket
 from pathlib import Path
@@ -130,7 +145,14 @@ manifest = {
     "retrieval_hash": os.environ["RETRIEVAL_HASH"],
     "source_schema_hash": os.environ["SOURCE_SCHEMA_HASH"],
     "training": {"bf16": True, "tf32": True, "deepspeed": "zero3", "max_length": 4096, "initial_max_steps": int(os.environ["INITIAL_MAX_STEPS"]), "final_max_steps": int(os.environ["FINAL_MAX_STEPS"]), "learning_rate": float(os.environ["LEARNING_RATE"]), "epochs": float(os.environ["EPOCHS"])},
-    "checkpoints": {"initial": {"path": os.environ["INITIAL_CHECKPOINT"], "sha256": tree_hash(os.environ["INITIAL_CHECKPOINT"])}, "resumed": {"path": os.environ["FINAL_CHECKPOINT"], "sha256": tree_hash(os.environ["FINAL_CHECKPOINT"])}},
+    "checkpoints": {
+        "initial": {
+            "path": os.environ["INITIAL_CHECKPOINT"],
+            "sha256": Path(os.environ["INITIAL_CHECKPOINT_HASH_FILE"]).read_text(encoding="utf-8").strip(),
+            "initial_checkpoint_retained": Path(os.environ["INITIAL_CHECKPOINT"]).is_dir(),
+        },
+        "resumed": {"path": os.environ["FINAL_CHECKPOINT"], "sha256": tree_hash(os.environ["FINAL_CHECKPOINT"])},
+    },
     "gpu_telemetry": os.environ["GPU_TELEMETRY"],
     "node": socket.gethostname(),
     "platform": platform.platform(),

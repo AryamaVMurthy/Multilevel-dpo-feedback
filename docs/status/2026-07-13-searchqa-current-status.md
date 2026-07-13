@@ -2,15 +2,17 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `0d506a03d4ec5c4287a5c25ba5ba041f331150bc`
+**Last observed remote commit:** `f46913e712f510476824f4eaa0a1018190b8171c`
 
-**Current local implementation baseline:** `a078c6e9bb49448f5ce21114329b5c548b477d6e` plus the tested explicit minimum-generation-token change described below
+**Current local implementation commit:** `f46913e712f510476824f4eaa0a1018190b8171c`
 
 ## Executive status
 
 The fixed-retrieval SearchQA pipeline, strict cited-response evaluator, batched generation path, minimal-hint trajectory code, student-only SFT/DPO data gates, Turing launch contracts, and hardware probes exist and pass the local test suite. The pinned Qwen3-4B-Base student and Qwen3-32B 4-bit teacher both fit their assigned A100-40GB GPUs.
 
-The raw student is not ready for preference-data collection at scale. On the audited 32-row validation preflight, neither direct nor private two-pass generation passed the structural gate. The larger train-only bootstrap pilot found two fully correct responses, but response coverage remains far below the SFT scale gate. The verified no-hint collector, independent query/response SFT selector, v2 answer scaffold, and explicit non-empty generation controls now exist locally and pass the full test suite. They are awaiting deployment for an identical controlled pilot comparison. No SFT, DPO, GRPO, or DAPO optimizer step has run.
+The raw student was not ready for preference-data collection at scale: the original audited validation preflight produced zero fully correct protocol responses. The controlled v2 scaffold plus explicit minimum-generation contract removed empty-output collapse and supplied enough canonically verified, student-generated, no-hint targets for an SFT overfit gate. A four-GPU Qwen3-4B full-parameter BF16 ZeRO-3 SFT run has now completed 20 optimizer steps with real save/resume. DPO, GRPO, DAPO, and full-scale SFT have not started.
+
+The overfit checkpoint is a material protocol improvement on the untouched 32-row validation sample: all 32 queries and all 32 responses are nonempty, parse-valid, cited three-line outputs, with zero truncations. Canonical retrieval recall@8 is 25/32 and canonical exact-answer correctness is 18/32. Manual review found one additional semantically accepted alias (`Launch and Arrival` against gold `takeoff & landing (or launch & arrival)`), which is reported separately and is not silently converted into training supervision or a changed canonical score.
 
 ## Dataset state
 
@@ -49,6 +51,7 @@ Important identities:
 - Node10 scratch: 14 TiB total, 5.8 TiB available.
 - Active fixed-retrieval checkout: 6.5 GiB, of which 6.4 GiB is materialized data.
 - Full 4B checkpoints with optimizer state and full trajectory dumps cannot safely be written to home. Run data, optimizer checkpoints, model caches, and trajectory shards must live under a manifest-bound node10 scratch root; home should retain source, small logs, metrics, manifests, and final research summaries.
+- The SFT overfit output occupies about 165 GiB on node10 scratch because it contains three retained full optimizer checkpoints plus a final model. It is not in home quota. Retention will be reduced only after the required resume and checkpoint identities are persisted and verified.
 - Other large home paths (`slm-research-qwen`, 22 GiB; `browser-agent-run`, 7.6 GiB; obsolete plain-answer checkout, 5.3 GiB) were measured but not deleted. Cleanup requires an artifact/lineage audit so unrelated work is not removed.
 
 ## Exhaustive 32-row student audit
@@ -130,13 +133,20 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 - Local commit `f0f154f` splits bootstrap SFT selection by task. A no-hint query is eligible when canonical BM25 retrieves answer-bearing evidence even if the response fails; a response remains eligible only when it is parse-valid, answer-correct, supported, cited, untruncated, student-generated, and no-hint.
 - Job `13790` completed in 5:06 with exact cardinality (128 examples, 256 candidates). Query eligibility is useful: 147 candidates across 90 unique examples retrieved answer-bearing evidence. Response eligibility is insufficient: only 8/256 outputs parsed, 5/256 had the correct answer, and 2/256 were fully correct/supported/cited across two unique examples. There were 50 empty queries and 59 empty responses; dominant response errors were line count (138) and label order (47).
 - Because unchanged scaling would miss the response-SFT gate, commit `a078c6e` adds the controlled v2 response scaffold. The model-visible prompt ends with `Response:` then `Answer:`; generation supplies only the continuation, while canonical evaluation explicitly composes the fixed `Answer: ` prefix. The prefix and raw generated continuation are persisted and revalidated, so this is not hidden parser repair. Query prompting remains unchanged.
-- Root-cause inspection found that the generation runtime allowed EOS at the first generated token. The pending explicit-minimum change passes `min_new_tokens` into model generation, rejects invalid min/max combinations, requires both bootstrap minima at the launcher boundary, and records them in the artifact manifest. The controlled rerun freezes query minimum 2 and response minimum 8; it does not post-process or fabricate output.
-- The 128-row pilot can currently supply 90 unique query-SFT examples and two unique response-SFT examples. This is useful evidence but insufficient response coverage for full SFT.
-- No optimizer step has run for SFT, DPO, GRPO, or DAPO.
+- Root-cause inspection found that the generation runtime allowed EOS at the first generated token. The explicit-minimum change passes `min_new_tokens` into model generation, rejects invalid min/max combinations, requires both bootstrap minima at the launcher boundary, and records them in the artifact manifest. The controlled rerun freezes query minimum 2 and response minimum 8; it does not post-process or fabricate output.
+- Commit `cf7e53a` deployed the explicit minimum-token contract. Job `13792` reran the identical 128 examples and seeds 11/12 with only the v2 scaffold and query/response minima changed. It completed with exact cardinality in 5:22. Empty queries fell from 50 to zero; parse-valid responses rose from 8 to 144; answer-correct responses rose from 5 to 83; and fully protocol-correct responses rose from 2 to 44 across 33 unique examples. Answer-bearing retrieval rose from 147 candidates/90 examples to 186 candidates/100 examples. No response truncated.
+- The strict SFT selector further requires lexical cited-answer support. It produced 100 unique query targets and 26 unique response targets (126 total), all nonempty, student-generated, no-hint, and within 4,096 tokens. SFT artifact SHA-256: `144e4e41c43f2fef60077cb73ead1b1880e0a514864205b3d9feae088ce3048a`; report SHA-256: `4b4983fcf6faf27481ee09d3a51ab3f09958e8c66b2d4a8dc636b12648993d88`.
+- Remaining v2 failures are no longer dominated by empty output: 58 candidates use forbidden grouped-citation markup, 39 violate the exact three-line count, 8 have a nonempty but invalid query format, one query truncates, four duplicate a citation, one has an empty answer, and one exceeds the reasoning limit. These outputs remain rejected; none are repaired into supervision.
+- Job `13797` completed the same train-only pilot with seeds 11–14: 512 candidates, zero empty queries, 19 absent downstream responses caused by invalid nonempty query format, 290 parse-valid responses across 116 examples, 175 answer-correct responses across 65 examples, and 89 fully correct responses across 47 examples. Strict lexical-support filtering produced 102 unique query targets and 35 unique response targets. Raw bootstrap artifact SHA-256: `8b377e862ab4d801c4ab63c8b3089601fdd17b915ec34e18856b3d2e3aa12b10`.
+- Job `13799` built 137 verified SFT rows (102 query, 35 response), all student-generated, no-hint, nonempty, and at most 4,096 tokens. SFT artifact SHA-256: `d2b6c4d5cd28e49e7659a72b9b57949741b9a89483849d01fc1dbcecb8f42e90`. Deterministic balancing selected 32 query plus 32 response targets without replacement; balanced artifact SHA-256: `ac49f26c8eb5d7ec56ec1c9e4b4d75c155a4d981634db2a2b7611ce154ea3f5f`.
+- Job `13801` ran actual full-parameter Qwen3-4B BF16 SFT on four A100 GPUs with ZeRO-3, max length 4,096, and a real resume from step 5 through step 20. The 64-row overfit evaluation moved from loss `0.2633` / token accuracy `0.9140` at step 5 to loss `0.1116` / token accuracy `0.9700` at step 20. Checkpoint 20 model SHA-256: `919dff1363d5827728497479e30dc8a767aa67f50ef2bbec938978a559b2355e`.
+- Slurm marked job `13801` failed only after training. `save_total_limit=3` correctly retired checkpoint 5 after checkpoints 10, 15, and 20 existed, but post-training manifest code then attempted to hash the retired directory and emitted `checkpoint has no files: .../checkpoint-5`. Resume and all 20 optimizer steps had already succeeded. The launcher now records the initial checkpoint hash before resume and records whether the directory remains retained after training.
+- Job `13806` generated one deterministic no-hint candidate for each row of the untouched 32-row validation sample from checkpoint 20. All 32 queries and 32 responses are nonempty; all responses parse into the exact cited three-line schema; no query or response truncates. Retrieval recall@8 is 25/32, canonical answer correctness is 18/32, and 10/32 also satisfy the stricter lexical cited-answer-support SFT rule. Every output was inspected. Errors are substantive answer/target-selection or retrieval errors, not empty-output or protocol collapse.
+- No optimizer step has run for DPO, GRPO, or DAPO. Full-scale SFT has not started; the exact training-target reproduction audit is the remaining overfit promotion gate.
 
 ## Verification state
 
-- Local tests: 297 passed, 14 upstream deprecation warnings, 171 subtests passed.
+- Local verification: 254 unit tests passed; targeted CLI/runtime/reproduction suite passed 42 tests. One expected upstream Torch deprecation warning remains.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
@@ -154,13 +164,13 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 
 ## Immediate next evidence gate
 
-The immediate student gate is complete only when all of the following exist:
+The SFT overfit promotion gate is complete only when all of the following exist:
 
-- The v2 scaffold plus explicit query/response minima is deployed at an exact commit on Turing.
-- The identical frozen 128-example, seeds 11/12 pilot completes with exact cardinality and manifest identity.
-- Every candidate is re-audited, with exact samples inspected across success and each failure category.
-- Empty-output, parse-valid, answer-correct, citation-valid, fully verified, latency, throughput, and GPU metrics are compared directly with job `13790`.
-- Only canonically verified student-generated rows enter SFT; if response coverage remains insufficient, the run fails promotion explicitly rather than scaling weak data.
+- The checkpoint-5 manifest ordering fix passes the full local suite and is deployed at an exact commit.
+- Checkpoint 20 deterministically regenerates every one of the 64 balanced verified SFT prompts in batched inference, with exact decoded target-match, empty-output, and truncation metrics persisted by task. This is separate from teacher-forced token accuracy.
+- Exact training-target generations and all 32 held-out validation generations are manually inspected, with canonical and human-audited outcomes kept separate.
+- A checkpoint-retention decision preserves the verified final model and required resume evidence while removing only confirmed redundant scratch artifacts.
+- Full SFT data scale, learning rate, checkpoint interval, held-out generation interval, and stop/promotion criteria are frozen from the measured overfit evidence before launching the longer four-GPU run.
 
 The independent teacher gate still requires:
 
