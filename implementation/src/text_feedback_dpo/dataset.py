@@ -4,6 +4,7 @@ import hashlib
 import json
 import io
 import zipfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from text_feedback_dpo.searchqa import (
     SOURCE_SCHEMA,
@@ -13,6 +14,17 @@ from text_feedback_dpo.searchqa import (
     pack_evidence,
 )
 from text_feedback_dpo.prompts import build_student_prompt
+
+
+SFT_MAX_LENGTH = 4096
+
+
+class SFTDataGateError(ValueError):
+    """Raised when canonical Task 6 SFT coverage cannot satisfy a configured gate."""
+
+    def __init__(self, message: str, report: dict):
+        self.report = report
+        super().__init__(message)
 
 
 def dataset_fingerprint(rows: list[dict]) -> str:
@@ -147,6 +159,8 @@ def attach_evidence(rows: list[dict], *, max_evidence_tokens: int, token_count) 
 
 
 def build_sft_rows(rows: list[dict]) -> list[dict]:
+    if any("attempts" in row or "no_hint_siblings" in row for row in rows):
+        return build_sft_rows_from_trajectories(rows)[0]
     return [build_sft_row(row) for row in rows]
 
 
@@ -155,6 +169,295 @@ def build_sft_row(row: dict) -> dict:
     if not completion:
         raise ValueError("SFT completion cannot be empty")
     return {"id": row["id"], "prompt": build_student_prompt(row, []), "completion": f" {completion}"}
+
+
+def _structured_hash(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _record_exclusion(report: dict, example_id: str, task: str, reason: str) -> None:
+    report["exclusions"].append({"id": example_id, "task": task, "reason": reason})
+    report["exclusion_counts"][reason] = report["exclusion_counts"].get(reason, 0) + 1
+
+
+def _candidate_base_reason(candidate: Mapping[str, object]) -> str | None:
+    if candidate.get("provenance") != "student":
+        return "teacher_provenance"
+    if candidate.get("teacher_output") is True:
+        return "teacher_target"
+    if candidate.get("fabricated") is True:
+        return "fabricated_target"
+    if candidate.get("no_hint") is not True:
+        return "hinted_prompt"
+    if candidate.get("verified_no_hint_success") is not True:
+        return "unverified_no_hint_success"
+    if candidate.get("truncation") != {"query": False, "response": False}:
+        return "truncated_target"
+    score = candidate.get("cited_score")
+    if not isinstance(score, Mapping) or score.get("correct") is not True:
+        return "unverified_no_hint_success"
+    return None
+
+
+def _validate_query_candidate(candidate: Mapping[str, object], trajectory: Mapping[str, object]) -> str | None:
+    reason = _candidate_base_reason(candidate)
+    if reason:
+        return reason
+    prompt = candidate.get("query_prompt")
+    trajectory_prompt = trajectory.get("query_prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or "Hints:" in prompt:
+        return "hinted_prompt"
+    if prompt != trajectory_prompt:
+        return "query_prompt_identity_mismatch"
+    if candidate.get("query_prompt_hash") != _structured_hash(prompt):
+        return "query_prompt_hash_mismatch"
+    raw_query = candidate.get("raw_query")
+    if not isinstance(raw_query, str) or not raw_query.strip() or raw_query[0].isspace():
+        return "invalid_student_query"
+    return None
+
+
+def _validate_response_candidate(candidate: Mapping[str, object]) -> str | None:
+    reason = _candidate_base_reason(candidate)
+    if reason:
+        return reason
+    prompt = candidate.get("response_prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or "Hints:" in prompt:
+        return "hinted_prompt"
+    if candidate.get("response_prompt_hash") != _structured_hash(prompt):
+        return "response_prompt_hash_mismatch"
+    ranked = candidate.get("canonical_ranked_search_results")
+    if not isinstance(ranked, list) or not ranked:
+        return "missing_canonical_retrieval_context"
+    if candidate.get("retrieval_context_hash") != _structured_hash(ranked):
+        return "retrieval_context_hash_mismatch"
+    raw_response = candidate.get("raw_response")
+    if not isinstance(raw_response, str) or not raw_response.strip() or raw_response[0].isspace():
+        return "invalid_student_response"
+    return None
+
+
+def _completion(value: object, *, task: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{task} completion is empty")
+    if value[0].isspace():
+        raise ValueError(f"{task} completion has an ambiguous leading boundary")
+    return f" {value}"
+
+
+def _token_count(tokenizer: object, text: str) -> int:
+    if hasattr(tokenizer, "encode"):
+        encoded = tokenizer.encode(text, add_special_tokens=False)
+    elif callable(tokenizer):
+        encoded = tokenizer(text, add_special_tokens=False, truncation=False).get("input_ids")
+    else:
+        raise TypeError("Task 7 length validation requires a tokenizer with encode or call support")
+    if isinstance(encoded, dict):
+        encoded = encoded.get("input_ids")
+    if not isinstance(encoded, Sequence) or isinstance(encoded, (str, bytes)):
+        raise TypeError("tokenizer must return an input_ids sequence without truncation")
+    return len(encoded)
+
+
+def _select_task7_candidate(trajectory: Mapping[str, object]) -> Mapping[str, object] | None:
+    siblings = trajectory.get("no_hint_siblings")
+    candidates: list[Mapping[str, object]] = []
+    if isinstance(siblings, list):
+        candidates.extend(item for item in siblings if isinstance(item, Mapping))
+    chosen = trajectory.get("chosen")
+    if not candidates and isinstance(chosen, Mapping):
+        candidates.append(chosen)
+    if not candidates:
+        return None
+    verified = [item for item in candidates if item.get("verified_no_hint_success") is True]
+    if not verified:
+        return candidates[0]
+    return sorted(verified, key=lambda item: (-float(item.get("future_sibling_gain", 1.0)), int(item.get("seed", 0))))[0]
+
+
+def _canonical_validation_reason(candidate: Mapping[str, object], example: Mapping[str, object]) -> tuple[str, str] | None:
+    """Re-run Task 6's canonical validator against dataset-owned truth.
+
+    Trajectory flags and persisted hashes are provenance claims, not authority.  The
+    validator recomputes prompts, retrieval, scores, and rendered responses from the
+    example's question, gold answer, and source records.
+    """
+    from text_feedback_dpo.trajectories import TrajectoryError, validate_active_artifact
+
+    try:
+        validate_active_artifact(candidate, example=example, hints=[])
+    except (TrajectoryError, ValueError, TypeError) as exc:
+        return "canonical_artifact_validation_failed", str(exc)
+    return None
+
+
+def build_sft_rows_from_trajectories(
+    trajectories: list[dict],
+    *,
+    examples: Mapping[str, Mapping[str, object]] | None = None,
+    tokenizer: object | None = None,
+    max_length: int = SFT_MAX_LENGTH,
+    min_coverage: float = 0.0,
+    min_rows: int = 0,
+) -> tuple[list[dict], dict]:
+    """Build Task 7 query/response rows from canonical, verified Task 6 artifacts.
+
+    The function deliberately does not derive targets from gold answers, hints, or teacher
+    output.  Every exclusion is recorded so a launcher can apply a visible coverage gate.
+    """
+    if examples is None:
+        raise ValueError("Task 7 SFT requires dataset-owned examples for canonical artifact validation")
+    if not isinstance(examples, Mapping):
+        raise TypeError("Task 7 dataset examples must be a mapping keyed by trajectory id")
+    if max_length != SFT_MAX_LENGTH:
+        raise ValueError("Task 7 SFT max_length must remain exactly 4096")
+    if not 0.0 <= min_coverage <= 1.0:
+        raise ValueError("min_coverage must be between zero and one")
+    if min_rows < 0:
+        raise ValueError("min_rows must be nonnegative")
+    report = {
+        "input_trajectories": len(trajectories),
+        "eligible_trajectories": 0,
+        "query_rows": 0,
+        "response_rows": 0,
+        "query_coverage": 0.0,
+        "response_coverage": 0.0,
+        "exclusions": [],
+        "exclusion_counts": {},
+        "max_length": max_length,
+        "length_validation": "tokenizer" if tokenizer is not None else "deferred_to_trainer",
+    }
+    output: list[dict] = []
+    for index, trajectory in enumerate(trajectories):
+        example_id = str(trajectory.get("id", f"row-{index}")) if isinstance(trajectory, Mapping) else f"row-{index}"
+        if not isinstance(trajectory, Mapping):
+            for task in ("query", "response"):
+                _record_exclusion(report, example_id, task, "trajectory_not_mapping")
+            continue
+        example = examples.get(example_id)
+        if not isinstance(example, Mapping):
+            for task in ("query", "response"):
+                _record_exclusion(report, example_id, task, "missing_dataset_example")
+            continue
+        if trajectory.get("training_eligible") is not True:
+            for task in ("query", "response"):
+                _record_exclusion(report, example_id, task, "trajectory_not_training_eligible")
+            continue
+        candidate = _select_task7_candidate(trajectory)
+        if candidate is None:
+            for task in ("query", "response"):
+                _record_exclusion(report, example_id, task, "missing_verified_no_hint_candidate")
+            continue
+        base_reason = _candidate_base_reason(candidate)
+        if base_reason is not None:
+            for task in ("query", "response"):
+                _record_exclusion(report, example_id, task, base_reason)
+            continue
+        query_reason = _validate_query_candidate(candidate, trajectory)
+        response_reason = _validate_response_candidate(candidate)
+        if query_reason is not None or response_reason is not None:
+            if query_reason is not None:
+                _record_exclusion(report, example_id, "query", query_reason)
+            if response_reason is not None:
+                _record_exclusion(report, example_id, "response", response_reason)
+            continue
+        canonical_failure = _canonical_validation_reason(candidate, example)
+        if canonical_failure is not None:
+            reason, detail = canonical_failure
+            for task in ("query", "response"):
+                _record_exclusion(report, example_id, task, reason)
+            report["exclusions"][-1]["detail"] = detail
+            report["exclusions"][-2]["detail"] = detail
+            continue
+        if query_reason is None and response_reason is None:
+            report["eligible_trajectories"] += 1
+        for task, reason, source_field in (
+            ("query", query_reason, "raw_query"),
+            ("response", response_reason, "raw_response"),
+        ):
+            if reason is not None:
+                _record_exclusion(report, example_id, task, reason)
+                continue
+            prompt_field = "query_prompt" if task == "query" else "response_prompt"
+            try:
+                completion = _completion(candidate[source_field], task=task)
+            except ValueError:
+                _record_exclusion(report, example_id, task, f"invalid_student_{task}")
+                continue
+            if tokenizer is not None:
+                combined_tokens = _token_count(tokenizer, str(candidate[prompt_field]) + completion)
+                if combined_tokens > max_length:
+                    _record_exclusion(report, example_id, task, "combined_token_length_exceeds_max_length")
+                    continue
+            metadata = {
+                "trajectory_id": example_id,
+                "task": task,
+                "provenance": "student",
+                "no_hint": True,
+                "verified_no_hint_success": True,
+                "query_prompt_hash": candidate["query_prompt_hash"],
+                "response_prompt_hash": candidate.get("response_prompt_hash"),
+                "retrieval_context_hash": candidate.get("retrieval_context_hash"),
+            }
+            row = {"id": f"{example_id}::sft::{task}", "task": task, "prompt": candidate[prompt_field], "completion": completion, "metadata": metadata}
+            if task == "response":
+                row["visible_response"] = candidate["raw_response"]
+            output.append(row)
+            report[f"{task}_rows"] += 1
+    denominator = max(1, report["input_trajectories"])
+    report["query_coverage"] = report["query_rows"] / denominator
+    report["response_coverage"] = report["response_rows"] / denominator
+    if report["query_coverage"] < min_coverage or report["response_coverage"] < min_coverage or len(output) < min_rows:
+        raise SFTDataGateError(
+            "Task 7 SFT coverage gate failed; inspect exclusion_counts and remediation before relaunch",
+            report,
+        )
+    return output, report
+
+
+build_task7_sft_rows = build_sft_rows_from_trajectories
+
+
+def build_rl_rows_from_trajectories(
+    trajectories: list[dict],
+    *,
+    examples: Mapping[str, Mapping[str, object]],
+    tokenizer: object | None = None,
+    max_length: int = SFT_MAX_LENGTH,
+) -> tuple[list[dict], dict]:
+    """Build task-tagged GRPO/DAPO rows from the same verified student artifacts.
+
+    Query rows retain the complete fixed source corpus so the reward can rerun BM25 on
+    the generated query.  Response rows retain the canonical retrieved context used by
+    Task 6.  Both tasks therefore share provenance and split discipline with SFT/DPO.
+    """
+    sft_rows, report = build_sft_rows_from_trajectories(
+        trajectories, examples=examples, tokenizer=tokenizer, max_length=max_length,
+    )
+    by_id = {str(trajectory["id"]): trajectory for trajectory in trajectories if isinstance(trajectory, Mapping) and "id" in trajectory}
+    rows: list[dict] = []
+    for sft_row in sft_rows:
+        example_id = str(sft_row["metadata"]["trajectory_id"])
+        trajectory = by_id[example_id]
+        candidate = _select_task7_candidate(trajectory)
+        if candidate is None:
+            raise RuntimeError(f"Task 7 RL builder lost canonical candidate for {example_id}")
+        example = examples[example_id]
+        task = sft_row["task"]
+        rows.append({
+            "id": sft_row["id"].replace("::sft::", "::rl::"),
+            "task": task,
+            "prompt": sft_row["prompt"],
+            "gold_answer": example["gold_answer"],
+            "sources": json.loads(json.dumps(example["sources"], ensure_ascii=False, sort_keys=True)),
+            "canonical_ranked_search_results": json.loads(json.dumps(candidate["canonical_ranked_search_results"], ensure_ascii=False, sort_keys=True)),
+            "future_sibling_gain": candidate.get("future_sibling_gain"),
+            "metadata": dict(sft_row["metadata"]),
+        })
+    report = dict(report)
+    report["rl_rows"] = len(rows)
+    return rows, report
 
 
 def write_jsonl(rows: list[dict], path: Path) -> None:

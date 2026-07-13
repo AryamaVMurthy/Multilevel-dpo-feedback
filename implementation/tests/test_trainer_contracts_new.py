@@ -20,18 +20,18 @@ class TrainerContractTest(unittest.TestCase):
             self.assertTrue((checkpoint / "optimizer.pt").is_file())
             self.assertTrue((output / "final").is_dir())
     def test_common_training_args_enable_measured_ada_optimizations(self):
-        args = _common_args({}, "out")
+        args = _common_args({"max_steps": -1}, "out")
         self.assertTrue(args["tf32"])
         self.assertEqual(args["optim"], "adamw_torch_fused")
         self.assertNotIn("group_by_length", args)
-        self.assertGreaterEqual(args["dataloader_num_workers"], 4)
+        self.assertEqual(args["dataloader_num_workers"], 0)
         self.assertTrue(args["dataloader_pin_memory"])
         self.assertFalse(args["ddp_find_unused_parameters"])
         self.assertEqual(args["gradient_checkpointing_kwargs"], {"use_reentrant": False})
         self.assertTrue(args["include_num_input_tokens_seen"])
 
     def test_sft_uses_prompt_completion_and_completion_only_loss(self):
-        args = _sft_args({}, "out")
+        args = _sft_args({"max_steps": -1}, "out")
         self.assertTrue(args["completion_only_loss"])
         self.assertEqual(args["max_length"], 4096)
         self.assertNotIn("dataset_text_field", args)
@@ -39,14 +39,21 @@ class TrainerContractTest(unittest.TestCase):
         self.assertGreaterEqual(args["save_total_limit"], 2)
 
     def test_dpo_uses_plain_completion_length_contract(self):
-        args = _dpo_args({}, "out")
+        args = _dpo_args({"max_steps": -1}, "out")
         self.assertEqual(args["max_length"], 4096)
         self.assertEqual(args["loss_type"], ["sigmoid"])
+        self.assertTrue(args["precompute_ref_log_probs"])
+        self.assertFalse(args["use_liger_kernel"])
 
     def test_rl_completions_are_short_and_dapo_is_explicit(self):
-        self.assertEqual(_rl_args({}, "out", method="grpo")["max_completion_length"], 32)
-        dapo = _rl_args({}, "out", method="dapo")
+        grpo = _rl_args({"max_steps": -1}, "out", method="grpo")
+        self.assertEqual(grpo["max_completion_length"], 256)
+        self.assertEqual(grpo["loss_type"], "grpo")
+        dapo = _rl_args({"max_steps": -1}, "out", method="dapo")
         self.assertEqual(dapo["loss_type"], "dapo")
+        self.assertEqual(dapo["epsilon"], 0.2)
+        self.assertEqual(dapo["epsilon_high"], 0.28)
+        self.assertEqual(dapo["beta"], 0.0)
         self.assertTrue(dapo["mask_truncated_completions"])
 
     def test_exact_match_dominates_bounded_f1_shaping(self):
