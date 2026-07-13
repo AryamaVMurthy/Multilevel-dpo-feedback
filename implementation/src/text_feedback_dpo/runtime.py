@@ -7,6 +7,7 @@ from typing import Any
 
 
 TOTAL_CONTEXT_TOKENS = 4096
+RETRY_CAP_BUCKET_TOKENS = 256
 PRIMARY_TEACHER_MODEL = "Qwen/Qwen3-32B"
 FALLBACK_TEACHER_MODEL = "Qwen/Qwen3-14B"
 
@@ -100,39 +101,48 @@ def bounded_teacher_outputs(
     }
     retry_indices = sorted(set(malformed + invalid_content))
     if retry_indices:
-        retry_prompt_counts = [prompt_token_counts[index] for index in retry_indices]
-        retry_input_limit = TOTAL_CONTEXT_TOKENS - retry_max_new_tokens
-        if max(retry_prompt_counts) > retry_input_limit:
-            raise RuntimeErrorExplicit(
-                "teacher retry prompt budget exceeded: "
-                f"max_prompt_tokens={max(retry_prompt_counts)} max_input_tokens={retry_input_limit}"
-            )
-        retry_prompts = [prompts[index] for index in retry_indices]
-        retry_raw = generate(retry_prompts, max_new_tokens=retry_max_new_tokens)
-        if not isinstance(retry_raw, list) or len(retry_raw) != len(retry_prompts) or any(
-            not isinstance(item, str) for item in retry_raw
-        ):
-            raise RuntimeErrorExplicit("retry teacher generation cardinality/type mismatch")
-        retry_counts = [token_count(item) for item in retry_raw]
-        report["retry_output_token_counts"] = retry_counts
+        def retry_cap(prompt_count: int) -> int:
+            available = TOTAL_CONTEXT_TOKENS - prompt_count
+            if available <= primary_max_new_tokens:
+                raise RuntimeErrorExplicit(
+                    "teacher retry prompt budget leaves no larger legal retry: "
+                    f"prompt_tokens={prompt_count} available_output_tokens={available} "
+                    f"primary_max_new_tokens={primary_max_new_tokens}"
+                )
+            cap = min(retry_max_new_tokens, available)
+            bucketed = (cap // RETRY_CAP_BUCKET_TOKENS) * RETRY_CAP_BUCKET_TOKENS
+            return bucketed if bucketed > primary_max_new_tokens else cap
+
+        retry_caps_by_index = {index: retry_cap(prompt_token_counts[index]) for index in retry_indices}
+        report["retry_output_caps"] = [retry_caps_by_index[index] for index in retry_indices]
+        retry_output_counts_by_index: dict[int, int] = {}
         retry_malformed: list[int] = []
         retry_invalid_content: list[int] = []
-        for retry_position, (original_index, text) in enumerate(zip(retry_indices, retry_raw, strict=True)):
-            try:
-                final[original_index] = extract_valid_content(text, original_index)
-            except RuntimeErrorExplicit:
+        retry_groups: dict[int, list[int]] = {}
+        for index in retry_indices:
+            retry_groups.setdefault(retry_caps_by_index[index], []).append(index)
+        for cap, group in sorted(retry_groups.items()):
+            retry_raw = generate([prompts[index] for index in group], max_new_tokens=cap)
+            if not isinstance(retry_raw, list) or len(retry_raw) != len(group) or any(
+                not isinstance(item, str) for item in retry_raw
+            ):
+                raise RuntimeErrorExplicit("retry teacher generation cardinality/type mismatch")
+            for original_index, text in zip(group, retry_raw, strict=True):
+                retry_output_counts_by_index[original_index] = token_count(text)
                 try:
-                    extract_qwen_final_content(text)
+                    final[original_index] = extract_valid_content(text, original_index)
                 except RuntimeErrorExplicit:
-                    retry_malformed.append(retry_position)
-                else:
-                    retry_invalid_content.append(retry_position)
-        report["retry_malformed_indices"] = retry_malformed
-        report["retry_invalid_content_indices"] = retry_invalid_content
+                    try:
+                        extract_qwen_final_content(text)
+                    except RuntimeErrorExplicit:
+                        retry_malformed.append(original_index)
+                    else:
+                        retry_invalid_content.append(original_index)
+        report["retry_output_token_counts"] = [retry_output_counts_by_index[index] for index in retry_indices]
+        report["retry_malformed_indices"] = sorted(retry_malformed)
+        report["retry_invalid_content_indices"] = sorted(retry_invalid_content)
         if retry_malformed or retry_invalid_content:
-            original_indices = [
-                retry_indices[position] for position in retry_malformed + retry_invalid_content
-            ]
+            original_indices = sorted(retry_malformed + retry_invalid_content)
             raise RuntimeErrorExplicit(
                 "teacher thinking retry exhausted or remained malformed at original indices: "
                 + ",".join(str(index) for index in original_indices)

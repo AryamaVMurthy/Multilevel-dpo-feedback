@@ -93,6 +93,32 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(report["retry_indices"], [0])
         self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
 
+    def test_teacher_retry_caps_are_batched_within_each_row_context_budget(self):
+        calls = []
+
+        def generate(prompts, *, max_new_tokens):
+            calls.append((list(prompts), max_new_tokens))
+            if max_new_tokens == 128:
+                return ["<think>unfinished", "<think>unfinished"]
+            return ['<think>done</think>{"hint":"Inspect the associated person."}' for _ in prompts]
+
+        outputs, report = bounded_teacher_outputs(
+            ["short", "long"],
+            prompt_token_counts=[100, 2500],
+            primary_max_new_tokens=128,
+            retry_max_new_tokens=3072,
+            generate=generate,
+            token_count=lambda text: 12,
+        )
+        self.assertEqual(calls[0], (["short", "long"], 128))
+        self.assertEqual({call[1] for call in calls[1:]}, {1536, 3072})
+        self.assertEqual(report["retry_indices"], [0, 1])
+        self.assertEqual(len(report["retry_output_caps"]), 2)
+        self.assertEqual(outputs, [
+            '{"hint":"Inspect the associated person."}',
+            '{"hint":"Inspect the associated person."}',
+        ])
+
     def test_teacher_retries_per_row_gold_leakage_contract(self):
         calls = []
 
@@ -117,9 +143,9 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(outputs, ['{"hint":"Inspect the associated person."}'])
 
     def test_teacher_bounded_retry_fails_if_retry_prompt_or_output_exhausts_contract(self):
-        with self.assertRaisesRegex(RuntimeErrorExplicit, "retry prompt budget"):
+        with self.assertRaisesRegex(RuntimeErrorExplicit, "no larger legal retry"):
             bounded_teacher_outputs(
-                ["p"], prompt_token_counts=[3000], primary_max_new_tokens=1024,
+                ["p"], prompt_token_counts=[3100], primary_max_new_tokens=1024,
                 retry_max_new_tokens=2048,
                 generate=lambda _prompts, **_kwargs: ["<think>unfinished"],
                 token_count=lambda _text: 1024,
