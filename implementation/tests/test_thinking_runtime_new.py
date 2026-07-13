@@ -7,6 +7,7 @@ from text_feedback_dpo.runtime import (
     extract_qwen_final_content,
     generate_student_batch,
     render_teacher_prompts,
+    validate_teacher_identity,
 )
 
 
@@ -20,6 +21,26 @@ class FakeTeacherTokenizer:
 
 
 class ThinkingRuntimeTest(unittest.TestCase):
+    def test_teacher_identity_is_pinned_qwen3_instruct_with_explicit_fallback(self):
+        self.assertEqual(
+            validate_teacher_identity("Qwen/Qwen3-32B", revision="teacher-rev", quantization="4bit", fallback_reason=None),
+            "primary_qwen3_32b_4bit",
+        )
+        with self.assertRaisesRegex(ValueError, "Qwen3-32B"):
+            validate_teacher_identity("other/model", revision="rev", quantization="4bit", fallback_reason=None)
+        with self.assertRaisesRegex(ValueError, "pinned revision"):
+            validate_teacher_identity("Qwen/Qwen3-32B", revision="", quantization="4bit", fallback_reason=None)
+        with self.assertRaisesRegex(ValueError, "4bit"):
+            validate_teacher_identity("Qwen/Qwen3-32B", revision="rev", quantization="bf16", fallback_reason=None)
+        with self.assertRaisesRegex(ValueError, "fallback reason"):
+            validate_teacher_identity("Qwen/Qwen3-14B", revision="rev", quantization="4bit", fallback_reason=None)
+        self.assertEqual(
+            validate_teacher_identity(
+                "Qwen/Qwen3-14B", revision="teacher-rev", quantization="4bit",
+                fallback_reason="32B does not fit the measured allocation",
+            ),
+            "fallback_qwen3_14b_4bit",
+        )
     def test_direct_student_generation_requires_exact_batch_cardinality(self):
         with self.assertRaisesRegex(RuntimeError, "answer batch cardinality"):
             generate_student_batch(

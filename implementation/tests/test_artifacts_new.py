@@ -23,20 +23,12 @@ class ArtifactTest(unittest.TestCase):
         self.assertNotIn("<response>", rows[0]["prompt"] + rows[0]["completion"])
         self.assertNotIn("gold_answer", rows[0]["prompt"])
 
-    def test_dpo_completions_preserve_the_token_boundary_after_answer_colon(self):
-        rows = build_preference_rows({
-            "id": "q1",
-            "resolved": True,
-            "prompt": "Question: Who?\n\nAnswer:",
-            "chosen": "Ada",
-            "attempts": [
-                {"attempt_index": 0, "response": "Grace", "correct": False},
-                {"attempt_index": 1, "response": "Ada", "correct": True},
-            ],
-            "interventions": [{"level": 1, "hint": "Recheck the person."}],
-        })
-        self.assertEqual(rows[0]["chosen"], " Ada")
-        self.assertEqual(rows[0]["rejected"], " Grace")
+    def test_active_preference_builder_rejects_archival_plain_answer_schema(self):
+        with self.assertRaisesRegex(ValueError, "active trajectory"):
+            build_preference_rows({
+                "id": "q1", "resolved": True, "prompt": "Question: Who?\n\nAnswer:",
+                "chosen": "Ada", "attempts": [{"attempt_index": 0, "response": "Grace", "correct": False}],
+            })
 
     def test_validate_artifacts_fails_when_required_manifest_is_missing(self):
         with TemporaryDirectory() as tmp:
@@ -85,6 +77,45 @@ class ArtifactTest(unittest.TestCase):
             manifest["rows"] = 999
             (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "manifest rows.*artifact row count"):
+                validate_artifacts(root)
+
+    def test_active_manifest_rejects_unknown_format_and_self_consistent_wrong_protocol_identity(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "predictions.jsonl"
+            artifact.write_text('{"id":"1"}\n', encoding="utf-8")
+            source_identity = {"identity": "searchqa.search_results.v1", "version": 1}
+            prompt_identity = {"identity": "fixed-retrieval-cited-v1"}
+            response_identity = {"identity": "cited-response", "schema_version": 1}
+            manifest = {
+                "command": "generate-searchqa", "max_length": 4096, "rows": 1,
+                "model": {"identity": "model", "revision": "rev", "policy_hash": "policy"},
+                "dataset": {"source": "searchqa", "revision": "data-rev", "sha256": "a" * 64},
+                "source_schema": {**source_identity, "sha256": self._identity_hash(source_identity)},
+                "retrieval": {"identity": "fixed_bm25", "schema_version": 1, "requested_top_k": 8, "k1": 1.2, "b": 0.75},
+                "prompt": {**prompt_identity, "sha256": self._identity_hash(prompt_identity)},
+                "response": {**response_identity, "sha256": self._identity_hash(response_identity)},
+                "generation": {"context_budget": 4096, "query_max_new_tokens": 32, "response_max_new_tokens": 256},
+                "timing": {"pipeline_wall_ms": 1.0}, "required_files": [artifact.name],
+                "artifacts": [{"path": artifact.name, "format": "jsonl", "rows": 1, "bytes": artifact.stat().st_size,
+                               "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}],
+            }
+            for section, identity in (
+                ("prompt", {"identity": "self-consistent-but-wrong"}),
+                ("response", {"identity": "wrong-response", "schema_version": 1}),
+            ):
+                with self.subTest(section=section):
+                    changed = json.loads(json.dumps(manifest))
+                    changed[section] = {**identity, "sha256": self._identity_hash(identity)}
+                    (root / "manifest.json").write_text(json.dumps(changed), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, f"{section} identity"):
+                        validate_artifacts(root)
+
+            changed = json.loads(json.dumps(manifest))
+            changed["artifacts"][0]["format"] = "text"
+            changed["artifacts"][0]["rows"] = 999
+            (root / "manifest.json").write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "supported format"):
                 validate_artifacts(root)
 
 

@@ -15,6 +15,15 @@ class MinimalFeedback:
     hint: str
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise FeedbackFormatError(f"duplicate JSON key: {key}")
+        payload[key] = value
+    return payload
+
+
 def _normalized_tokens(value: str) -> tuple[str, ...]:
     value = unicodedata.normalize("NFKC", value).casefold()
     return tuple(re.findall(r"[\w]+", value, flags=re.UNICODE))
@@ -34,7 +43,9 @@ def _contains_gold_leak(hint: str, gold_answer: str) -> bool:
 
 def parse_feedback(text: str, *, gold_answer: str) -> MinimalFeedback:
     try:
-        payload = json.loads(text)
+        payload = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except FeedbackFormatError:
+        raise
     except (json.JSONDecodeError, TypeError) as exc:
         raise FeedbackFormatError(f"invalid JSON feedback: {exc}") from exc
     if not isinstance(payload, dict) or set(payload) != {"hint"}:

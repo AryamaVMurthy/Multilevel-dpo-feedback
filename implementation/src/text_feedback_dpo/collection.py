@@ -6,7 +6,14 @@ from typing import Any
 from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
 from text_feedback_dpo.preferences import build_preference_rows
 from text_feedback_dpo.prompts import build_search_query_prompt, build_teacher_prompt
-from text_feedback_dpo.trajectories import TrajectoryError, _intervention_metadata, _success, validate_active_artifact
+from text_feedback_dpo.trajectories import (
+    TrajectoryError,
+    _structured_hash,
+    _intervention_metadata,
+    _success,
+    rank_interventions,
+    validate_active_artifact,
+)
 
 
 def _validate_ids(examples: Sequence[Mapping[str, object]]) -> list[str]:
@@ -58,16 +65,14 @@ def _batch_siblings(
         for request, output in zip(
             [item for item in requests if item["id"] == example_id], output_by_id[example_id], strict=True
         ):
-            artifact = validate_active_artifact(output, example_id=example_id, no_hint=True)
-            if artifact.get("query_prompt") and artifact["query_prompt"] != request["query_prompt"]:
+            artifact = validate_active_artifact(output, example=state["example"], hints=[])
+            if artifact["query_prompt"] != request["query_prompt"]:
                 raise TrajectoryError(f"no-hint sibling query prompt mismatch for {example_id}")
             if "Hints:" in str(artifact.get("query_prompt", "")) or "Hints:" in str(artifact.get("response_prompt", "")):
                 raise TrajectoryError(f"no-hint sibling contains a hinted prompt for {example_id}")
             for key in ("policy_hash", "prompt_version", "response_schema_version", "evaluator_version"):
                 if key not in chosen or artifact.get(key) != chosen.get(key):
                     raise TrajectoryError(f"no-hint sibling {key} mismatch for {example_id}")
-            if artifact.get("response_prompt_hash") != chosen.get("response_prompt_hash"):
-                raise TrajectoryError(f"no-hint sibling response prompt context mismatch for {example_id}")
             artifact["seed"] = request["seed"]
             artifact["future_sibling_gain"] = 1.0 if _success(artifact) else 0.0
             artifact["verified_no_hint_success"] = _success(artifact)
@@ -90,6 +95,7 @@ def _batch_siblings(
             intervention["future_sibling_gain_denominator"] = denominator
             intervention["efficiency_numerator"] = gain
             intervention["efficiency_score"] = gain / intervention["efficiency_denominator"]
+        state["ranked_interventions"] = rank_interventions(state["interventions"])
 
 
 def collect_dataset_batchwise(
@@ -100,30 +106,44 @@ def collect_dataset_batchwise(
     max_interventions: int,
     sibling_generate_batch: Callable[..., list[object]] | None = None,
     sibling_seeds: Sequence[int] = (),
+    student_seed: int,
 ) -> list[dict]:
     if not isinstance(max_interventions, int) or max_interventions < 0:
         raise ValueError("max_interventions must be a nonnegative integer")
+    if isinstance(student_seed, bool) or not isinstance(student_seed, int) or student_seed < 0:
+        raise ValueError("student_seed must be a nonnegative integer")
     ids = _validate_ids(examples)
     states: dict[str, dict[str, Any]] = {
         example_id: {
             "id": example_id, "example": example, "hints": [], "attempts": [], "interventions": [],
             "resolved": False, "chosen": None, "query_prompt": build_search_query_prompt(example, []),
             "no_hint_siblings": [], "training_eligible": False,
+            "ranked_interventions": [],
         }
         for example_id, example in zip(ids, examples, strict=True)
     }
     active = ids[:]
     for attempt_index in range(max_interventions + 1):
-        prompts = [build_search_query_prompt(states[example_id]["example"], states[example_id]["hints"]) for example_id in active]
-        outputs = student_generate_batch(prompts, max_new_tokens=32, temperature=0.7, top_p=0.9)
+        requests = [{
+            "id": example_id,
+            "example": states[example_id]["example"],
+            "hints": list(states[example_id]["hints"]),
+            "no_hint": not states[example_id]["hints"],
+            "seed": student_seed + attempt_index,
+            "query_prompt": build_search_query_prompt(states[example_id]["example"], states[example_id]["hints"]),
+        } for example_id in active]
+        outputs = student_generate_batch(
+            requests, attempt_index=attempt_index, seed=student_seed + attempt_index,
+            max_new_tokens=32, temperature=0.7, top_p=0.9,
+        )
         if not isinstance(outputs, list) or len(outputs) != len(active):
             raise ValueError(f"student batch cardinality mismatch at attempt {attempt_index}")
         failed_ids: list[str] = []
         teacher_prompts: list[str] = []
-        for example_id, output in zip(active, outputs, strict=True):
+        for request, output in zip(requests, outputs, strict=True):
+            example_id = request["id"]
             state = states[example_id]
-            artifact = validate_active_artifact(output, example_id=example_id, no_hint=not state["hints"])
-            artifact["query_prompt"] = prompts[active.index(example_id)]
+            artifact = validate_active_artifact(output, example=state["example"], hints=state["hints"])
             diagnostics = diagnose_attempt(artifact)
             correct = _success(artifact)
             state["attempts"].append({
@@ -171,12 +191,15 @@ def collect_dataset_batchwise(
         else:
             for example_id in resolved_after_hint:
                 states[example_id]["sibling_verification"] = {"status": "missing_sibling_generator", "eligible": False}
+                states[example_id]["ranked_interventions"] = []
     rows = []
     for example_id in ids:
         state = states[example_id]
         trajectory = {
             "id": state["id"], "prompt": state["query_prompt"], "query_prompt": state["query_prompt"],
+            "query_prompt_hash": _structured_hash(state["query_prompt"]),
             "attempts": state["attempts"], "interventions": state["interventions"],
+            "ranked_interventions": state["ranked_interventions"],
             "chosen": state["chosen"], "resolved": state["resolved"],
             "no_hint_siblings": state["no_hint_siblings"],
             "sibling_verification": state.get("sibling_verification", {"status": "not_required"}),
@@ -184,7 +207,7 @@ def collect_dataset_batchwise(
         }
         if trajectory["chosen"]:
             chosen = trajectory["chosen"]
-            for key in ("policy_hash", "query_prompt_hash", "response_prompt_hash", "evaluator_version"):
+            for key in ("policy_hash", "response_prompt_hash", "evaluator_version"):
                 if key in chosen:
                     trajectory[key] = chosen[key]
         trajectory["preference_rows"] = build_preference_rows(trajectory) if trajectory["training_eligible"] else []

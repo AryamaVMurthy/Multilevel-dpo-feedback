@@ -109,6 +109,7 @@ def cmd_probe_model(args: argparse.Namespace) -> None:
 
     model = load_teacher(
         args.model, revision=args.model_revision, quantization=args.teacher_quantization,
+        fallback_reason=args.teacher_fallback_reason,
         attention_implementation=args.attention_implementation,
     )
     prompt = build_teacher_prompt(
@@ -413,51 +414,125 @@ def cmd_build_preferences(args: argparse.Namespace) -> None:
 
 
 def cmd_collect(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.batch_generation import (
+        EVALUATOR_VERSION,
+        FIXED_B,
+        FIXED_K1,
+        FIXED_TOP_K,
+        PROMPT_VERSION,
+        RESPONSE_SCHEMA_VERSION,
+        run_fixed_retrieval_pipeline,
+    )
     from text_feedback_dpo.collection import collect_dataset_batchwise
     from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
     from text_feedback_dpo.runtime import (
         extract_qwen_final_content,
         generate_batch,
+        generate_batch_records,
         generate_student_batch,
         load_student,
         load_teacher,
         load_tokenizer,
         render_teacher_prompts,
+        set_generation_seed,
+        validate_teacher_identity,
     )
+    from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
 
     examples = read_jsonl(args.data)
-    teacher_reason = "trajectory_cache_reused_or_primary_teacher_loaded"
+    if args.prompt_version != PROMPT_VERSION:
+        raise ValueError(f"collect prompt_version must be {PROMPT_VERSION}")
+    if args.sibling_count <= 0 or len(args.sibling_seeds) != args.sibling_count:
+        raise ValueError("sibling_count must be positive and exactly match sibling_seeds")
+    if len(set(args.sibling_seeds)) != len(args.sibling_seeds) or any(seed < 0 for seed in args.sibling_seeds):
+        raise ValueError("sibling_seeds must be unique nonnegative integers")
+    if args.student_batch_size <= 0 or args.teacher_batch_size <= 0:
+        raise ValueError("student_batch_size and teacher_batch_size must be positive")
+    teacher_identity = validate_teacher_identity(
+        args.teacher_model,
+        revision=args.teacher_revision,
+        quantization=args.teacher_quantization,
+        fallback_reason=args.teacher_fallback_reason,
+    )
+
     def generate_trajectories(pending):
         student_tokenizer = load_tokenizer(args.student_model, revision=args.student_revision)
         student = load_student(args.student_model, revision=args.student_revision, attention_implementation=args.attention_implementation, device=args.student_device)
         teacher_tokenizer = load_tokenizer(args.teacher_model, revision=args.teacher_revision)
-        teacher = load_teacher(args.teacher_model, revision=args.teacher_revision, quantization=args.teacher_quantization, attention_implementation=args.attention_implementation, device=args.teacher_device)
-        probe = render_teacher_prompts(teacher_tokenizer, ['Return exactly: {"hint":"Recheck."}'], enable_thinking=args.teacher_thinking)
-        generate_batch(teacher, teacher_tokenizer, probe, max_new_tokens=1, temperature=0.0, top_p=1.0)
-
-        if args.student_batch_size <= 0 or args.teacher_batch_size <= 0:
-            raise ValueError("student_batch_size and teacher_batch_size must be positive")
-
+        teacher = load_teacher(
+            args.teacher_model, revision=args.teacher_revision, quantization=args.teacher_quantization,
+            fallback_reason=args.teacher_fallback_reason,
+            attention_implementation=args.attention_implementation, device=args.teacher_device,
+        )
         def batched_generate(model, tokenizer, prompts, *, batch_size, **kwargs):
             outputs = []
             for start in range(0, len(prompts), batch_size):
                 outputs.extend(generate_batch(model, tokenizer, prompts[start : start + batch_size], **kwargs))
             return outputs
 
-        def student_batch(prompts, **kwargs):
-            generations = []
-            for start in range(0, len(prompts), args.student_batch_size):
-                generations.extend(generate_student_batch(
-                    student,
-                    student_tokenizer,
-                    prompts[start : start + args.student_batch_size],
-                    mode=args.student_thinking_mode,
+        def generate_stage(prompts, *, max_new_tokens, temperature, instruction, scratchpad_instruction):
+            if args.student_thinking_mode == "two_pass":
+                return generate_student_batch(
+                    student, student_tokenizer, prompts, mode="two_pass",
                     scratchpad_max_new_tokens=args.scratchpad_max_new_tokens,
-                    answer_max_new_tokens=args.answer_max_new_tokens,
-                    temperature=kwargs["temperature"],
-                    top_p=kwargs["top_p"],
+                    answer_max_new_tokens=max_new_tokens, temperature=temperature,
+                    top_p=args.student_top_p,
+                    generation_fn=lambda _model, _tokenizer, batch_prompts, **kwargs: generate_batch_records(
+                        student, student_tokenizer, batch_prompts, context_budget=4096, **kwargs
+                    ),
+                    visible_instruction=instruction,
+                    scratchpad_instruction=scratchpad_instruction,
+                )
+            outputs = []
+            for start in range(0, len(prompts), args.student_batch_size):
+                outputs.extend(generate_batch_records(
+                    student, student_tokenizer, prompts[start : start + args.student_batch_size],
+                    max_new_tokens=max_new_tokens, temperature=temperature,
+                    top_p=args.student_top_p, context_budget=4096,
                 ))
-            return [generation.response for generation in generations]
+            return outputs
+
+        def run_student_requests(requests, *, seed):
+            if not isinstance(requests, list) or not requests:
+                raise ValueError("student active generation requires a nonempty request batch")
+            if any(not isinstance(request, dict) for request in requests):
+                raise ValueError("student active requests must be mappings")
+            expected_ids = [request.get("id") for request in requests]
+            rows = [request["example"] for request in requests]
+            if [row.get("id") for row in rows] != expected_ids:
+                raise ValueError("student active request ID parity mismatch")
+            set_generation_seed(seed)
+            return run_fixed_retrieval_pipeline(
+                rows,
+                query_generate_batch=lambda prompts: generate_stage(
+                    prompts, max_new_tokens=args.query_max_new_tokens,
+                    temperature=args.student_temperature,
+                    instruction="Return exactly one nonempty one-line plain-text search query. Do not use XML, JSON, code fences, or labels.",
+                    scratchpad_instruction="Privately identify retrieval terms and entities only; do not solve the question or draft the answer.",
+                ),
+                response_generate_batch=lambda prompts: generate_stage(
+                    prompts, max_new_tokens=args.response_max_new_tokens,
+                    temperature=args.student_temperature,
+                    instruction="Return exactly the requested three-line Answer/Reasoning/Sources response in plain text.",
+                    scratchpad_instruction="Privately reason over the retrieved sources and citation order; do not emit or imitate this scratchpad.",
+                ),
+                query_batch_size=args.student_batch_size,
+                response_batch_size=args.student_batch_size,
+                top_k=FIXED_TOP_K, k1=FIXED_K1, b=FIXED_B,
+                policy_hash=args.policy_hash, prompt_version=args.prompt_version,
+                response_schema_version=RESPONSE_SCHEMA_VERSION,
+                evaluator_version=EVALUATOR_VERSION,
+                hints_by_id={request["id"]: list(request["hints"]) for request in requests},
+            )
+
+        def student_batch(requests, **kwargs):
+            return run_student_requests(requests, seed=kwargs["seed"])
+
+        def sibling_batch(requests, **_kwargs):
+            outputs = []
+            for request in requests:
+                outputs.extend(run_student_requests([request], seed=request["seed"]))
+            return outputs
 
         def teacher_batch(prompts, **kwargs):
             rendered = render_teacher_prompts(teacher_tokenizer, prompts, enable_thinking=args.teacher_thinking)
@@ -469,23 +544,56 @@ def cmd_collect(args: argparse.Namespace) -> None:
             )
             return [extract_qwen_final_content(text) for text in raw]
 
-        return collect_dataset_batchwise(examples=pending, student_generate_batch=student_batch, teacher_generate_batch=teacher_batch, max_interventions=args.max_interventions)
+        return collect_dataset_batchwise(
+            examples=pending,
+            student_generate_batch=student_batch,
+            teacher_generate_batch=teacher_batch,
+            max_interventions=args.max_interventions,
+            sibling_generate_batch=sibling_batch,
+            sibling_seeds=args.sibling_seeds,
+            student_seed=args.seed,
+        )
+
+    source_identity = {"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}
+    retrieval_config = {
+        "identity": "fixed_bm25", "schema_version": 1,
+        "requested_top_k": FIXED_TOP_K, "k1": FIXED_K1, "b": FIXED_B,
+    }
+    prompt_identity = {"identity": PROMPT_VERSION}
+    response_identity = {"identity": "cited-response", "schema_version": RESPONSE_SCHEMA_VERSION}
+    evaluator_identity = {"identity": EVALUATOR_VERSION}
 
     cache_manifest = build_cache_manifest(
         student_model=args.student_model,
         student_revision=args.student_revision,
         teacher_model=args.teacher_model,
         teacher_revision=args.teacher_revision,
+        teacher_identity=teacher_identity,
+        teacher_quantization=args.teacher_quantization,
+        teacher_fallback_reason=args.teacher_fallback_reason,
         dataset_revision=args.dataset_revision,
+        dataset_hash=_sha256_file(args.data),
+        dataset_schema=SOURCE_SCHEMA,
+        source_schema_version=SOURCE_SCHEMA_VERSION,
+        source_schema_hash=_identity_hash(source_identity),
+        retrieval_config=retrieval_config,
+        retrieval_hash=_identity_hash(retrieval_config),
         prompt_version=args.prompt_version,
+        prompt_hash=_identity_hash(prompt_identity),
+        response_schema_version=RESPONSE_SCHEMA_VERSION,
+        response_schema_hash=_identity_hash(response_identity),
+        evaluator_version=EVALUATOR_VERSION,
+        evaluator_hash=_identity_hash(evaluator_identity),
+        policy_version=args.policy_version,
         student_thinking_mode=args.student_thinking_mode,
         teacher_thinking=args.teacher_thinking,
         decoding={
-            "max_length": 4096,
-            "answer_max_new_tokens": args.answer_max_new_tokens,
+            "context_budget": 4096,
+            "query_max_new_tokens": args.query_max_new_tokens,
+            "response_max_new_tokens": args.response_max_new_tokens,
             "scratchpad_max_new_tokens": args.scratchpad_max_new_tokens,
-            "student_temperature": 0.7,
-            "student_top_p": 0.9,
+            "student_temperature": args.student_temperature,
+            "student_top_p": args.student_top_p,
             "teacher_max_new_tokens": args.teacher_max_new_tokens,
             "teacher_temperature": 0.0,
             "teacher_top_p": 1.0,
@@ -493,12 +601,19 @@ def cmd_collect(args: argparse.Namespace) -> None:
             "teacher_batch_size": args.teacher_batch_size,
         },
         intervention_policy={"max_interventions": args.max_interventions, "max_hint_words": 24},
+        sibling_count=args.sibling_count,
+        sibling_seeds=list(args.sibling_seeds),
         seed=args.seed,
         policy_hash=args.policy_hash,
     )
     rows = load_or_build_trajectories(examples=examples, cache_path=args.trajectory_cache, cache_manifest=cache_manifest, generate=generate_trajectories)
     write_jsonl(rows, args.output)
-    manifest = {"student_model": args.student_model, "teacher_model": args.teacher_model, "teacher_reason": teacher_reason, "student_thinking_mode": args.student_thinking_mode, "teacher_thinking": args.teacher_thinking, "max_length": 4096, "max_interventions": args.max_interventions, "required_files": [args.output.name]}
+    manifest = {
+        "command": "collect", "max_length": 4096, "rows": len(rows),
+        "cache_identity": cache_manifest, "teacher_identity": teacher_identity,
+        "sibling_count": args.sibling_count, "sibling_seeds": list(args.sibling_seeds),
+        "required_files": [args.output.name],
+    }
     write_json(args.output.with_suffix(".manifest.json"), manifest)
     write_json(args.output.parent / "manifest.json", manifest)
 
@@ -543,6 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--model", required=True)
     probe.add_argument("--model-revision", required=True)
     probe.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
+    probe.add_argument("--teacher-fallback-reason")
     probe.add_argument("--teacher-max-new-tokens", type=int, default=512)
     probe.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), default="sdpa")
     probe.add_argument("--output", required=True, type=Path)
@@ -639,8 +755,10 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--teacher-revision", required=True)
     collect.add_argument("--dataset-revision", required=True)
     collect.add_argument("--prompt-version", required=True)
+    collect.add_argument("--policy-version", required=True)
     collect.add_argument("--seed", required=True, type=int)
     collect.add_argument("--teacher-quantization", choices=("4bit", "bf16"), required=True)
+    collect.add_argument("--teacher-fallback-reason")
     collect.add_argument("--attention-implementation", choices=("sdpa", "flash_attention_2"), required=True)
     collect.add_argument("--student-device", required=True)
     collect.add_argument("--teacher-device", required=True)
@@ -649,11 +767,16 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--teacher-batch-size", type=int, default=8)
     collect.add_argument("--student-thinking-mode", choices=("direct", "two_pass"), default="direct")
     collect.add_argument("--scratchpad-max-new-tokens", type=int, default=256)
-    collect.add_argument("--answer-max-new-tokens", type=int, default=32)
+    collect.add_argument("--query-max-new-tokens", type=int, default=32)
+    collect.add_argument("--response-max-new-tokens", type=int, default=256)
+    collect.add_argument("--student-temperature", type=float, default=0.7)
+    collect.add_argument("--student-top-p", type=float, default=0.9)
     collect.add_argument("--teacher-max-new-tokens", type=int, default=512)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)
+    collect.add_argument("--sibling-count", required=True, type=int)
+    collect.add_argument("--sibling-seeds", required=True, nargs="+", type=int)
     collect.set_defaults(func=cmd_collect)
     for method in ("sft", "dpo", "grpo", "dapo"):
         train = sub.add_parser(f"train-{method}")

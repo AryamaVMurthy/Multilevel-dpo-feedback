@@ -19,8 +19,10 @@ FIXED_K1 = 1.2
 FIXED_B = 0.75
 PROMPT_VERSION = "fixed-retrieval-cited-v1"
 RESPONSE_SCHEMA_VERSION = 1
+EVALUATOR_VERSION = "cited-response-evaluator-v1"
 MAX_QUERY_TOKENS = 16
 _TAG_PATTERN = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
+_TAG_FRAGMENT_PATTERN = re.compile(r"<\s*/?\s*[A-Za-z][\w:.-]*")
 _RESPONSE_LABEL_PATTERN = re.compile(r"^(?:answer|reasoning|sources|search\s+query)\s*:", re.IGNORECASE)
 
 
@@ -142,10 +144,18 @@ def parse_search_query(text: str) -> str:
         raise ValueError(f"query_invalid_format: query exceeds {MAX_QUERY_TOKENS} searchable tokens")
     if "```" in stripped:
         raise ValueError("query_invalid_format: code fences are forbidden")
-    if (stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]")):
-        raise ValueError("query_invalid_format: JSON is forbidden")
-    if _TAG_PATTERN.search(stripped):
-        raise ValueError("query_invalid_format: tag-like XML is forbidden")
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(stripped):
+        if character not in "{[":
+            continue
+        try:
+            embedded, _end = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(embedded, (dict, list)):
+            raise ValueError("query_invalid_format: embedded JSON objects or arrays are forbidden")
+    if _TAG_PATTERN.search(stripped) or _TAG_FRAGMENT_PATTERN.search(stripped):
+        raise ValueError("query_invalid_format: XML or tag-like markup is forbidden")
     if _RESPONSE_LABEL_PATTERN.match(stripped):
         raise ValueError("query_invalid_format: response labels are forbidden")
     return stripped
@@ -172,6 +182,30 @@ def _add_protocol_metrics(score: dict, *, protocol_valid: bool) -> dict:
     }
 
 
+def canonical_cited_score(
+    raw_response: str,
+    gold_answer: str,
+    ranked_sources: list[dict],
+    *,
+    truncated: bool,
+) -> dict:
+    """Return the exact persisted Task 5 cited-response evaluator record."""
+    score = score_cited_response(raw_response, gold_answer, ranked_sources, truncated=truncated)
+    canonical = _add_protocol_metrics(score, protocol_valid=bool(score["parse_valid"] and not truncated))
+    if not truncated:
+        return canonical
+    return {
+        **canonical,
+        "parse_valid": False,
+        "correct": False,
+        "malformed_response": True,
+        "error_code": "response_truncated",
+        "lexical_cited_answer_support": 0.0,
+        "citation_precision": 0.0,
+        "citation_recall": 0.0,
+    }
+
+
 def run_fixed_retrieval_pipeline(
     rows: list[dict],
     *,
@@ -185,6 +219,8 @@ def run_fixed_retrieval_pipeline(
     policy_hash: str,
     prompt_version: str = PROMPT_VERSION,
     response_schema_version: int = RESPONSE_SCHEMA_VERSION,
+    hints_by_id: dict[str, list[str]] | None = None,
+    evaluator_version: str = EVALUATOR_VERSION,
 ) -> list[dict]:
     """Run structured SearchQA query, fixed retrieval, and cited-response generation."""
     _validate_rows(rows)
@@ -196,10 +232,19 @@ def run_fixed_retrieval_pipeline(
         raise ValueError("prompt_version must be a non-empty string")
     if response_schema_version != RESPONSE_SCHEMA_VERSION:
         raise ValueError(f"response_schema_version must be {RESPONSE_SCHEMA_VERSION}")
+    if not isinstance(evaluator_version, str) or not evaluator_version.strip():
+        raise ValueError("evaluator_version must be a non-empty string")
+    if hints_by_id is None:
+        hints_by_id = {row["id"]: [] for row in rows}
+    if not isinstance(hints_by_id, dict) or set(hints_by_id) != {row["id"] for row in rows}:
+        raise ValueError("hints_by_id must have exact ID parity with active SearchQA rows")
+    for example_id, hints in hints_by_id.items():
+        if not isinstance(hints, list) or not all(isinstance(hint, str) and hint.strip() for hint in hints):
+            raise ValueError(f"hints_by_id for {example_id} must be a list of non-empty strings")
 
     pipeline_started = time.perf_counter_ns()
     gold_by_id = {row["id"]: row["gold_answer"] for row in rows}
-    query_prompts = [build_search_query_prompt(row, []) for row in rows]
+    query_prompts = [build_search_query_prompt(row, hints_by_id[row["id"]]) for row in rows]
     query_prompt_hashes = [_hash(prompt, context=f"query prompt at index {index}") for index, prompt in enumerate(query_prompts)]
     query_started = time.perf_counter_ns()
     query_records = _call_batch(query_generate_batch, query_prompts, batch_size=query_batch_size)
@@ -217,17 +262,24 @@ def run_fixed_retrieval_pipeline(
             "raw_response": None,
             "parsed_response": None,
             "rendered_visible_response": None,
+            "query_prompt": prompt,
+            "response_prompt": None,
             "prompt_version": prompt_version,
             "response_schema_version": response_schema_version,
             "source_schema_version": SOURCE_SCHEMA_VERSION,
             "schema_version": response_schema_version,
             "policy_hash": policy_hash,
+            "evaluator_version": evaluator_version,
+            "provenance": "student",
+            "no_hint": not bool(hints_by_id[row["id"]]),
             "input_hash": _hash(
                 {"id": row["id"], "question": row["question"], "sources": row["sources"]},
                 context=f"input row {row['id']}",
             ),
             "query_prompt_hash": prompt_hash,
             "response_prompt_hash": None,
+            "retrieval_context_hash": _hash([], context=f"empty retrieval context for {row['id']}"),
+            "canonical_ranked_search_results": [],
             "query_truncated": query_truncated,
             "response_truncated": False,
             "truncated": query_truncated,
@@ -265,9 +317,11 @@ def run_fixed_retrieval_pipeline(
         retriever = FixedBM25Retriever(row["sources"], k1=k1, b=b)
         ranked = retriever.search(normalized_query, top_k=top_k)
         artifact["ranked_search_results"] = ranked
+        artifact["canonical_ranked_search_results"] = json.loads(json.dumps(ranked, ensure_ascii=False, sort_keys=True))
+        artifact["retrieval_context_hash"] = _hash(ranked, context=f"retrieval context for {row['id']}")
         artifact["retrieval_metrics"] = retrieval_metrics(ranked, row["gold_answer"])
         artifact["timings_ms"]["retrieval_individual_ms"] = (time.perf_counter_ns() - retrieval_started) / 1_000_000
-        response_prompt = build_cited_response_prompt(row, ranked, [])
+        response_prompt = build_cited_response_prompt(row, ranked, hints_by_id[row["id"]])
         artifact["response_prompt_hash"] = _hash(response_prompt, context=f"response prompt for {row['id']}")
         artifact["response_prompt"] = response_prompt
         active.append(artifact)
@@ -291,25 +345,15 @@ def run_fixed_retrieval_pipeline(
                 artifact["private_scratchpad_truncated"] = {}
             artifact["private_scratchpad"]["response"] = scratchpad
             artifact["private_scratchpad_truncated"]["response"] = scratchpad_truncated
-        score = score_cited_response(
+        score = canonical_cited_score(
             raw_response,
             gold_by_id[artifact["id"]],
             artifact["ranked_search_results"],
             truncated=response_truncated,
         )
-        artifact["cited_score"] = _add_protocol_metrics(score, protocol_valid=bool(score["parse_valid"] and not response_truncated))
+        artifact["cited_score"] = score
         if response_truncated:
             artifact["error_code"] = "response_truncated"
-            artifact["cited_score"] = {
-                **artifact["cited_score"],
-                "parse_valid": False,
-                "correct": False,
-                "malformed_response": True,
-                "error_code": "response_truncated",
-                "lexical_cited_answer_support": 0.0,
-                "citation_precision": 0.0,
-                "citation_recall": 0.0,
-            }
             continue
         if not score["parse_valid"]:
             artifact["error_code"] = score["error_code"]

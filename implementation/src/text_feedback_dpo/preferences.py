@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
+
+
+def _hash(value: object) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _completion(value: object, *, field: str) -> str:
@@ -30,7 +37,14 @@ def _gain(item: Mapping[str, object]) -> float:
     return gain
 
 
-def _pair_metadata(trajectory: Mapping[str, object], chosen: Mapping[str, object], rejected: Mapping[str, object], *, kind: str) -> dict[str, object]:
+def _pair_metadata(
+    trajectory: Mapping[str, object],
+    chosen: Mapping[str, object],
+    rejected: Mapping[str, object],
+    *,
+    kind: str,
+    canonical_context: Mapping[str, object],
+) -> dict[str, object]:
     return {
         "example_id": trajectory["id"],
         "pair_type": kind,
@@ -40,48 +54,87 @@ def _pair_metadata(trajectory: Mapping[str, object], chosen: Mapping[str, object
         "rejected_seed": rejected.get("seed"),
         "chosen_future_sibling_gain": _gain(chosen),
         "rejected_future_sibling_gain": _gain(rejected),
-        "policy_hash": trajectory.get("policy_hash", chosen.get("policy_hash")),
+        "policy_hash": chosen.get("policy_hash"),
         "query_prompt_hash": chosen.get("query_prompt_hash"),
         "response_prompt_hash": chosen.get("response_prompt_hash"),
         "retrieval_context_hash": chosen.get("retrieval_context_hash"),
+        "canonical_context": dict(canonical_context),
     }
 
 
-def _ranked_pairs(candidates: list[Mapping[str, object]], *, completion_field: str, kind: str, trajectory: Mapping[str, object]) -> list[dict[str, object]]:
+def _record_exclusion(
+    trajectory: Mapping[str, object], *, kind: str, reason: str,
+    chosen: Mapping[str, object], rejected: Mapping[str, object],
+) -> None:
+    if not isinstance(trajectory, dict):
+        raise ValueError("preference exclusion accounting requires a mutable trajectory mapping")
+    exclusions = trajectory.setdefault("preference_exclusions", [])
+    counts = trajectory.setdefault("preference_exclusion_counts", {})
+    if not isinstance(exclusions, list) or not isinstance(counts, dict):
+        raise ValueError("preference exclusion accounting fields have invalid types")
+    exclusion_reason = f"{reason}_{kind}_completion"
+    exclusions.append({
+        "pair_type": kind,
+        "reason": exclusion_reason,
+        "chosen_seed": chosen.get("seed"),
+        "rejected_seed": rejected.get("seed"),
+    })
+    counts[exclusion_reason] = int(counts.get(exclusion_reason, 0)) + 1
+
+
+def _ranked_pairs(
+    candidates: list[Mapping[str, object]],
+    *,
+    completion_field: str,
+    kind: str,
+    trajectory: Mapping[str, object],
+    prompt: str,
+    canonical_context: Mapping[str, object],
+) -> list[dict[str, object]]:
     if len(candidates) < 2:
         return []
     ordered = sorted(candidates, key=lambda item: (-_gain(item), int(item.get("seed", 0))))
-    rows: list[dict[str, object]] = []
     best = ordered[0]
     if best.get("verified_no_hint_success") is not True:
         raise ValueError("preference chosen completion must be a verified no-hint success")
+    rows: list[dict[str, object]] = []
     for rejected in ordered[1:]:
         if _gain(best) <= _gain(rejected):
             continue
         chosen_text = _completion(best.get(completion_field), field=completion_field)
         rejected_text = _completion(rejected.get(completion_field), field=completion_field)
         if chosen_text == rejected_text:
-            raise ValueError("preference completions must not be identical")
-        prompt = trajectory["query_prompt"] if kind == "query" else best.get("response_prompt")
-        if not isinstance(prompt, str) or not prompt.strip() or "Hints:" in prompt:
-            raise ValueError("preference prompt must be an explicit no-hint prompt")
+            _record_exclusion(
+                trajectory, kind=kind, reason="identical", chosen=best, rejected=rejected
+            )
+            continue
         rows.append({
             "id": f"{trajectory['id']}::{kind}::{best.get('seed')}::{rejected.get('seed')}",
             "prompt": prompt,
             "chosen": chosen_text,
             "rejected": rejected_text,
-            "metadata": _pair_metadata(trajectory, best, rejected, kind=kind),
+            "metadata": _pair_metadata(
+                trajectory, best, rejected, kind=kind, canonical_context=canonical_context
+            ),
         })
     return rows
 
 
-def build_query_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
-    """Rank student-generated no-hint query options by future sibling gain."""
-    if not trajectory.get("training_eligible"):
-        return []
+def _query_context(trajectory: Mapping[str, object]) -> tuple[str, str]:
     prompt = trajectory.get("query_prompt")
     if not isinstance(prompt, str) or not prompt.strip() or "Hints:" in prompt:
         raise ValueError("query preferences require one non-empty no-hint query prompt")
+    prompt_hash = trajectory.get("query_prompt_hash")
+    if not isinstance(prompt_hash, str) or prompt_hash != _hash(prompt):
+        raise ValueError("query preferences require the canonical no-hint query prompt hash")
+    return prompt, prompt_hash
+
+
+def build_query_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
+    """Rank student queries generated from byte-identical no-hint prompts."""
+    if not trajectory.get("training_eligible"):
+        return []
+    prompt, prompt_hash = _query_context(trajectory)
     siblings = trajectory.get("no_hint_siblings")
     if not isinstance(siblings, list):
         raise ValueError("query preferences require no-hint siblings")
@@ -90,82 +143,96 @@ def build_query_preference_rows(trajectory: Mapping[str, object]) -> list[dict[s
         if not isinstance(sibling, Mapping):
             raise ValueError("query sibling must be a mapping")
         _student_no_hint(sibling)
-        if not isinstance(trajectory.get("query_prompt_hash"), str) or sibling.get("query_prompt_hash") != trajectory["query_prompt_hash"]:
-            raise ValueError("query preference candidates do not share the no-hint query prompt")
+        if sibling.get("query_prompt") != prompt:
+            raise ValueError("query preference candidates require byte-identical query prompt bytes")
+        if sibling.get("query_prompt_hash") != prompt_hash:
+            raise ValueError("query preference candidates do not share the canonical query prompt hash")
         candidates.append(sibling)
-    return _ranked_pairs(candidates, completion_field="raw_query", kind="query", trajectory=trajectory)
+    context = {"query_prompt": prompt, "query_prompt_hash": prompt_hash}
+    return _ranked_pairs(
+        candidates, completion_field="raw_query", kind="query", trajectory=trajectory,
+        prompt=prompt, canonical_context=context,
+    )
+
+
+def _response_context(candidate: Mapping[str, object]) -> tuple[tuple[str, str, str, str], dict[str, object]]:
+    prompt = candidate.get("response_prompt")
+    ranked = candidate.get("canonical_ranked_search_results")
+    if not isinstance(prompt, str) or not prompt.strip() or "Hints:" in prompt:
+        raise ValueError("response preferences require explicit no-hint response prompt bytes")
+    if not isinstance(ranked, list) or not ranked:
+        raise ValueError("response preferences require canonical ranked retrieval records")
+    prompt_hash = candidate.get("response_prompt_hash")
+    retrieval_hash = candidate.get("retrieval_context_hash")
+    if prompt_hash != _hash(prompt):
+        raise ValueError("response preference response prompt bytes do not match their hash")
+    if retrieval_hash != _hash(ranked):
+        raise ValueError("response preference canonical retrieval records do not match their hash")
+    policy_hash = candidate.get("policy_hash")
+    query_prompt_hash = candidate.get("query_prompt_hash")
+    if not all(isinstance(value, str) and value for value in (policy_hash, query_prompt_hash)):
+        raise ValueError("response preferences require explicit policy and query prompt hashes")
+    key = (prompt_hash, retrieval_hash, policy_hash, query_prompt_hash)
+    context = {
+        "query_prompt": candidate.get("query_prompt"),
+        "query_prompt_hash": query_prompt_hash,
+        "response_prompt": prompt,
+        "response_prompt_hash": prompt_hash,
+        "ranked_search_results": json.loads(json.dumps(ranked, ensure_ascii=False, sort_keys=True)),
+        "retrieval_context_hash": retrieval_hash,
+    }
+    return key, context
 
 
 def build_response_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
-    """Rank only same-context, student-generated, no-hint cited responses."""
+    """Rank responses only within byte-identical canonical retrieval contexts."""
     if not trajectory.get("training_eligible"):
         return []
     siblings = trajectory.get("no_hint_siblings")
     if not isinstance(siblings, list):
         raise ValueError("response preferences require no-hint siblings")
-    candidates: list[Mapping[str, object]] = []
-    context: tuple[object, object, object, object] | None = None
+    groups: dict[tuple[str, str, str, str], tuple[dict[str, object], list[Mapping[str, object]]]] = {}
     for sibling in siblings:
         if not isinstance(sibling, Mapping):
             raise ValueError("response sibling must be a mapping")
         _student_no_hint(sibling)
         score = sibling.get("cited_score")
-        if not isinstance(score, Mapping) or score.get("parse_valid") is not True:
-            raise ValueError("response preferences require parse-valid sibling responses")
-        if sibling.get("verified_no_hint_success") is not True and sibling.get("future_sibling_gain") != 0.0:
-            raise ValueError("response preference sibling has inconsistent verification and gain")
-        current = (
-            sibling.get("response_prompt_hash"), sibling.get("retrieval_context_hash"),
-            sibling.get("policy_hash"), sibling.get("query_prompt_hash"),
+        if not isinstance(score, Mapping):
+            raise ValueError("response preferences require a canonical cited score")
+        truncation = sibling.get("truncation")
+        canonical_success = bool(
+            score.get("correct") is True
+            and score.get("parse_valid") is True
+            and score.get("answer_correct") is True
+            and score.get("lexical_cited_answer_support") == 1.0
+            and isinstance(truncation, Mapping)
+            and truncation.get("query") is False
+            and truncation.get("response") is False
         )
-        if any(value is None or value == "" for value in current):
-            raise ValueError("response preferences require explicit prompt, retrieval, and policy context hashes")
-        if context is None:
-            context = current
-        elif current != context:
-            raise ValueError("response preference candidates cross response or retrieval context")
-        candidates.append(sibling)
-    return _ranked_pairs(candidates, completion_field="raw_response", kind="response", trajectory=trajectory)
+        if sibling.get("verified_no_hint_success") is not canonical_success:
+            raise ValueError("response preference candidate contains an unverified success or forged verification")
+        if _gain(sibling) != float(canonical_success):
+            raise ValueError("response preference sibling has inconsistent verification and gain")
+        key, context = _response_context(sibling)
+        if key in groups and groups[key][0] != context:
+            raise ValueError("response preference candidates have same hashes but different prompt bytes or retrieval records")
+        groups.setdefault(key, (context, []))[1].append(sibling)
+    rows: list[dict[str, object]] = []
+    for context, candidates in groups.values():
+        rows.extend(_ranked_pairs(
+            candidates, completion_field="raw_response", kind="response", trajectory=trajectory,
+            prompt=str(context["response_prompt"]), canonical_context=context,
+        ))
+    return rows
 
 
 def build_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
-    """Build query and response preference rows independently, then concatenate."""
-    # Explicit archival compatibility for Task 5's plain-answer artifact.  The
-    # active Task 6 collector always supplies ``query_prompt`` and sibling
-    # records, so this branch cannot silently admit active rows without the
-    # new provenance/context gates.
-    if (
-        "query_prompt" not in trajectory
-        and isinstance(trajectory.get("prompt"), str)
-        and isinstance(trajectory.get("chosen"), str)
-        and isinstance(trajectory.get("attempts"), list)
-    ):
-        prompt = trajectory["prompt"]
-        if "Hints:" in prompt:
-            raise ValueError("archival preference prompt must not contain hints")
-        chosen = _completion(trajectory["chosen"], field="chosen")
-        rows: list[dict[str, object]] = []
-        for attempt in trajectory["attempts"]:
-            if not isinstance(attempt, Mapping):
-                raise ValueError("archival preference attempt must be a mapping")
-            if attempt.get("correct"):
-                break
-            rejected = _completion(attempt.get("response"), field="rejected")
-            if chosen == rejected:
-                raise ValueError("preference completions must not be identical")
-            rows.append({
-                "id": f"{trajectory['id']}::archival-attempt-{attempt.get('attempt_index')}",
-                "prompt": prompt,
-                "chosen": chosen,
-                "rejected": rejected,
-                "metadata": {
-                    "example_id": trajectory["id"],
-                    "pair_type": "archival-response",
-                    "legacy_compatibility": True,
-                    "no_hint": True,
-                    "provenance": "student-archival",
-                    "rejected_attempt_index": attempt.get("attempt_index"),
-                },
-            })
-        return rows
+    """Build active query and response preferences; archival rows are unsupported."""
+    required = ("query_prompt", "query_prompt_hash", "no_hint_siblings", "training_eligible")
+    missing = [field for field in required if field not in trajectory]
+    if missing:
+        raise ValueError(f"active trajectory is missing required field: {missing[0]}")
+    if isinstance(trajectory, dict):
+        trajectory["preference_exclusions"] = []
+        trajectory["preference_exclusion_counts"] = {}
     return build_query_preference_rows(trajectory) + build_response_preference_rows(trajectory)

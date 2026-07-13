@@ -1,62 +1,56 @@
 import unittest
 
+from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.collection import collect_dataset_batchwise
+from text_feedback_dpo.runtime import GeneratedText
+
+
+def _example():
+    return {
+        "id": "q1", "question": "Who?", "gold_answer": "Ada",
+        "sources": [{
+            "source_id": "S001", "original_rank": 1, "title": "Ada",
+            "url": "https://example.test/ada", "snippet": "Ada wrote the algorithm.",
+        }],
+    }
+
+
+def _artifact(*, hints=(), query="writer", correct=False):
+    response = (
+        "Answer: Ada\nReasoning: Source identifies Ada [S001].\nSources: S001"
+        if correct else
+        "Answer: Grace\nReasoning: Source identifies another person [S001].\nSources: S001"
+    )
+    return run_fixed_retrieval_pipeline(
+        [_example()],
+        query_generate_batch=lambda _prompts: [GeneratedText(query, False)],
+        response_generate_batch=lambda _prompts: [GeneratedText(response, False)],
+        policy_hash="policy-v1", hints_by_id={"q1": list(hints)},
+    )[0]
 
 
 class CollectionBatchTest(unittest.TestCase):
-    def test_empty_student_response_uses_explicit_teacher_error_sentinel(self):
-        with self.assertRaisesRegex(ValueError, "complete source records"):
-            collect_dataset_batchwise(
-                examples=[{"id": "q1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada evidence"}],
-                student_generate_batch=lambda _prompts, **_kwargs: [],
-                teacher_generate_batch=lambda _prompts, **_kwargs: [],
-                max_interventions=1,
-            )
-
-    def test_collection_batches_each_attempt_and_preserves_first_correct(self):
-        with self.assertRaisesRegex(ValueError, "complete source records"):
-            collect_dataset_batchwise(
-                examples=[{"id": "1", "question": "Who?", "gold_answer": "Ada"}],
-                student_generate_batch=lambda _prompts, **_kwargs: [],
-                teacher_generate_batch=lambda _prompts, **_kwargs: [],
-                max_interventions=2,
-            )
+    def test_collection_requires_complete_sources_before_generation(self):
+        for incomplete in (
+            {"id": "q1", "question": "Who?", "gold_answer": "Ada", "packed_evidence": "Ada evidence"},
+            {"id": "1", "question": "Who?", "gold_answer": "Ada"},
+        ):
+            with self.subTest(incomplete=incomplete), self.assertRaisesRegex(ValueError, "complete source records"):
+                collect_dataset_batchwise(
+                    examples=[incomplete], student_generate_batch=lambda _requests, **_kwargs: [],
+                    teacher_generate_batch=lambda _prompts, **_kwargs: [], max_interventions=1,
+                    student_seed=7,
+                )
 
     def test_collection_uses_active_artifacts_teacher_once_and_verifies_no_hint_siblings(self):
-        source = {
-            "source_id": "S001", "original_rank": 1, "retrieval_rank": 1,
-            "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada wrote the algorithm.",
-            "query_hash": "query-hash", "corpus_hash": "corpus-hash", "requested_top_k": 8,
-            "effective_top_k": 1, "source_count": 1, "bm25_score": 1.0,
-        }
-
-        def artifact(response, *, correct, prompt_hash="response-prompt", query="writer", no_hint=True):
-            return {
-                "id": "q1", "raw_query": query, "ranked_search_results": [source],
-                "raw_response": response, "response_prompt_hash": prompt_hash,
-                "query_prompt_hash": "query-prompt", "prompt_version": "fixed-retrieval-cited-v1",
-                "response_schema_version": 1, "policy_hash": "policy-v1", "evaluator_version": "evaluator-v1",
-                "truncation": {"query": False, "response": False},
-                "cited_score": {
-                    "parse_valid": True, "answer_correct": correct, "correct": correct,
-                    "lexical_cited_answer_support": 1.0 if correct else 0.0,
-                    "citation_precision": 1.0 if correct else 0.0,
-                    "error_code": None if correct else "answer_mismatch",
-                },
-                "parsed_response": {"answer": "Ada" if correct else "Grace", "reasoning": "Source [S001].", "source_ids": ["S001"]},
-                "provenance": "student", "no_hint": no_hint,
-                "response_prompt": "Answer using retrieved sources.",
-            }
-
         student_calls = []
         teacher_calls = []
         sibling_calls = []
 
-        def student(prompts, **_kwargs):
-            student_calls.append(prompts)
-            if len(student_calls) == 1:
-                return [artifact("Answer: Grace", correct=False, no_hint=True)]
-            return [artifact("Answer: Ada", correct=True, no_hint=False)]
+        def student(requests, **_kwargs):
+            student_calls.append(requests)
+            hints = tuple(requests[0]["hints"])
+            return [_artifact(hints=hints, correct=bool(hints))]
 
         def teacher(prompts, **_kwargs):
             teacher_calls.append(prompts)
@@ -68,15 +62,15 @@ class CollectionBatchTest(unittest.TestCase):
         def siblings(requests, **kwargs):
             sibling_calls.append((requests, kwargs))
             self.assertEqual([request["seed"] for request in requests], [101, 102])
-            return [artifact("Answer: Ada", correct=True, query="writer ada", no_hint=True), artifact("Answer: Grace", correct=False, query="writer grace", no_hint=True)]
+            return [
+                _artifact(query="writer ada", correct=True),
+                _artifact(query="writer grace", correct=False),
+            ]
 
         rows = collect_dataset_batchwise(
-            examples=[{"id": "q1", "question": "Who?", "gold_answer": "Ada", "sources": [source]}],
-            student_generate_batch=student,
-            teacher_generate_batch=teacher,
-            max_interventions=1,
-            sibling_generate_batch=siblings,
-            sibling_seeds=(101, 102),
+            examples=[_example()], student_generate_batch=student, teacher_generate_batch=teacher,
+            max_interventions=1, sibling_generate_batch=siblings, sibling_seeds=(101, 102),
+            student_seed=7,
         )
         row = rows[0]
         self.assertEqual([len(call) for call in student_calls], [1, 1])
@@ -87,6 +81,7 @@ class CollectionBatchTest(unittest.TestCase):
         self.assertGreater(row["interventions"][0]["hint_token_count"], 0)
         self.assertGreater(row["interventions"][0]["repair_scope_cost"], 0)
         self.assertGreater(row["interventions"][0]["efficiency_score"], 0)
+        self.assertEqual(row["ranked_interventions"], row["interventions"])
         self.assertNotIn("Ada", row["interventions"][0]["hint"])
 
 

@@ -55,6 +55,10 @@ def _validate_active_manifest(directory: Path, manifest: dict) -> None:
         raise ValueError("active manifest source schema identity/version mismatch")
     if retrieval != {"identity": "fixed_bm25", "schema_version": 1, "requested_top_k": 8, "k1": 1.2, "b": 0.75}:
         raise ValueError("active manifest retrieval identity or frozen configuration mismatch")
+    if prompt["identity"] != "fixed-retrieval-cited-v1":
+        raise ValueError("active manifest prompt identity must be fixed-retrieval-cited-v1")
+    if response["identity"] != "cited-response" or response["schema_version"] != 1:
+        raise ValueError("active manifest response identity/schema mismatch")
     if generation["context_budget"] != 4096:
         raise ValueError("active manifest generation context_budget must be exactly 4096")
     artifacts = manifest.get("artifacts")
@@ -69,6 +73,10 @@ def _validate_active_manifest(directory: Path, manifest: dict) -> None:
         missing = [field for field in ("path", "format", "rows", "bytes", "sha256") if field not in artifact]
         if missing:
             raise ValueError(f"active manifest artifact {index} is missing: {missing[0]}")
+        if artifact["format"] != "jsonl":
+            raise ValueError(f"active manifest artifact {index} must use supported format jsonl")
+        if isinstance(artifact["rows"], bool) or not isinstance(artifact["rows"], int) or artifact["rows"] != manifest_rows:
+            raise ValueError(f"manifest rows does not match artifact row count declaration: {artifact['path']}")
         relative = Path(artifact["path"])
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"active manifest artifact {index} path must stay within the run directory")
@@ -80,12 +88,11 @@ def _validate_active_manifest(directory: Path, manifest: dict) -> None:
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual_hash != artifact["sha256"]:
             raise ValueError(f"artifact sha256 mismatch: {artifact['path']}")
-        if artifact["format"] == "jsonl":
-            row_count = sum(bool(line.strip()) for line in path.read_text(encoding="utf-8").splitlines())
-            if row_count != artifact["rows"]:
-                raise ValueError(f"artifact row count mismatch: {artifact['path']}")
-            if row_count != manifest_rows:
-                raise ValueError(f"manifest rows does not match artifact row count: {artifact['path']}")
+        row_count = sum(bool(line.strip()) for line in path.read_text(encoding="utf-8").splitlines())
+        if row_count != artifact["rows"]:
+            raise ValueError(f"artifact row count mismatch: {artifact['path']}")
+        if row_count != manifest_rows:
+            raise ValueError(f"manifest rows does not match artifact row count: {artifact['path']}")
 
 
 def validate_artifacts(directory: Path) -> dict:

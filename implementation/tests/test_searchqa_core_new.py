@@ -4,10 +4,28 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from text_feedback_dpo.config import load_config
+from text_feedback_dpo.batch_generation import run_fixed_retrieval_pipeline
 from text_feedback_dpo.preferences import build_preference_rows, build_query_preference_rows, build_response_preference_rows
 from text_feedback_dpo.prompts import build_student_prompt
 from text_feedback_dpo.scoring import score_searchqa
 from text_feedback_dpo.trajectories import collect_trajectory
+from text_feedback_dpo.runtime import GeneratedText
+
+
+def _active_example():
+    return {
+        "id": "sq-1", "question": "Who wrote the first algorithm?", "gold_answer": "Ada Lovelace",
+        "sources": [{"source_id": "S001", "original_rank": 1, "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada Lovelace wrote the first algorithm."}],
+    }
+
+
+def _active_artifact(*, response, query="algorithm author", hints=()):
+    return run_fixed_retrieval_pipeline(
+        [_active_example()],
+        query_generate_batch=lambda _prompts: [GeneratedText(query, False)],
+        response_generate_batch=lambda _prompts: [GeneratedText(response, False)],
+        policy_hash="policy-v1", hints_by_id={"sq-1": list(hints)},
+    )[0]
 
 
 class SearchQACoreContractTest(unittest.TestCase):
@@ -33,44 +51,37 @@ class SearchQACoreContractTest(unittest.TestCase):
         self.assertFalse(result["correct"])
 
     def test_trajectory_stops_at_first_correct_without_teacher_written_answer(self):
-        source = {"source_id": "S001", "original_rank": 1, "title": "Ada", "url": "https://example.test/ada", "snippet": "Ada wrote the first algorithm."}
+        responses = (
+            "Answer: Grace Hopper\nReasoning: Source identifies another person [S001].\nSources: S001",
+            "Answer: Ada Lovelace\nReasoning: Source identifies Ada Lovelace [S001].\nSources: S001",
+        )
 
-        def artifact(response, correct, no_hint):
-            return {
-                "id": "sq-1", "raw_query": "algorithm author", "ranked_search_results": [source],
-                "raw_response": response, "truncation": {"query": False, "response": False},
-                "cited_score": {"correct": correct, "parse_valid": True, "answer_correct": correct, "lexical_cited_answer_support": 1.0 if correct else 0.0},
-                "policy_hash": "p", "prompt_version": "v", "response_schema_version": 1,
-                "query_prompt_hash": "q", "response_prompt_hash": "r", "evaluator_version": "e", "no_hint": no_hint,
-            }
-        outputs = iter([artifact("Answer: Grace", False, True), artifact("Answer: Ada Lovelace", True, False)])
-
-        def student(_prompt, _attempt):
-            return next(outputs)
+        def student(_prompt, attempt):
+            hints = () if attempt == 0 else ("Recheck the person associated with the algorithm.",)
+            return _active_artifact(response=responses[attempt], hints=hints)
 
         def teacher(_request):
             return '{"hint":"Recheck the person associated with the algorithm."}'
 
         trajectory = collect_trajectory(
-            example={
-                "id": "sq-1",
-                "question": "Who wrote the first algorithm?",
-                "gold_answer": "Ada Lovelace",
-                "sources": [source],
-            },
+            example=_active_example(),
             student_generate=student,
             teacher_generate=teacher,
             max_interventions=4,
         )
         self.assertTrue(trajectory["resolved"])
         self.assertEqual(len(trajectory["attempts"]), 2)
-        self.assertEqual(trajectory["chosen"]["raw_response"], "Answer: Ada Lovelace")
+        self.assertEqual(trajectory["chosen"]["raw_response"], responses[1])
         self.assertEqual(len(trajectory["interventions"]), 1)
         self.assertNotIn("Ada Lovelace", trajectory["interventions"][0]["hint"])
         self.assertEqual(trajectory["interventions"][0]["level"], 1)
 
     def test_preference_builder_excludes_hints_from_prompt_and_keeps_all_failures(self):
-        self.assertEqual(build_preference_rows({"id": "sq-1", "resolved": True, "training_eligible": False}), [])
+        self.assertEqual(build_preference_rows({
+            "id": "sq-1", "resolved": True, "training_eligible": False,
+            "query_prompt": "no-hint prompt", "query_prompt_hash": "unused-while-ineligible",
+            "no_hint_siblings": [],
+        }), [])
 
     def test_config_requires_searchqa_and_full_finetuning(self):
         with TemporaryDirectory() as tmp:
@@ -113,37 +124,32 @@ class SearchQACoreContractTest(unittest.TestCase):
         self.assertNotIn("<student_task>", prompt)
 
     def test_preference_builders_require_same_no_hint_context_and_student_provenance(self):
-        def sibling(answer, query, response_hash="response-hash"):
-            return {
-                "provenance": "student", "no_hint": True, "raw_query": query,
-                "raw_response": answer, "query_prompt_hash": "query-prompt-hash",
-                "response_prompt_hash": response_hash, "retrieval_context_hash": "retrieval-hash",
-                "policy_hash": "policy-v1", "evaluator_version": "evaluator-v1", "response_prompt": "same response prompt",
-            "cited_score": {"correct": answer == "Ada", "parse_valid": True, "lexical_cited_answer_support": 1.0, "answer_correct": answer == "Ada"},
-            "future_sibling_gain": 1.0 if answer == "Ada" else 0.0,
-            "verified_no_hint_success": answer == "Ada",
-            }
+        def sibling(response, query, *, gain, verified):
+            artifact = _active_artifact(response=response, query=query)
+            return {**artifact, "future_sibling_gain": gain, "verified_no_hint_success": verified}
+        correct = "Answer: Ada Lovelace\nReasoning: Source identifies Ada Lovelace [S001].\nSources: S001"
+        wrong = "Answer: Grace Hopper\nReasoning: Source identifies another person [S001].\nSources: S001"
+        chosen = sibling(correct, "algorithm author", gain=1.0, verified=True)
+        rejected = sibling(wrong, "algorithm author", gain=0.0, verified=False)
         trajectory = {
             "id": "q1", "resolved": True, "training_eligible": True,
-            "attempts": [], "chosen": sibling("Ada", "writer ada"),
-            "no_hint_siblings": [sibling("Ada", "writer ada"), sibling("Grace", "writer grace")],
+            "attempts": [], "chosen": chosen, "no_hint_siblings": [chosen, rejected],
             "interventions": [{"level": 1, "hint": "Recheck the associated person.", "future_sibling_gain": 1.0}],
-            "query_prompt": "Generate one query.", "query_prompt_hash": "query-prompt-hash", "response_prompt_hash": "response-hash",
-            "retrieval_context_hash": "retrieval-hash", "policy_hash": "policy-v1",
+            "query_prompt": chosen["query_prompt"], "query_prompt_hash": chosen["query_prompt_hash"],
+            "response_prompt_hash": chosen["response_prompt_hash"],
+            "retrieval_context_hash": chosen["retrieval_context_hash"], "policy_hash": "policy-v1",
         }
         query_rows = build_query_preference_rows(trajectory)
         response_rows = build_response_preference_rows(trajectory)
-        self.assertEqual(len(query_rows), 1)
-        self.assertEqual(query_rows[0]["chosen"], " writer ada")
-        self.assertEqual(query_rows[0]["rejected"], " writer grace")
+        self.assertEqual(query_rows, [])
         self.assertEqual(len(response_rows), 1)
-        self.assertEqual(response_rows[0]["chosen"], " Ada")
-        self.assertEqual(response_rows[0]["rejected"], " Grace")
+        self.assertEqual(response_rows[0]["chosen"], f" {correct}")
+        self.assertEqual(response_rows[0]["rejected"], f" {wrong}")
         for row in query_rows + response_rows:
             self.assertTrue(row["metadata"]["no_hint"])
             self.assertEqual(row["metadata"]["provenance"], "student")
-        with self.assertRaisesRegex(ValueError, "context"):
-            build_response_preference_rows({**trajectory, "no_hint_siblings": [sibling("Ada", "writer ada", "other-hash"), sibling("Grace", "writer grace")]})
+        cross_context = sibling(wrong, "different retrieval query", gain=0.0, verified=False)
+        self.assertEqual(build_response_preference_rows({**trajectory, "no_hint_siblings": [chosen, cross_context]}), [])
 
 
 if __name__ == "__main__":

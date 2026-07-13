@@ -5,8 +5,22 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from text_feedback_dpo.batch_generation import (
+    EVALUATOR_VERSION,
+    FIXED_B,
+    FIXED_K1,
+    FIXED_TOP_K,
+    PROMPT_VERSION,
+    RESPONSE_SCHEMA_VERSION,
+    _zero_cited_score,
+    canonical_cited_score,
+    parse_search_query,
+)
 from text_feedback_dpo.feedback import FeedbackFormatError, diagnose_attempt, parse_feedback
-from text_feedback_dpo.prompts import build_search_query_prompt, build_teacher_prompt
+from text_feedback_dpo.prompts import build_cited_response_prompt, build_search_query_prompt, build_teacher_prompt
+from text_feedback_dpo.responses import CitedResponseFormatError, parse_cited_response, render_cited_response
+from text_feedback_dpo.retrieval import FixedBM25Retriever, retrieval_metrics
+from text_feedback_dpo.searchqa import SOURCE_SCHEMA_VERSION
 
 
 class TrajectoryError(ValueError):
@@ -38,28 +52,59 @@ def rank_interventions(interventions: Sequence[Mapping[str, object]]) -> list[di
     return sorted(ranked, key=lambda item: (-float(item["efficiency_score"]), int(item["level"])))
 
 
-def retrieval_context_hash(artifact: Mapping[str, object]) -> str:
-    ranked = artifact.get("ranked_search_results")
-    if not isinstance(ranked, list):
-        raise TrajectoryError("active artifact requires ranked_search_results for context hashing")
-    payload = json.dumps(ranked, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def _structured_hash(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def validate_active_artifact(artifact: object, *, example_id: str, no_hint: bool | None = None) -> dict[str, Any]:
-    """Validate the committed Task 5 active-search artifact without repairing it."""
+def retrieval_context_hash(ranked_results: Sequence[Mapping[str, object]]) -> str:
+    return _structured_hash(list(ranked_results))
+
+
+def _require_exact_field(artifact: Mapping[str, object], key: str, expected: object, *, example_id: str) -> None:
+    if artifact.get(key) != expected:
+        raise TrajectoryError(f"active artifact {example_id} {key} does not match canonical recomputation")
+
+
+def validate_active_artifact(
+    artifact: object,
+    *,
+    example: Mapping[str, object],
+    hints: Sequence[str],
+) -> dict[str, Any]:
+    """Recompute and validate a Task 5 active-search artifact without repair."""
     if not isinstance(artifact, Mapping):
-        raise TrajectoryError(f"active artifact for {example_id} must be a mapping")
+        raise TrajectoryError("active artifact must be a mapping")
+    example_id = str(example.get("id", ""))
+    if not example_id:
+        raise TrajectoryError("active artifact validation requires an example id")
+    if not isinstance(hints, Sequence) or isinstance(hints, (str, bytes)) or not all(isinstance(hint, str) and hint.strip() for hint in hints):
+        raise TrajectoryError(f"active artifact {example_id} hints must be an explicit sequence of non-empty strings")
     required = (
         "id", "raw_query", "ranked_search_results", "raw_response", "truncation",
         "cited_score", "policy_hash", "prompt_version", "response_schema_version",
-        "query_prompt_hash", "response_prompt_hash",
+        "source_schema_version", "input_hash", "query_prompt", "query_prompt_hash",
+        "response_prompt", "response_prompt_hash", "retrieval_context_hash",
+        "canonical_ranked_search_results", "provenance", "no_hint", "evaluator_version",
+        "parsed_response", "rendered_visible_response", "error_code",
     )
     missing = [key for key in required if key not in artifact]
     if missing:
         raise TrajectoryError(f"active artifact for {example_id} is missing {missing[0]}")
-    if str(artifact["id"]) != str(example_id):
+    if str(artifact["id"]) != example_id:
         raise TrajectoryError(f"active artifact ID mismatch: expected {example_id}, got {artifact['id']}")
+    if artifact["provenance"] != "student":
+        raise TrajectoryError(f"active artifact {example_id} requires explicit student provenance")
+    if not isinstance(artifact["no_hint"], bool) or artifact["no_hint"] != (len(hints) == 0):
+        raise TrajectoryError(f"active artifact {example_id} no_hint disagrees with exact hint context")
+    if artifact["prompt_version"] != PROMPT_VERSION:
+        raise TrajectoryError(f"active artifact {example_id} prompt_version must be {PROMPT_VERSION}")
+    if artifact["evaluator_version"] != EVALUATOR_VERSION:
+        raise TrajectoryError(f"active artifact {example_id} evaluator_version must be {EVALUATOR_VERSION}")
+    if artifact["response_schema_version"] != RESPONSE_SCHEMA_VERSION:
+        raise TrajectoryError(f"active artifact {example_id} response_schema_version must be {RESPONSE_SCHEMA_VERSION}")
+    if artifact["source_schema_version"] != SOURCE_SCHEMA_VERSION:
+        raise TrajectoryError(f"active artifact {example_id} source_schema_version must be {SOURCE_SCHEMA_VERSION}")
     if not isinstance(artifact["raw_query"], str):
         raise TrajectoryError(f"active artifact {example_id} raw_query must be text")
     if not isinstance(artifact["ranked_search_results"], list):
@@ -68,30 +113,85 @@ def validate_active_artifact(artifact: object, *, example_id: str, no_hint: bool
         raise TrajectoryError(f"active artifact {example_id} requires explicit query/response truncation booleans")
     if not isinstance(artifact["cited_score"], Mapping):
         raise TrajectoryError(f"active artifact {example_id} cited_score must be a mapping")
-    for key in ("policy_hash", "prompt_version"):
+    for key in ("policy_hash",):
         if not isinstance(artifact[key], str) or not artifact[key].strip():
             raise TrajectoryError(f"active artifact {example_id} requires non-empty {key}")
-    for key in ("response_schema_version",):
-        if isinstance(artifact[key], bool) or not isinstance(artifact[key], int):
-            raise TrajectoryError(f"active artifact {example_id} requires integer {key}")
-    for key in ("query_prompt_hash", "response_prompt_hash"):
-        if artifact[key] is not None and (not isinstance(artifact[key], str) or not artifact[key].strip()):
-            raise TrajectoryError(f"active artifact {example_id} {key} must be a non-empty string or null")
-    existing_provenance = artifact.get("provenance")
-    if existing_provenance is not None and existing_provenance != "student":
-        raise TrajectoryError(f"active artifact {example_id} has non-student provenance: {existing_provenance}")
-    existing_no_hint = artifact.get("no_hint")
-    if existing_no_hint is not None and not isinstance(existing_no_hint, bool):
-        raise TrajectoryError(f"active artifact {example_id} no_hint must be boolean")
-    if no_hint is not None and existing_no_hint is not None and existing_no_hint != no_hint:
-        raise TrajectoryError(f"active artifact {example_id} no_hint metadata disagrees with requested prompt")
+
+    expected_input_hash = _structured_hash({"id": example_id, "question": example.get("question"), "sources": example.get("sources")})
+    _require_exact_field(artifact, "input_hash", expected_input_hash, example_id=example_id)
+    expected_query_prompt = build_search_query_prompt(dict(example), list(hints))
+    _require_exact_field(artifact, "query_prompt", expected_query_prompt, example_id=example_id)
+    _require_exact_field(artifact, "query_prompt_hash", _structured_hash(expected_query_prompt), example_id=example_id)
+
+    truncation = artifact["truncation"]
+    expected_ranked: list[dict[str, object]] = []
+    query_valid = False
+    if truncation["query"] is False:
+        try:
+            normalized_query = parse_search_query(artifact["raw_query"])
+        except ValueError:
+            normalized_query = None
+        if normalized_query is not None:
+            query_valid = True
+            retriever = FixedBM25Retriever(example["sources"], k1=FIXED_K1, b=FIXED_B)
+            expected_ranked = retriever.search(normalized_query, top_k=FIXED_TOP_K)
+    if artifact["ranked_search_results"] != expected_ranked:
+        raise TrajectoryError(f"active artifact {example_id} ranked retrieval does not match canonical BM25 recomputation")
+    if artifact["canonical_ranked_search_results"] != expected_ranked:
+        raise TrajectoryError(f"active artifact {example_id} canonical ranked retrieval records do not match recomputation")
+    _require_exact_field(artifact, "retrieval_context_hash", retrieval_context_hash(expected_ranked), example_id=example_id)
+
+    expected_response_prompt = build_cited_response_prompt(dict(example), expected_ranked, list(hints)) if query_valid else None
+    _require_exact_field(artifact, "response_prompt", expected_response_prompt, example_id=example_id)
+    expected_response_hash = _structured_hash(expected_response_prompt) if expected_response_prompt is not None else None
+    _require_exact_field(artifact, "response_prompt_hash", expected_response_hash, example_id=example_id)
+    if not query_valid:
+        if artifact["raw_response"] is not None:
+            raise TrajectoryError(f"active artifact {example_id} query-stage failure must not contain a response")
+        expected_error = "query_truncated" if truncation["query"] else "query_invalid_format"
+        _require_exact_field(
+            artifact, "retrieval_metrics", retrieval_metrics([], example["gold_answer"]),
+            example_id=example_id,
+        )
+        _require_exact_field(
+            artifact, "cited_score",
+            _zero_cited_score(expected_error, truncated=truncation["query"]),
+            example_id=example_id,
+        )
+        _require_exact_field(artifact, "parsed_response", None, example_id=example_id)
+        _require_exact_field(artifact, "rendered_visible_response", None, example_id=example_id)
+        _require_exact_field(artifact, "error_code", expected_error, example_id=example_id)
+        return dict(artifact)
+
+    expected_retrieval_metrics = retrieval_metrics(expected_ranked, example["gold_answer"])
+    _require_exact_field(artifact, "retrieval_metrics", expected_retrieval_metrics, example_id=example_id)
+    raw_response = artifact["raw_response"]
+    if not isinstance(raw_response, str):
+        raise TrajectoryError(f"active artifact {example_id} response-stage artifact requires raw_response text")
+    if stored_score := artifact["cited_score"]:
+        if isinstance(stored_score, Mapping) and stored_score.get("correct") is True and ("<" in raw_response or ">" in raw_response):
+            raise TrajectoryError(f"active artifact {example_id} successful response contains XML or angle markup")
+    recomputed_score = canonical_cited_score(
+        raw_response, example["gold_answer"], expected_ranked, truncated=truncation["response"]
+    )
+    stored_score = artifact["cited_score"]
+    _require_exact_field(artifact, "cited_score", recomputed_score, example_id=example_id)
+    expected_error = "response_truncated" if truncation["response"] else recomputed_score["error_code"]
+    _require_exact_field(artifact, "error_code", expected_error, example_id=example_id)
+    if recomputed_score["parse_valid"] and not truncation["response"]:
+        if "<" in raw_response or ">" in raw_response:
+            raise TrajectoryError(f"active artifact {example_id} successful response contains XML or angle markup")
+        try:
+            parsed = parse_cited_response(raw_response, expected_ranked)
+        except CitedResponseFormatError as exc:
+            raise TrajectoryError(f"active artifact {example_id} claimed success with invalid cited response: {exc}") from exc
+        expected_parsed = {"answer": parsed.answer, "reasoning": parsed.reasoning, "source_ids": list(parsed.source_ids)}
+        _require_exact_field(artifact, "parsed_response", expected_parsed, example_id=example_id)
+        _require_exact_field(artifact, "rendered_visible_response", render_cited_response(parsed, expected_ranked), example_id=example_id)
+    else:
+        _require_exact_field(artifact, "parsed_response", None, example_id=example_id)
+        _require_exact_field(artifact, "rendered_visible_response", None, example_id=example_id)
     normalized = dict(artifact)
-    normalized["provenance"] = "student"
-    if no_hint is not None:
-        normalized["no_hint"] = no_hint
-    normalized["retrieval_context_hash"] = artifact.get("retrieval_context_hash", retrieval_context_hash(artifact))
-    if not isinstance(normalized["retrieval_context_hash"], str) or not normalized["retrieval_context_hash"].strip():
-        raise TrajectoryError(f"active artifact {example_id} requires retrieval_context_hash")
     return normalized
 
 
@@ -157,8 +257,8 @@ def _verify_siblings(
         raise TrajectoryError(f"no-hint sibling cardinality mismatch for {example['id']}")
     siblings: list[dict[str, Any]] = []
     for request, output in zip(requests, outputs, strict=True):
-        sibling = validate_active_artifact(output, example_id=str(example["id"]), no_hint=True)
-        if sibling.get("query_prompt") and sibling["query_prompt"] != request["query_prompt"]:
+        sibling = validate_active_artifact(output, example=example, hints=[])
+        if sibling["query_prompt"] != request["query_prompt"]:
             raise TrajectoryError(f"no-hint sibling query prompt mismatch for {example['id']}")
         if "Hints:" in str(sibling.get("query_prompt", "")) or "Hints:" in str(sibling.get("response_prompt", "")):
             raise TrajectoryError(f"no-hint sibling contains a hinted prompt for {example['id']}")
@@ -169,8 +269,6 @@ def _verify_siblings(
             raise TrajectoryError(f"no-hint sibling evaluator version is not explicit for {example['id']}")
         if sibling["evaluator_version"] != chosen["evaluator_version"]:
             raise TrajectoryError(f"no-hint sibling evaluator version mismatch for {example['id']}")
-        if sibling["response_prompt_hash"] != chosen["response_prompt_hash"]:
-            raise TrajectoryError(f"no-hint sibling response prompt context mismatch for {example['id']}")
         sibling["seed"] = request["seed"]
         sibling["future_sibling_gain"] = 1.0 if _success(sibling) else 0.0
         sibling["verified_no_hint_success"] = _success(sibling)
@@ -213,6 +311,7 @@ def _finish_trajectory(
         "no_hint_siblings": [],
         "sibling_verification": {"status": "not_required"},
         "training_eligible": False,
+        "ranked_interventions": [],
     }
     if chosen is None:
         result["sibling_verification"] = {"status": "unresolved", "eligible": False}
@@ -237,6 +336,7 @@ def _finish_trajectory(
         intervention["future_sibling_gain_denominator"] = verification["future_sibling_gain_denominator"]
         intervention["efficiency_numerator"] = verification["future_sibling_gain"]
         intervention["efficiency_score"] = verification["future_sibling_gain"] / intervention["efficiency_denominator"]
+    result["ranked_interventions"] = rank_interventions(interventions)
     return result
 
 
@@ -260,8 +360,7 @@ def collect_trajectory(
     for attempt_index in range(max_interventions + 1):
         current_prompt = build_search_query_prompt(example, hints)
         raw_artifact = student_generate(current_prompt, attempt_index)
-        artifact = validate_active_artifact(raw_artifact, example_id=str(example["id"]), no_hint=not hints)
-        artifact["query_prompt"] = current_prompt
+        artifact = validate_active_artifact(raw_artifact, example=example, hints=hints)
         diagnostics = diagnose_attempt(artifact)
         correct = _success(artifact)
         attempts.append({

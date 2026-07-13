@@ -17,20 +17,28 @@ def build_cache_manifest(
     student_revision: str,
     teacher_model: str,
     teacher_revision: str,
+    teacher_identity: str,
+    teacher_quantization: str,
+    teacher_fallback_reason: str | None,
     dataset_revision: str,
+    dataset_hash: str,
     dataset_schema: str,
     source_schema_version: int,
     source_schema_hash: str,
     retrieval_config: dict,
     retrieval_hash: str,
     prompt_version: str,
+    prompt_hash: str,
     response_schema_version: int,
+    response_schema_hash: str,
     evaluator_version: str,
+    evaluator_hash: str,
     policy_version: str,
     student_thinking_mode: str,
     teacher_thinking: bool,
     decoding: dict,
     intervention_policy: dict,
+    sibling_count: int,
     sibling_seeds: list[int],
     seed: int,
     policy_hash: str,
@@ -42,34 +50,51 @@ def build_cache_manifest(
         "student_revision": student_revision,
         "teacher_model": teacher_model,
         "teacher_revision": teacher_revision,
+        "teacher_identity": teacher_identity,
+        "teacher_quantization": teacher_quantization,
+        "teacher_fallback_reason": teacher_fallback_reason,
         "dataset_revision": dataset_revision,
+        "dataset_hash": dataset_hash,
         "dataset_schema": dataset_schema,
         "source_schema_version": source_schema_version,
         "source_schema_hash": source_schema_hash,
         "retrieval_config": retrieval_config,
         "retrieval_hash": retrieval_hash,
         "prompt_version": prompt_version,
+        "prompt_hash": prompt_hash,
         "response_schema_version": response_schema_version,
+        "response_schema_hash": response_schema_hash,
         "evaluator_version": evaluator_version,
+        "evaluator_hash": evaluator_hash,
         "policy_version": policy_version,
         "student_thinking_mode": student_thinking_mode,
         "teacher_thinking": teacher_thinking,
         "decoding": decoding,
         "intervention_policy": intervention_policy,
+        "sibling_count": sibling_count,
         "sibling_seeds": sibling_seeds,
         "seed": seed,
         "policy_hash": policy_hash,
     }
     for key, value in manifest.items():
-        _require_manifest_value(key, value)
+        if key != "teacher_fallback_reason":
+            _require_manifest_value(key, value)
     if isinstance(source_schema_version, bool) or not isinstance(source_schema_version, int):
         raise ValueError("source_schema_version must be an integer")
     if isinstance(response_schema_version, bool) or not isinstance(response_schema_version, int):
         raise ValueError("response_schema_version must be an integer")
     if not isinstance(teacher_thinking, bool):
         raise ValueError("teacher_thinking must be boolean")
+    if teacher_identity == "primary_qwen3_32b_4bit" and teacher_fallback_reason is not None:
+        raise ValueError("primary teacher cache identity cannot contain a fallback reason")
+    if teacher_identity == "fallback_qwen3_14b_4bit" and (not isinstance(teacher_fallback_reason, str) or not teacher_fallback_reason.strip()):
+        raise ValueError("fallback teacher cache identity requires a documented fallback reason")
+    if isinstance(sibling_count, bool) or not isinstance(sibling_count, int) or sibling_count <= 0:
+        raise ValueError("sibling_count must be a positive integer")
     if not isinstance(sibling_seeds, list) or any(isinstance(seed_value, bool) or not isinstance(seed_value, int) for seed_value in sibling_seeds):
         raise ValueError("sibling_seeds must be an explicit list of integer seeds")
+    if len(sibling_seeds) != sibling_count:
+        raise ValueError("sibling_count must exactly match sibling_seeds")
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return {**manifest, "cache_hash": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
 

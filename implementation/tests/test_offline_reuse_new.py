@@ -12,8 +12,13 @@ def manifest(**overrides):
         "student_revision": "student-rev",
         "teacher_model": "Qwen/Qwen3-32B",
         "teacher_revision": "teacher-rev",
+        "teacher_identity": "primary_qwen3_32b_4bit",
+        "teacher_quantization": "4bit",
+        "teacher_fallback_reason": None,
         "dataset_revision": "data-rev",
+        "dataset_hash": "dataset-hash",
         "prompt_version": "plain-v2",
+        "prompt_hash": "prompt-hash",
         "student_thinking_mode": "direct",
         "teacher_thinking": True,
         "decoding": {"answer_max_new_tokens": 32, "temperature": 0.7, "top_p": 0.9},
@@ -26,9 +31,12 @@ def manifest(**overrides):
         "retrieval_config": {"backend": "fixed_bm25", "top_k": 8, "k1": 1.2, "b": 0.75},
         "retrieval_hash": "retrieval-hash",
         "response_schema_version": 1,
+        "response_schema_hash": "response-schema-hash",
         "evaluator_version": "evaluator-v1",
+        "evaluator_hash": "evaluator-hash",
         "policy_version": "policy-v1",
         "sibling_seeds": [101, 102],
+        "sibling_count": 2,
     }
     values.update(overrides)
     return build_cache_manifest(**values)
@@ -87,8 +95,11 @@ class OfflineReuseTest(unittest.TestCase):
         changes = [
             {"student_revision": "student-rev-2"},
             {"teacher_revision": "teacher-rev-2"},
+            {"teacher_identity": "fallback_qwen3_14b_4bit", "teacher_model": "Qwen/Qwen3-14B", "teacher_fallback_reason": "32B unavailable on allocated GPU memory"},
             {"dataset_revision": "data-rev-2"},
+            {"dataset_hash": "dataset-hash-2"},
             {"prompt_version": "plain-v3"},
+            {"prompt_hash": "prompt-hash-2"},
             {"student_thinking_mode": "two_pass"},
             {"teacher_thinking": False},
             {"decoding": {"answer_max_new_tokens": 31}},
@@ -99,7 +110,9 @@ class OfflineReuseTest(unittest.TestCase):
             {"source_schema_version": 2},
             {"retrieval_hash": "retrieval-hash-2"},
             {"response_schema_version": 2},
+            {"response_schema_hash": "response-schema-hash-2"},
             {"evaluator_version": "evaluator-v2"},
+            {"evaluator_hash": "evaluator-hash-2"},
             {"policy_version": "policy-v2"},
             {"sibling_seeds": [103, 104]},
         ]

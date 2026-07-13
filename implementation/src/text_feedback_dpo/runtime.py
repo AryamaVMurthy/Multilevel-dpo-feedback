@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import random
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 
 TOTAL_CONTEXT_TOKENS = 4096
+PRIMARY_TEACHER_MODEL = "Qwen/Qwen3-32B"
+FALLBACK_TEACHER_MODEL = "Qwen/Qwen3-14B"
 
 
 class RuntimeErrorExplicit(RuntimeError):
@@ -25,6 +28,41 @@ class StudentGeneration:
 class GeneratedText:
     text: str
     truncated: bool
+
+
+def validate_teacher_identity(
+    model_id: str,
+    *,
+    revision: str | None,
+    quantization: str,
+    fallback_reason: str | None,
+) -> str:
+    if not isinstance(revision, str) or not revision.strip():
+        raise ValueError("teacher requires a pinned revision")
+    if quantization != "4bit":
+        raise ValueError("Qwen3 teacher inference requires 4bit quantization")
+    if model_id == PRIMARY_TEACHER_MODEL:
+        if fallback_reason is not None:
+            raise ValueError("primary Qwen3-32B teacher must not declare a fallback reason")
+        return "primary_qwen3_32b_4bit"
+    if model_id == FALLBACK_TEACHER_MODEL:
+        if not isinstance(fallback_reason, str) or not fallback_reason.strip():
+            raise ValueError("Qwen3-14B teacher requires an explicit documented fallback reason")
+        return "fallback_qwen3_14b_4bit"
+    raise ValueError("teacher must be Qwen/Qwen3-32B primary or Qwen/Qwen3-14B explicit fallback")
+
+
+def set_generation_seed(seed: int) -> None:
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("generation seed must be a nonnegative integer")
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError("torch is required to seed model generation") from exc
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def load_tokenizer(model_id: str, *, revision: str | None = None):
@@ -61,7 +99,21 @@ def load_student(model_id: str, *, revision: str | None = None, attention_implem
     return model
 
 
-def load_teacher(model_id: str, *, revision: str | None = None, quantization: str, attention_implementation: str = "sdpa", device: str = "cuda:0"):
+def load_teacher(
+    model_id: str,
+    *,
+    revision: str | None = None,
+    quantization: str,
+    fallback_reason: str | None = None,
+    attention_implementation: str = "sdpa",
+    device: str = "cuda:0",
+):
+    validate_teacher_identity(
+        model_id,
+        revision=revision,
+        quantization=quantization,
+        fallback_reason=fallback_reason,
+    )
     try:
         import torch
         from transformers import AutoModelForCausalLM, BitsAndBytesConfig
@@ -74,18 +126,13 @@ def load_teacher(model_id: str, *, revision: str | None = None, quantization: st
         "trust_remote_code": False,
         "attn_implementation": attention_implementation,
     }
-    if quantization == "4bit":
-        kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
-    elif quantization == "bf16":
-        kwargs["torch_dtype"] = torch.bfloat16
-    else:
-        raise ValueError("teacher quantization must be 4bit or bf16")
-    return AutoModelForCausalLM.from_pretrained(model_id, revision=revision or None, **kwargs)
+    kwargs["quantization_config"] = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+    return AutoModelForCausalLM.from_pretrained(model_id, revision=revision, **kwargs)
 
 
 def decode_generated_records(tokenizer, output_ids, *, input_length: int, max_new_tokens: int) -> list[GeneratedText]:

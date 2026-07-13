@@ -17,6 +17,10 @@ class FeedbackContractTest(unittest.TestCase):
         with self.assertRaisesRegex(FeedbackFormatError, "gold answer"):
             parse_feedback('{"hint":"The relevant person is Ada-Lovelace."}', gold_answer="Ada Lovelace")
 
+    def test_rejects_duplicate_json_keys(self):
+        with self.assertRaisesRegex(FeedbackFormatError, "duplicate JSON key: hint"):
+            parse_feedback('{"hint":"First direction.","hint":"Second direction."}', gold_answer="Ada Lovelace")
+
     def test_teacher_prompt_is_plain_and_controls_escalation_without_xml(self):
         prompt = build_teacher_prompt(
             {

@@ -21,9 +21,12 @@ def source_records(prefix: str) -> list[dict]:
 class BatchGenerationTest(unittest.TestCase):
     def test_search_query_parser_is_strict_without_rejecting_legitimate_math(self):
         self.assertEqual(parse_search_query("prove 3 > 2"), "prove 3 > 2")
+        self.assertEqual(parse_search_query("compare 3 < 4 and 5 > 2"), "compare 3 < 4 and 5 > 2")
         for invalid in (
             "!!!", "two\nlines", "```query```", '{"query":"Ada"}',
             "<query>Ada</query>", "Answer: Ada", "Reasoning: Ada", "Sources: S001",
+            'Ada {"query":"algorithm"} Lovelace', 'Ada ["algorithm", "engine"] Lovelace',
+            "Ada <xml", "Ada </xml",
             "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen",
         ):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "query_invalid_format"):
