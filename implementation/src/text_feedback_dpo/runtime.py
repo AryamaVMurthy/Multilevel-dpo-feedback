@@ -76,17 +76,14 @@ def bounded_teacher_outputs(
             else:
                 invalid_content.append(index)
             final.append(None)
-    non_exhausted = [index for index in malformed if primary_output_token_counts[index] < primary_max_new_tokens]
-    if non_exhausted:
-        raise RuntimeErrorExplicit(
-            "malformed teacher thinking did not exhaust the primary budget at indices: "
-            + ",".join(str(index) for index in non_exhausted)
-        )
     report: dict[str, object] = {
         "primary_max_new_tokens": primary_max_new_tokens,
         "primary_output_token_counts": primary_output_token_counts,
         "primary_malformed_indices": malformed,
         "malformed_thinking_indices": malformed,
+        "primary_non_exhausted_malformed_indices": [
+            index for index in malformed if primary_output_token_counts[index] < primary_max_new_tokens
+        ],
         "primary_invalid_content_indices": invalid_content,
         "retry_max_new_tokens": retry_max_new_tokens,
         "retry_indices": sorted(set(malformed + invalid_content)),
