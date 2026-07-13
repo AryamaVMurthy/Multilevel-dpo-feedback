@@ -97,6 +97,42 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     write_json(args.output, {"examples": len(results), "exact_match": exact, "f1": f1, "correct": sum(row["correct"] for row in results)})
 
 
+def cmd_preflight_quality(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.preflight import assess_preflight, select_preflight_rows, summarize_response_quality
+
+    if args.split_name != "train-dev":
+        raise ValueError("prompt preflight may use only the explicit train-dev split")
+    examples = read_jsonl(args.data)
+    predictions = read_jsonl(args.predictions)
+    metrics = summarize_response_quality(examples, predictions)
+    metrics["split_name"] = args.split_name
+    metrics["gate"] = assess_preflight(metrics)
+    selected = select_preflight_rows(examples, sample_size=args.sample_size, seed=args.seed)
+    predictions_by_id = {str(row["id"]): row for row in predictions}
+    samples = [
+        {
+            "id": example["id"],
+            "question": example["question"],
+            "gold_answer": example["gold_answer"],
+            "response": predictions_by_id[str(example["id"])]["response"],
+            "truncated": predictions_by_id[str(example["id"])]["truncated"],
+        }
+        for example in selected
+    ]
+    write_jsonl(samples, args.samples)
+    write_json(args.output, metrics)
+
+
+def cmd_select_thinking_mode(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.preflight import select_thinking_mode
+
+    summaries = {
+        "direct": json.loads(args.direct.read_text(encoding="utf-8")),
+        "two_pass": json.loads(args.two_pass.read_text(encoding="utf-8")),
+    }
+    write_json(args.output, select_thinking_mode(summaries))
+
+
 def cmd_generate(args: argparse.Namespace) -> None:
     from text_feedback_dpo.prompts import build_student_prompt
     from text_feedback_dpo.runtime import generate_student_batch, load_student, load_tokenizer
@@ -117,9 +153,10 @@ def cmd_generate(args: argparse.Namespace) -> None:
                 answer_max_new_tokens=args.max_new_tokens, temperature=args.temperature, top_p=args.top_p,
             )
             for row, generation in zip(batch, generations, strict=True):
-                output = {"id": row["id"], "response": generation.response, "thinking_mode": generation.mode, "policy_hash": args.policy_hash}
+                output = {"id": row["id"], "response": generation.response, "truncated": generation.truncated, "thinking_mode": generation.mode, "policy_hash": args.policy_hash}
                 if generation.scratchpad is not None:
                     output["private_scratchpad"] = generation.scratchpad
+                    output["private_scratchpad_truncated"] = generation.scratchpad_truncated
                 handle.write(json.dumps(output, ensure_ascii=False) + "\n")
             handle.flush()
 
@@ -258,6 +295,20 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--predictions", required=True, type=Path)
     evaluate.add_argument("--output", required=True, type=Path)
     evaluate.set_defaults(func=cmd_evaluate)
+    preflight_quality = sub.add_parser("preflight-quality")
+    preflight_quality.add_argument("--data", required=True, type=Path)
+    preflight_quality.add_argument("--predictions", required=True, type=Path)
+    preflight_quality.add_argument("--output", required=True, type=Path)
+    preflight_quality.add_argument("--samples", required=True, type=Path)
+    preflight_quality.add_argument("--split-name", required=True)
+    preflight_quality.add_argument("--sample-size", type=int, default=32)
+    preflight_quality.add_argument("--seed", type=int, default=7)
+    preflight_quality.set_defaults(func=cmd_preflight_quality)
+    select_thinking = sub.add_parser("select-thinking-mode")
+    select_thinking.add_argument("--direct", required=True, type=Path)
+    select_thinking.add_argument("--two-pass", required=True, type=Path)
+    select_thinking.add_argument("--output", required=True, type=Path)
+    select_thinking.set_defaults(func=cmd_select_thinking_mode)
     generate = sub.add_parser("generate")
     generate.add_argument("--data", required=True, type=Path)
     generate.add_argument("--output", required=True, type=Path)

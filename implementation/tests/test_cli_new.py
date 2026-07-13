@@ -6,7 +6,7 @@ from text_feedback_dpo.cli import build_parser
 class CLITest(unittest.TestCase):
     def test_exposes_only_searchqa_training_commands(self):
         parser = build_parser()
-        for command in ("prepare-searchqa", "collect", "build-preferences", "build-sft-data", "generate", "evaluate", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
+        for command in ("prepare-searchqa", "collect", "build-preferences", "build-sft-data", "generate", "evaluate", "preflight-quality", "select-thinking-mode", "report", "validate-run", "train-sft", "train-dpo", "train-grpo", "train-dapo"):
             parsed = parser.parse_args([command] + self._required_args(command))
             self.assertEqual(parsed.command, command)
 
@@ -37,6 +37,10 @@ class CLITest(unittest.TestCase):
             return ["--data", "x.jsonl", "--output", "y.jsonl"]
         if command == "evaluate":
             return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json"]
+        if command == "preflight-quality":
+            return ["--data", "x.jsonl", "--predictions", "y.jsonl", "--output", "z.json", "--samples", "samples.jsonl", "--split-name", "train-dev"]
+        if command == "select-thinking-mode":
+            return ["--direct", "direct.json", "--two-pass", "two.json", "--output", "choice.json"]
         if command == "generate":
             return ["--data", "x.jsonl", "--output", "y.jsonl", "--model", "model", "--attention-implementation", "sdpa"]
         if command == "report":

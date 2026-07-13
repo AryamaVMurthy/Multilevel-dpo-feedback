@@ -14,6 +14,14 @@ class StudentGeneration:
     response: str
     scratchpad: str | None
     mode: str
+    truncated: bool
+    scratchpad_truncated: bool | None
+
+
+@dataclass(frozen=True)
+class GeneratedText:
+    text: str
+    truncated: bool
 
 
 def load_tokenizer(model_id: str, *, revision: str | None = None):
@@ -77,7 +85,25 @@ def load_teacher(model_id: str, *, revision: str | None = None, quantization: st
     return AutoModelForCausalLM.from_pretrained(model_id, revision=revision or None, **kwargs)
 
 
-def generate_batch(model, tokenizer, prompts: list[str], *, max_new_tokens: int, temperature: float, top_p: float) -> list[str]:
+def decode_generated_records(tokenizer, output_ids, *, input_length: int, max_new_tokens: int) -> list[GeneratedText]:
+    records = []
+    for output in output_ids:
+        token_ids = output.tolist() if hasattr(output, "tolist") else list(output)
+        generated = token_ids[input_length:]
+        eos_index = generated.index(tokenizer.eos_token_id) if tokenizer.eos_token_id in generated else None
+        if eos_index is not None:
+            content_ids = generated[:eos_index]
+            truncated = False
+        else:
+            pad_index = generated.index(tokenizer.pad_token_id) if tokenizer.pad_token_id in generated else None
+            content_ids = generated[:pad_index] if pad_index is not None else generated
+            truncated = pad_index is None and len(generated) >= max_new_tokens
+        text = tokenizer.decode(content_ids, skip_special_tokens=True).strip()
+        records.append(GeneratedText(text=text, truncated=truncated))
+    return records
+
+
+def generate_batch_records(model, tokenizer, prompts: list[str], *, max_new_tokens: int, temperature: float, top_p: float) -> list[GeneratedText]:
     if not prompts:
         return []
     if max_new_tokens <= 0 or max_new_tokens > 4096:
@@ -91,7 +117,17 @@ def generate_batch(model, tokenizer, prompts: list[str], *, max_new_tokens: int,
         kwargs.update(temperature=temperature, top_p=top_p)
     output_ids = model.generate(**encoded, **kwargs)
     input_length = encoded.input_ids.shape[1]
-    return [tokenizer.decode(output[input_length:], skip_special_tokens=True).strip() for output in output_ids]
+    return decode_generated_records(tokenizer, output_ids, input_length=input_length, max_new_tokens=max_new_tokens)
+
+
+def generate_batch(model, tokenizer, prompts: list[str], *, max_new_tokens: int, temperature: float, top_p: float) -> list[str]:
+    return [
+        record.text
+        for record in generate_batch_records(
+            model, tokenizer, prompts, max_new_tokens=max_new_tokens,
+            temperature=temperature, top_p=top_p,
+        )
+    ]
 
 
 def render_teacher_prompts(tokenizer, prompts: list[str], *, enable_thinking: bool = True) -> list[str]:
@@ -129,42 +165,52 @@ def generate_student_batch(
     answer_max_new_tokens: int,
     temperature: float,
     top_p: float,
-    generation_fn: Callable[..., list[str]] | None = None,
+    generation_fn: Callable[..., list[GeneratedText]] | None = None,
 ) -> list[StudentGeneration]:
     if mode not in {"direct", "two_pass"}:
         raise ValueError("student thinking mode must be direct or two_pass")
-    generate = generation_fn or generate_batch
+    generate = generation_fn or generate_batch_records
     if mode == "direct":
         responses = generate(
             model, tokenizer, prompts, max_new_tokens=answer_max_new_tokens,
             temperature=temperature, top_p=top_p,
         )
-        return [StudentGeneration(response=response, scratchpad=None, mode=mode) for response in responses]
+        return [
+            StudentGeneration(response=response.text, scratchpad=None, mode=mode, truncated=response.truncated, scratchpad_truncated=None)
+            for response in responses
+        ]
     if scratchpad_max_new_tokens <= 0:
         raise ValueError("scratchpad_max_new_tokens must be positive in two_pass mode")
     scratchpad_prompts = [
         f"{prompt}\n\nPrivate scratchpad: reason from the evidence before answering. This text will not be scored."
         for prompt in prompts
     ]
-    scratchpads = generate(
+    scratchpad_records = generate(
         model, tokenizer, scratchpad_prompts, max_new_tokens=scratchpad_max_new_tokens,
         temperature=temperature, top_p=top_p,
     )
-    if len(scratchpads) != len(prompts):
+    if len(scratchpad_records) != len(prompts):
         raise RuntimeErrorExplicit("student scratchpad batch cardinality mismatch")
+    scratchpads = [record.text for record in scratchpad_records]
     answer_prompts = [
         f"{prompt}\n\nPrivate scratchpad (do not repeat it):\n{scratchpad}\n\nReturn only the short answer with no explanation.\nAnswer:"
         for prompt, scratchpad in zip(prompts, scratchpads, strict=True)
     ]
-    responses = generate(
+    response_records = generate(
         model, tokenizer, answer_prompts, max_new_tokens=answer_max_new_tokens,
         temperature=temperature, top_p=top_p,
     )
-    if len(responses) != len(prompts):
+    if len(response_records) != len(prompts):
         raise RuntimeErrorExplicit("student answer batch cardinality mismatch")
     return [
-        StudentGeneration(response=response, scratchpad=scratchpad, mode=mode)
-        for response, scratchpad in zip(responses, scratchpads, strict=True)
+        StudentGeneration(
+            response=response.text,
+            scratchpad=scratchpad.text,
+            mode=mode,
+            truncated=response.truncated,
+            scratchpad_truncated=scratchpad.truncated,
+        )
+        for response, scratchpad in zip(response_records, scratchpad_records, strict=True)
     ]
 
 
