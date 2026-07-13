@@ -37,6 +37,7 @@ def summarize_response_quality(examples: list[dict], predictions: list[dict]) ->
     scored = []
     copied = []
     markup = []
+    verbose = []
     lengths = []
     for example in examples:
         prediction = by_id[str(example["id"])]
@@ -50,6 +51,7 @@ def summarize_response_quality(examples: list[dict], predictions: list[dict]) ->
         lengths.append(word_count)
         copied.append(bool(word_count > 8 and normalized and normalized in normalize_answer(example["packed_evidence"])))
         markup.append(any(marker in response for marker in ("<", ">", "{", "}", "```")))
+        verbose.append(word_count > 8)
     count = len(scored)
     if count == 0:
         raise ValueError("preflight requires at least one example")
@@ -62,6 +64,7 @@ def summarize_response_quality(examples: list[dict], predictions: list[dict]) ->
         "nonempty_rate": sum(bool(row["answer"]) for row in scored) / count,
         "copying_rate": sum(copied) / count,
         "markup_rate": sum(markup) / count,
+        "verbose_rate": sum(verbose) / count,
         "truncation_rate": sum(by_id[example_id]["truncated"] for example_id in expected_ids) / count,
         "answer_words": {
             "min": min(lengths),
@@ -73,7 +76,7 @@ def summarize_response_quality(examples: list[dict], predictions: list[dict]) ->
 
 
 def assess_preflight(metrics: dict) -> dict:
-    thresholds = {"nonempty_rate": (">=", 0.95), "copying_rate": ("<=", 0.05), "truncation_rate": ("<=", 0.05), "markup_rate": ("<=", 0.0)}
+    thresholds = {"nonempty_rate": (">=", 0.95), "copying_rate": ("<=", 0.05), "truncation_rate": ("<=", 0.05), "markup_rate": ("<=", 0.0), "verbose_rate": ("<=", 0.05)}
     failures = {}
     for name, (operator, threshold) in thresholds.items():
         if name not in metrics:

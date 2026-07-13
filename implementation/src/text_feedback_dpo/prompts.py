@@ -13,6 +13,7 @@ def build_student_prompt(example: dict, hints: list[str]) -> str:
     sections = [
         "Use the evidence to answer the question.",
         "Think through the evidence carefully, then return only the short answer in plain text only with no explanation.",
+        "The entire answer must be at most 8 words.",
         "Do not use XML, JSON, tags, code fences, labels, or evidence quotations.",
         "",
         "Evidence:",
