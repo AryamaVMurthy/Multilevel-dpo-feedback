@@ -10,12 +10,6 @@ class XMLFormatError(ValueError):
 
 
 @dataclass(frozen=True)
-class StudentResponse:
-    answer: str
-    evidence: str
-
-
-@dataclass(frozen=True)
 class MinimalFeedback:
     error_span: str
     hint: str
@@ -37,13 +31,6 @@ def _parse(text: str, expected_root: str) -> ET.Element:
     if root.tag != expected_root:
         raise XMLFormatError(f"expected root <{expected_root}>, got <{root.tag}>")
     return root
-
-
-def parse_student_response(text: str) -> StudentResponse:
-    root = _parse(text, "response")
-    if {child.tag for child in root} != {"answer", "evidence"}:
-        raise XMLFormatError("<response> must contain exactly <answer> and <evidence>")
-    return StudentResponse(answer=_text(root, "answer"), evidence=_text(root, "evidence"))
 
 
 def parse_feedback(text: str, *, gold_answer: str) -> MinimalFeedback:

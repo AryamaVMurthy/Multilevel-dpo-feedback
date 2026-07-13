@@ -9,7 +9,7 @@ def build_preference_rows(trajectory: dict) -> list[dict]:
     chosen = trajectory.get("chosen")
     prompt = trajectory.get("prompt")
     if not isinstance(chosen, str) or not chosen.strip():
-        raise ValueError("resolved trajectory is missing chosen XML response")
+        raise ValueError("resolved trajectory is missing chosen student answer")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("resolved trajectory is missing hint-free prompt")
     rows = []

@@ -6,14 +6,25 @@ EMPTY_RESPONSE_SENTINEL = "__EMPTY_RESPONSE__"
 
 
 def build_student_prompt(example: dict, hints: list[str]) -> str:
-    hint_xml = "".join(f"<hint>{escape(hint)}</hint>" for hint in hints)
-    return f"""<student_task>
-  <instructions>Answer the SearchQA question using the supplied evidence. Think privately. Return only the XML response.</instructions>
-  <format><response><answer>short answer</answer><evidence>supporting evidence summary</evidence></response></format>
-  <question>{escape(example['question'])}</question>
-  <evidence>{escape(example['packed_evidence'])}</evidence>
-  <feedback_history>{hint_xml}</feedback_history>
-</student_task>"""
+    question = str(example.get("question", "")).strip()
+    evidence = str(example.get("packed_evidence", "")).strip()
+    if not question:
+        raise ValueError("student prompt requires a non-empty question")
+    if not evidence:
+        raise ValueError("student prompt requires non-empty evidence")
+    sections = [
+        "Use the evidence to answer the question.",
+        "Think through the evidence carefully, then return only the short answer with no explanation.",
+        "",
+        "Evidence:",
+        evidence,
+        "",
+        f"Question: {question}",
+    ]
+    if hints:
+        sections.extend(["", "Hints:", *(f"- {str(hint).strip()}" for hint in hints)])
+    sections.extend(["", "Answer:"])
+    return "\n".join(sections)
 
 
 def build_teacher_prompt(example: dict, failed_response: str, interventions: list[dict]) -> str:

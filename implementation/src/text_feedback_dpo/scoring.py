@@ -3,9 +3,6 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from text_feedback_dpo.formatting import XMLFormatError, parse_student_response
-
-
 def normalize_answer(value: str) -> str:
     value = value.lower()
     value = re.sub(r"[^a-z0-9\s]", " ", value)
@@ -27,12 +24,20 @@ def _f1(prediction: str, gold: str) -> float:
 
 
 def score_searchqa(response: str, gold_answer: str, packed_evidence: str) -> dict:
-    try:
-        parsed = parse_student_response(response)
-    except XMLFormatError as exc:
-        return {"correct": False, "exact_match": 0.0, "f1": 0.0, "evidence_support": 0.0, "error_code": "invalid_xml", "error": str(exc)}
-    answer = normalize_answer(parsed.answer)
+    if not isinstance(response, str):
+        raise TypeError("SearchQA response must be a string")
+    plain_answer = response.strip()
+    if not plain_answer:
+        return {"correct": False, "exact_match": 0.0, "f1": 0.0, "evidence_support": 0.0, "error_code": "empty_answer", "answer": ""}
+    answer = normalize_answer(plain_answer)
     gold = normalize_answer(gold_answer)
     evidence = normalize_answer(packed_evidence)
     exact = float(answer == gold)
-    return {"correct": bool(exact), "exact_match": exact, "f1": _f1(parsed.answer, gold_answer), "evidence_support": float(bool(answer) and answer in evidence), "error_code": None, "answer": parsed.answer, "evidence": parsed.evidence}
+    return {
+        "correct": bool(exact),
+        "exact_match": exact,
+        "f1": _f1(plain_answer, gold_answer),
+        "evidence_support": float(bool(answer) and answer in evidence),
+        "error_code": None,
+        "answer": plain_answer,
+    }

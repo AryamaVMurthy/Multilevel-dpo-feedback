@@ -56,18 +56,19 @@ class SearchQADataTest(unittest.TestCase):
         packed = pack_evidence(snippets, max_tokens=4, token_count=lambda text: len(text.split()))
         self.assertEqual(packed, "one two\nthree four")
 
-    def test_sft_target_compacts_real_evidence_and_closes_xml(self):
+    def test_sft_target_is_plain_prompt_completion(self):
         row = {
             "id": "train-0",
             "question": "Who?",
             "gold_answer": "Ada",
             "packed_evidence": "prefix " * 500 + "Ada evidence near the answer " + "suffix " * 500,
-            "prompt": "<student_task><evidence>context</evidence></student_task>",
         }
-        text = build_sft_rows([row])[0]["text"]
-        self.assertLess(len(text), 5000)
-        self.assertIn("Ada evidence near the answer", text)
-        self.assertTrue(text.endswith("</response>"))
+        result = build_sft_rows([row])[0]
+        self.assertEqual(result["id"], "train-0")
+        self.assertEqual(result["completion"], "Ada")
+        self.assertTrue(result["prompt"].endswith("Answer:"))
+        self.assertIn("Ada evidence near the answer", result["prompt"])
+        self.assertNotIn("<response>", result["prompt"] + result["completion"])
 
 
 if __name__ == "__main__":

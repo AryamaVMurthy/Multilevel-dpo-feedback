@@ -13,13 +13,13 @@ class CollectionBatchTest(unittest.TestCase):
         }]
 
         def student(prompts, **_kwargs):
-            return [""] if not any("<hint>" in prompt for prompt in prompts) else [
-                "<response><answer>Ada Lovelace</answer><evidence>Ada evidence</evidence></response>"
+            return [""] if not any("Hints:" in prompt for prompt in prompts) else [
+                "Ada Lovelace"
             ]
 
         def teacher(prompts, **_kwargs):
             self.assertIn("__EMPTY_RESPONSE__", prompts[0])
-            return ["<feedback><error_span>__EMPTY_RESPONSE__</error_span><hint>Produce a complete XML response.</hint><scope>verification</scope></feedback>"]
+            return ["<feedback><error_span>__EMPTY_RESPONSE__</error_span><hint>Provide the short answer rather than no answer.</hint><scope>verification</scope></feedback>"]
 
         rows = collect_dataset_batchwise(
             examples=examples,
@@ -39,10 +39,10 @@ class CollectionBatchTest(unittest.TestCase):
             student_calls.append(len(prompts))
             if len(student_calls) == 1:
                 return [
-                    "<response><answer>Wrong</answer><evidence>x</evidence></response>",
-                    "<response><answer>Ada</answer><evidence>Ada evidence</evidence></response>",
+                    "Wrong",
+                    "Ada",
                 ]
-            return ["<response><answer>Ada</answer><evidence>Ada evidence</evidence></response>"]
+            return ["Ada"]
 
         def teacher(prompts, **_kwargs):
             teacher_calls.append(len(prompts))

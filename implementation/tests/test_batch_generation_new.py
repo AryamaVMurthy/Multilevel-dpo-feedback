@@ -9,12 +9,12 @@ class BatchGenerationTest(unittest.TestCase):
 
         def provider(prompts, **kwargs):
             calls.append((prompts, kwargs))
-            return [f"<response><answer>{prompt}</answer><evidence>e</evidence></response>" for prompt in prompts]
+            return prompts
 
         outputs = generate_batch(provider, ["a", "b"], max_new_tokens=32)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(outputs[0]["response"].split("<answer>")[1].split("</answer>")[0], "a")
-        self.assertEqual(outputs[1]["response"].split("<answer>")[1].split("</answer>")[0], "b")
+        self.assertEqual(outputs[0]["response"], "a")
+        self.assertEqual(outputs[1]["response"], "b")
 
     def test_batch_generation_rejects_wrong_output_cardinality(self):
         with self.assertRaisesRegex(ValueError, "cardinality"):

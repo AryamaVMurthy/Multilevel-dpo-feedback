@@ -16,7 +16,7 @@ def collect_dataset_batchwise(*, examples: list[dict], student_generate_batch: C
     active = [str(example["id"]) for example in examples]
     for attempt_index in range(max_interventions + 1):
         prompts = [build_student_prompt(states[example_id]["example"], states[example_id]["hints"]) for example_id in active]
-        responses = student_generate_batch(prompts, max_new_tokens=512, temperature=0.7, top_p=0.9)
+        responses = student_generate_batch(prompts, max_new_tokens=32, temperature=0.7, top_p=0.9)
         if len(responses) != len(active):
             raise ValueError(f"student batch cardinality mismatch at attempt {attempt_index}")
         failed_ids = []

@@ -5,8 +5,6 @@ import json
 import io
 import zipfile
 from pathlib import Path
-from xml.sax.saxutils import escape
-
 from text_feedback_dpo.searchqa import materialize_row, pack_evidence
 from text_feedback_dpo.prompts import build_student_prompt
 
@@ -92,27 +90,10 @@ def build_sft_rows(rows: list[dict]) -> list[dict]:
 
 
 def build_sft_row(row: dict) -> dict:
-    if not row.get("prompt"):
-        row = {**row, "prompt": build_student_prompt(row, [])}
-    evidence = _compact_sft_evidence(row["packed_evidence"], row["gold_answer"])
-    completion = f"<response><answer>{escape(row['gold_answer'])}</answer><evidence>{escape(evidence)}</evidence></response>"
-    return {"id": row["id"], "text": row["prompt"] + "\n" + completion}
-
-
-def _compact_sft_evidence(packed_evidence: str, gold_answer: str, *, max_chars: int = 1200) -> str:
-    """Keep SFT completion supervision on a short, real evidence repair region."""
-    if max_chars <= 0:
-        raise ValueError("max_chars must be positive")
-    evidence = str(packed_evidence).strip()
-    if not evidence:
-        raise ValueError("SFT evidence cannot be empty")
-    answer = str(gold_answer).strip()
-    answer_index = evidence.lower().find(answer.lower()) if answer else -1
-    start = max(0, answer_index - max_chars // 3) if answer_index >= 0 else 0
-    excerpt = evidence[start : start + max_chars].strip()
-    if not excerpt:
-        raise ValueError("SFT evidence excerpt cannot be empty")
-    return excerpt
+    completion = str(row.get("gold_answer", "")).strip()
+    if not completion:
+        raise ValueError("SFT completion cannot be empty")
+    return {"id": row["id"], "prompt": build_student_prompt(row, []), "completion": completion}
 
 
 def write_jsonl(rows: list[dict], path: Path) -> None:
