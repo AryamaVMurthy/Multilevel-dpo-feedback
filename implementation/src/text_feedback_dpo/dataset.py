@@ -40,17 +40,21 @@ def load_searchqa_split_with_stats(source: str, split: str, *, revision: str, li
         source_rows = 0
         dropped_rows = 0
         drop_reasons: dict[str, int] = {}
+        source_record_stats = _empty_source_record_stats()
         for index, raw in enumerate(dataset):
             if limit is not None and len(rows) >= limit:
                 break
             source_rows += 1
             try:
-                rows.append(materialize_row(raw, split=split, index=index))
-            except NoUsableSearchQASourcesError:
+                row = materialize_row(raw, split=split, index=index)
+                rows.append(row)
+                _accumulate_source_record_stats(source_record_stats, row["source_filter_stats"])
+            except NoUsableSearchQASourcesError as exc:
+                _accumulate_source_record_stats(source_record_stats, exc.source_filter_stats)
                 dropped_rows += 1
                 reason = "no_usable_evidence"
                 drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
-        stats = _load_stats(source_rows, rows, dropped_rows, drop_reasons)
+        stats = _load_stats(source_rows, rows, dropped_rows, drop_reasons, source_record_stats)
     if not rows:
         raise ValueError(f"SearchQA split {split!r} produced zero rows")
     return rows, stats
@@ -69,6 +73,7 @@ def _load_official_searchqa_zip(split: str, revision: str, limit: int | None) ->
     source_rows = 0
     dropped_rows = 0
     drop_reasons: dict[str, int] = {}
+    source_record_stats = _empty_source_record_stats()
     with zipfile.ZipFile(archive_path) as archive:
         for index, member in enumerate(sorted(name for name in archive.namelist() if name.endswith(".json"))):
             if limit is not None and len(rows) >= limit:
@@ -77,15 +82,47 @@ def _load_official_searchqa_zip(split: str, revision: str, limit: int | None) ->
             with archive.open(member) as handle:
                 raw = json.loads(io.TextIOWrapper(handle, encoding="utf-8").read())
             try:
-                rows.append(materialize_row(raw, split=split, index=index))
-            except NoUsableSearchQASourcesError:
+                row = materialize_row(raw, split=split, index=index)
+                rows.append(row)
+                _accumulate_source_record_stats(source_record_stats, row["source_filter_stats"])
+            except NoUsableSearchQASourcesError as exc:
+                _accumulate_source_record_stats(source_record_stats, exc.source_filter_stats)
                 dropped_rows += 1
                 reason = "no_usable_evidence"
                 drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
-    return rows, _load_stats(source_rows, rows, dropped_rows, drop_reasons)
+    return rows, _load_stats(source_rows, rows, dropped_rows, drop_reasons, source_record_stats)
 
 
-def _load_stats(source_rows: int, rows: list[dict], dropped_rows: int, drop_reasons: dict[str, int]) -> dict:
+def _empty_source_record_stats() -> dict:
+    return {"input_records": 0, "usable_records": 0, "dropped_records": 0, "drop_reasons": {}}
+
+
+def _accumulate_source_record_stats(total: dict, row_stats: dict | None) -> None:
+    if row_stats is None:
+        raise ValueError("SearchQA source filtering failed without source_filter_stats")
+    required = {"input_records", "usable_records", "dropped_records", "drop_reasons"}
+    if not isinstance(row_stats, dict) or set(row_stats) != required or not isinstance(row_stats["drop_reasons"], dict):
+        raise ValueError("SearchQA source_filter_stats has an invalid schema")
+    for field in ("input_records", "usable_records", "dropped_records"):
+        value = row_stats[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"SearchQA source_filter_stats.{field} must be a nonnegative integer")
+        total[field] += value
+    if row_stats["input_records"] != row_stats["usable_records"] + row_stats["dropped_records"]:
+        raise ValueError("SearchQA source_filter_stats counts do not balance")
+    for reason, count in row_stats["drop_reasons"].items():
+        if not isinstance(reason, str) or not reason or isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise ValueError("SearchQA source_filter_stats.drop_reasons is invalid")
+        total["drop_reasons"][reason] = total["drop_reasons"].get(reason, 0) + count
+
+
+def _load_stats(
+    source_rows: int,
+    rows: list[dict],
+    dropped_rows: int,
+    drop_reasons: dict[str, int],
+    source_record_stats: dict,
+) -> dict:
     return {
         "source_schema": SOURCE_SCHEMA,
         "source_schema_version": SOURCE_SCHEMA_VERSION,
@@ -93,6 +130,7 @@ def _load_stats(source_rows: int, rows: list[dict], dropped_rows: int, drop_reas
         "materialized_rows": len(rows),
         "dropped_rows": dropped_rows,
         "drop_reasons": drop_reasons,
+        "source_records": source_record_stats,
     }
 
 

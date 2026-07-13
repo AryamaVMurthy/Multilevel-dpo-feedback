@@ -111,9 +111,12 @@ class FixedBM25RetrievalTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "b"):
             FixedBM25Retriever(valid_sources, b=1.1)
 
-    def test_top_k_above_source_count_fails_instead_of_clamping(self):
-        with self.assertRaisesRegex(ValueError, "top_k must be <= source count"):
-            FixedBM25Retriever([source("S001", 1, "evidence")]).search("evidence", top_k=2)
+    def test_requested_top_k_returns_all_available_sources_with_explicit_effective_k(self):
+        results = FixedBM25Retriever([source("S001", 1, "evidence")]).search("evidence", top_k=8)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["requested_top_k"], 8)
+        self.assertEqual(results[0]["effective_top_k"], 1)
+        self.assertEqual(results[0]["source_count"], 1)
 
     def test_retrieval_metrics_use_normalized_answer_matching_and_validate_inputs(self):
         sources = [

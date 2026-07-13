@@ -86,6 +86,51 @@ class SearchQADataTest(unittest.TestCase):
         self.assertEqual(row["sources"][0]["source_id"], "S001")
         self.assertEqual(row["sources"][0]["url"], "https://example.test/ada")
 
+    def test_materialize_row_accepts_real_official_related_links_shapes(self):
+        row = materialize_row(
+            {
+                "question": "Who?",
+                "answer": "Ada",
+                "search_results": [
+                    {
+                        "snippet": "Ada evidence",
+                        "title": "Ada",
+                        "url": "https://example.test/ada",
+                        "related_links": [],
+                    },
+                    {
+                        "snippet": "Other evidence",
+                        "title": "Other",
+                        "url": "https://example.test/other",
+                        "related_links": ["https://example.test/related"],
+                    },
+                ],
+            },
+            split="validation",
+            index=1,
+        )
+        self.assertEqual(row["sources"][0]["related_links"], [])
+        self.assertEqual(row["sources"][1]["related_links"], ["https://example.test/related"])
+
+    def test_materialize_row_rejects_malformed_related_links_entries(self):
+        with self.assertRaisesRegex(ValueError, "related_links"):
+            materialize_row(
+                {
+                    "question": "Who?",
+                    "answer": "Ada",
+                    "search_results": [
+                        {
+                            "snippet": "Ada evidence",
+                            "title": "Ada",
+                            "url": "https://example.test/ada",
+                            "related_links": [7],
+                        },
+                    ],
+                },
+                split="validation",
+                index=1,
+            )
+
     def test_materialize_row_fails_explicitly_on_source_array_length_mismatch(self):
         with self.assertRaisesRegex(ValueError, "length mismatch"):
             materialize_row(
@@ -102,17 +147,43 @@ class SearchQADataTest(unittest.TestCase):
                 index=0,
             )
 
-    def test_materialize_row_fails_when_nonempty_snippet_lacks_title_or_url(self):
-        for missing_field in ("title", "url"):
-            with self.subTest(missing_field=missing_field):
-                fields = {
-                    "snippets": ["Ada evidence"],
-                    "titles": ["Ada"],
-                    "urls": ["https://example.test/ada"],
-                }
-                fields["titles" if missing_field == "title" else "urls"] = ["  "]
-                with self.assertRaisesRegex(ValueError, missing_field):
-                    materialize_row({"question": "Who?", "answer": "Ada", "search_results": fields}, split="train", index=0)
+    def test_materialize_row_filters_unusable_metadata_without_shifting_ranks(self):
+        row = materialize_row(
+            {
+                "question": "Who?",
+                "answer": "Ada",
+                "search_results": {
+                    "snippets": ["missing title", "usable", "missing url", "  "],
+                    "titles": ["  ", "Usable title", "Missing URL", "Blank snippet"],
+                    "urls": ["https://example.test/one", "https://example.test/two", "  ", "https://example.test/four"],
+                },
+            },
+            split="train",
+            index=0,
+        )
+        self.assertEqual([source["source_id"] for source in row["sources"]], ["S002"])
+        self.assertEqual(row["source_filter_stats"], {
+            "input_records": 4,
+            "usable_records": 1,
+            "dropped_records": 3,
+            "drop_reasons": {"blank_snippet": 1, "missing_title": 1, "missing_url": 1},
+        })
+
+    def test_materialize_row_fails_only_when_no_source_has_required_metadata(self):
+        with self.assertRaisesRegex(ValueError, "no usable"):
+            materialize_row(
+                {
+                    "question": "Who?",
+                    "answer": "Ada",
+                    "search_results": {
+                        "snippets": ["Ada evidence"],
+                        "titles": ["  "],
+                        "urls": ["https://example.test/ada"],
+                    },
+                },
+                split="train",
+                index=0,
+            )
 
     def test_materialize_row_fails_clearly_for_source_less_or_unsupported_schemas(self):
         for search_results in (["Ada evidence"], {"snippets": ["Ada evidence"]}):
@@ -170,6 +241,12 @@ class SearchQADataTest(unittest.TestCase):
         self.assertEqual(stats["source_schema"], "searchqa.search_results.v1")
         self.assertEqual(stats["source_schema_version"], 1)
         self.assertEqual(stats["drop_reasons"], {"no_usable_evidence": 1})
+        self.assertEqual(stats["source_records"], {
+            "input_records": 2,
+            "usable_records": 1,
+            "dropped_records": 1,
+            "drop_reasons": {"blank_snippet": 1},
+        })
 
     def test_official_loader_counts_empty_raw_search_results_as_dropped(self):
         from text_feedback_dpo.dataset import _load_official_searchqa_zip

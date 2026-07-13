@@ -10,6 +10,10 @@ SOURCE_SCHEMA_VERSION = 1
 class NoUsableSearchQASourcesError(ValueError):
     """Raised when a valid SearchQA source schema contains no usable source."""
 
+    def __init__(self, message: str, *, source_filter_stats: dict | None = None) -> None:
+        self.source_filter_stats = source_filter_stats
+        super().__init__(message)
+
 
 def _source_arrays(search_results: object) -> tuple[list[object], list[object], list[object], list[object]]:
     if isinstance(search_results, dict):
@@ -25,7 +29,15 @@ def _source_arrays(search_results: object) -> tuple[list[object], list[object], 
             arrays["related_links"] = [None] * len(arrays["snippets"]) if isinstance(arrays["snippets"], list) else None
     elif isinstance(search_results, list):
         if not search_results:
-            raise NoUsableSearchQASourcesError("SearchQA row has no usable source records")
+            raise NoUsableSearchQASourcesError(
+                "SearchQA row has no usable source records",
+                source_filter_stats={
+                    "input_records": 0,
+                    "usable_records": 0,
+                    "dropped_records": 0,
+                    "drop_reasons": {},
+                },
+            )
         if not all(isinstance(record, dict) for record in search_results):
             raise ValueError("unsupported SearchQA source provenance schema: expected mapping or records with metadata")
         arrays = {"snippets": [], "titles": [], "urls": [], "related_links": []}
@@ -58,11 +70,31 @@ def _text_value(value: object, *, field: str, original_rank: int) -> str | None:
     return value.strip()
 
 
-def _sources(row: dict) -> list[dict]:
+def _related_links_value(value: object, *, original_rank: int) -> str | list[str] | None:
+    """Preserve the two related-link shapes present in SearchQA source records."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        if not all(isinstance(link, str) for link in value):
+            raise ValueError(
+                "unsupported SearchQA source provenance schema: "
+                f"related_links at original rank {original_rank} must contain only strings"
+            )
+        return [link.strip() for link in value]
+    raise ValueError(
+        "unsupported SearchQA source provenance schema: "
+        f"related_links at original rank {original_rank} must be null, a string, or an array of strings"
+    )
+
+
+def _sources(row: dict) -> tuple[list[dict], dict]:
     if "search_results" not in row:
         raise ValueError("SearchQA row requires search_results source provenance")
     snippets, titles, urls, related_links = _source_arrays(row["search_results"])
     sources = []
+    drop_reasons = {"blank_snippet": 0, "missing_title": 0, "missing_url": 0}
     for original_index, (snippet_value, title_value, url_value, related_links_value) in enumerate(
         zip(snippets, titles, urls, related_links, strict=True),
         start=1,
@@ -70,13 +102,16 @@ def _sources(row: dict) -> list[dict]:
         snippet = _text_value(snippet_value, field="snippet", original_rank=original_index)
         title = _text_value(title_value, field="title", original_rank=original_index)
         url = _text_value(url_value, field="url", original_rank=original_index)
-        related = _text_value(related_links_value, field="related_links", original_rank=original_index)
         if not snippet:
+            drop_reasons["blank_snippet"] += 1
             continue
         if not title:
-            raise ValueError(f"SearchQA source title is missing or blank for nonempty snippet at original rank {original_index}")
+            drop_reasons["missing_title"] += 1
+            continue
         if not url:
-            raise ValueError(f"SearchQA source url is missing or blank for nonempty snippet at original rank {original_index}")
+            drop_reasons["missing_url"] += 1
+            continue
+        related = _related_links_value(related_links_value, original_rank=original_index)
         sources.append(
             {
                 "source_id": f"S{original_index:03d}",
@@ -87,9 +122,19 @@ def _sources(row: dict) -> list[dict]:
                 "related_links": related,
             }
         )
+    nonzero_reasons = {reason: count for reason, count in drop_reasons.items() if count}
+    source_filter_stats = {
+        "input_records": len(snippets),
+        "usable_records": len(sources),
+        "dropped_records": len(snippets) - len(sources),
+        "drop_reasons": nonzero_reasons,
+    }
     if not sources:
-        raise NoUsableSearchQASourcesError("SearchQA row has no usable non-empty evidence snippets")
-    return sources
+        raise NoUsableSearchQASourcesError(
+            "SearchQA row has no usable source with non-empty snippet, title, and URL",
+            source_filter_stats=source_filter_stats,
+        )
+    return sources, source_filter_stats
 
 
 def materialize_row(row: dict, *, split: str, index: int) -> dict:
@@ -101,13 +146,14 @@ def materialize_row(row: dict, *, split: str, index: int) -> dict:
         raise ValueError("SearchQA row requires non-empty question")
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError("SearchQA row requires non-empty answer")
-    sources = _sources(row)
+    sources, source_filter_stats = _sources(row)
     return {
         "id": f"{split}-{index}",
         "question": question.strip(),
         "gold_answer": answer.strip(),
         "sources": sources,
         "snippets": [source["snippet"] for source in sources],
+        "source_filter_stats": source_filter_stats,
     }
 
 

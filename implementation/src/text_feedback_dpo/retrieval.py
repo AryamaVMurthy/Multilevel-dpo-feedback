@@ -82,11 +82,9 @@ def _canonical_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, A
     return [{field: source.get(field) for field in _CANONICAL_SOURCE_FIELDS} for source in ordered]
 
 
-def _validate_top_k(top_k: int, source_count: int) -> None:
+def _validate_top_k(top_k: int) -> None:
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
         raise ValueError("top_k must be a positive integer")
-    if top_k > source_count:
-        raise ValueError(f"top_k must be <= source count ({source_count})")
 
 
 def _validate_parameters(k1: float, b: float) -> None:
@@ -114,9 +112,10 @@ class FixedBM25Retriever:
         query_tokens = tokenize_query(query)
         if not query_tokens:
             raise ValueError("query must contain at least one token")
-        _validate_top_k(top_k, len(self._sources))
+        _validate_top_k(top_k)
         query_hash = _hash_json(list(query_tokens))
         document_count = len(self._sources)
+        effective_top_k = min(top_k, document_count)
         ranked: list[tuple[float, int, str, dict[str, Any]]] = []
         unique_query_terms = tuple(dict.fromkeys(query_tokens))
 
@@ -140,13 +139,16 @@ class FixedBM25Retriever:
                     "matched_query_terms": matched_terms,
                     "query_hash": query_hash,
                     "corpus_hash": self._corpus_hash,
+                    "requested_top_k": top_k,
+                    "effective_top_k": effective_top_k,
+                    "source_count": document_count,
                 }
             )
             ranked.append((score, source["original_rank"], source["source_id"], result))
 
         ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
         results = []
-        for rank, (_, _, _, result) in enumerate(ranked[:top_k], start=1):
+        for rank, (_, _, _, result) in enumerate(ranked[:effective_top_k], start=1):
             result["retrieval_rank"] = rank
             results.append(result)
         return results
@@ -177,7 +179,20 @@ def _validate_ranked_results(ranked_results: Sequence[Mapping[str, Any]]) -> Non
     original_ranks: set[int] = set()
     expected_query_hash: str | None = None
     expected_corpus_hash: str | None = None
-    required_fields = ("retrieval_rank", "source_id", "original_rank", "bm25_score", "query_hash", "corpus_hash", "title", "snippet")
+    expected_retrieval_shape: tuple[int, int, int] | None = None
+    required_fields = (
+        "retrieval_rank",
+        "source_id",
+        "original_rank",
+        "bm25_score",
+        "query_hash",
+        "corpus_hash",
+        "requested_top_k",
+        "effective_top_k",
+        "source_count",
+        "title",
+        "snippet",
+    )
 
     for position, result in enumerate(ranked_results, start=1):
         missing = [field for field in required_fields if field not in result]
@@ -206,6 +221,20 @@ def _validate_ranked_results(ranked_results: Sequence[Mapping[str, Any]]) -> Non
         bm25_score = result["bm25_score"]
         if isinstance(bm25_score, bool) or not isinstance(bm25_score, Real) or not math.isfinite(bm25_score) or bm25_score < 0:
             raise ValueError(f"ranked result {position} bm25_score must be a finite nonnegative number")
+
+        for field in ("requested_top_k", "effective_top_k", "source_count"):
+            value = result[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"ranked result {position} {field} must be a positive integer")
+        if result["effective_top_k"] != len(ranked_results):
+            raise ValueError(f"ranked result {position} effective_top_k must equal result count")
+        if result["effective_top_k"] != min(result["requested_top_k"], result["source_count"]):
+            raise ValueError(f"ranked result {position} effective_top_k does not match requested_top_k and source_count")
+        retrieval_shape = (result["requested_top_k"], result["effective_top_k"], result["source_count"])
+        if expected_retrieval_shape is None:
+            expected_retrieval_shape = retrieval_shape
+        elif retrieval_shape != expected_retrieval_shape:
+            raise ValueError(f"ranked result {position} retrieval cardinality metadata does not match prior rows")
 
         for field in ("title", "snippet"):
             value = result[field]
