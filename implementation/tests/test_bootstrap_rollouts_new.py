@@ -136,6 +136,7 @@ class BootstrapRolloutsTest(unittest.TestCase):
             bootstrap, examples={"q1": example}, tokenizer=_Tokenizer()
         )
         self.assertEqual([row["task"] for row in rows], ["query"])
+        self.assertTrue(rows[0]["metadata"]["verified_no_hint_success"])
         self.assertEqual(report["query_unique_examples"], 1)
         self.assertEqual(report["response_unique_examples"], 0)
         self.assertEqual(report["response_exclusion_counts"]["response_not_verified_correct"], 1)

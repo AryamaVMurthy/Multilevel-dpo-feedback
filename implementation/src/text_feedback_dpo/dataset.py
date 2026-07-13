@@ -722,6 +722,7 @@ def build_sft_rows_from_bootstrap(
                     "seed": seed,
                     "provenance": "student",
                     "no_hint": True,
+                    "verified_no_hint_success": True,
                     "query_prompt_hash": artifact["query_prompt_hash"],
                     "response_prompt_hash": artifact.get("response_prompt_hash"),
                     "retrieval_context_hash": artifact.get("retrieval_context_hash"),
