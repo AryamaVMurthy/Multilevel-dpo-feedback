@@ -26,6 +26,7 @@ allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is r
 : "${SMOKE_MANIFEST:?SMOKE_MANIFEST must be supplied}"
 : "${START_MODEL:?START_MODEL must be supplied}"
 : "${START_REVISION:?START_REVISION must be supplied}"
+: "${START_MODEL_SHA256:?START_MODEL_SHA256 must hash START_MODEL/model.safetensors}"
 : "${DATASET_SOURCE:?DATASET_SOURCE must be supplied}"
 : "${DATASET_REVISION:?DATASET_REVISION must be supplied}"
 : "${PROMPT_HASH:?PROMPT_HASH must be supplied}"
@@ -88,6 +89,7 @@ done
 mkdir -p "$SMOKE_ROOT"
 COMMON_ARGS=(
   --config "$CONFIG" --train "$TRAIN" --eval "$EVAL" --output "$SMOKE_ROOT" --model "$START_MODEL" --model-revision "$START_REVISION"
+  --initial-checkpoint-sha256 "$START_MODEL_SHA256"
   --deepspeed-config configs/deepspeed_zero3.json --save-steps 1 --eval-steps 1
   --gradient-accumulation-steps "$DECISION_GRADIENT_ACCUMULATION_STEPS" --learning-rate "$DECISION_LEARNING_RATE"
   --per-device-train-batch-size "$DECISION_MICROBATCH" --per-device-eval-batch-size "$DECISION_EVAL_MICROBATCH"

@@ -353,6 +353,9 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("non-reentrant", text.lower())
         self.assertIn('START_MODEL_SHA256:?START_MODEL_SHA256', text)
         self.assertIn('--initial-checkpoint-sha256 "$START_MODEL_SHA256"', text)
+        smoke = Path("scripts/turing_checkpoint_smoke.sh").read_text(encoding="utf-8")
+        self.assertIn('START_MODEL_SHA256:?START_MODEL_SHA256', smoke)
+        self.assertIn('--initial-checkpoint-sha256 "$START_MODEL_SHA256"', smoke)
 
     def test_generation_and_training_consume_a_hashed_frozen_optimization_decision(self):
         for name in ("turing_generate.sh", "turing_train.sh"):
