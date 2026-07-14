@@ -17,7 +17,7 @@ The overfit checkpoint is a material protocol improvement on the untouched 32-ro
 
 ## Live Turing rollout snapshot
 
-**Observed:** 2026-07-14 05:28 UTC (10:58 IST)
+**Observed:** 2026-07-14 06:12 UTC (11:42 IST)
 **Active checkout:** `~/searchqa-dpo/fixed-retrieval-v1`
 **Active rollout output:** `/scratch/node10/node10/aryama.murthy/searchqa-dpo/teacher-dpo-v1/full-r4`
 
@@ -31,9 +31,9 @@ The current full teacher-guided collection uses four concurrent two-GPU jobs:
 | 13952 | 1,042 | RUNNING | 0 |
 | **Total** | **4,096** | **RUNNING** | **0 / 4,096** |
 
-Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. At the observation time all four jobs had run for about 3 hours 33 minutes. Their 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The old collector writes each shard atomically at completion and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
+Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. On job 13949 the active teacher used approximately 39.0/40.96 GiB while the resident student used approximately 11.5 GiB and remained idle during the teacher call. At the observation time all four jobs had run for about 4 hours 17 minutes and were inside the second teacher-feedback call. Their 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The old collector writes each shard atomically and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
 
-Downstream jobs 13954 (merge and trajectory audit), 13955 (preferences), 13956 (DPO split and reference log-probabilities), 13957 (optimization probe), 13958–13959 (four/eight-GPU scaling probes), 13960 (scale-decision freeze), and 13962 (DPO after the frozen gate) are submitted with explicit `afterok` dependencies and are currently pending. DPO has not started.
+Downstream jobs 13954 (merge and trajectory audit), 13955 (preferences), 13956 (DPO split and reference log-probabilities), 13957 (optimization probe), 13958–13959 (four/eight-GPU scaling probes), 13960 (scale-decision freeze), and 13962 (DPO after the frozen gate) are submitted with explicit `afterok` dependencies and are currently pending. The pending DPO launcher job 13962 has been extended to a 24-hour wall limit so its synchronous smoke and full-run waits cannot be cut off by the former two-hour limit. DPO has not started.
 
 The resumable collector is staged separately on Turing at `~/.config/superpowers/worktrees/fixed-retrieval-v1/collector-resume-v2`, exact commit `b42dfa83ca824cd6554989aecbd6a0b96d90939a`. Its full compute-node verification passed: 343 tests, 14 expected upstream warnings, and 171 subtests. Turing's login node cannot import the current PyTorch environment (`libtorch_cpu.so: failed to map segment from shared object`) and OpenBLAS exhausts its constrained mapping/thread budget unless thread pools are bounded; therefore verification was run inside the existing node10 Slurm allocation with explicit numerical-library thread limits.
 
@@ -51,7 +51,7 @@ Pinned source: `kyunghyuncho/search_qa` at revision `06907e45883b7cae435453b65d5
 | Validation | 21,613 | 21,611 | Ready; 2 rows explicitly dropped for no usable evidence |
 | Test | 43,228 | Not materialized | Intentionally untouched for final reporting |
 
-The 151,277 materialized train rows are a source reservoir, not the current optimizer dataset. The completed full SFT used 2,848 training prompts and 512 held-out prompts. The active teacher collection covers 4,096 source examples; its final number of verified DPO prompts is unknown until canonical audit. The final experimental package counts only unique verified prompt rows and targets 15,000-30,000 primary training prompts, deterministic nested 1,000/5,000/10,000/30,000 prompt ablations, and a trajectory-disjoint fixed 1,000-prompt model-selection validation set. Missing cardinality must trigger additional train-reservoir collection with an explicit shortfall; it must never be padded with duplicates, teacher answers, fabricated targets, or silent substitutions.
+The 151,277 materialized train rows are a source reservoir, not the current optimizer dataset. The completed full SFT used 2,848 training prompts and 512 held-out prompts. The active teacher collection covers 4,096 source examples; its final number of verified DPO prompts is unknown until canonical audit. The final experimental package counts only unique verified prompt rows and targets 15,000-20,000 primary training prompts, deterministic nested 1,000/5,000/10,000/15,000 prompt ablations with an optional 20,000 arm when coverage permits, and a trajectory-disjoint fixed 1,000-prompt model-selection validation set. Collection starts with two student no-hint sibling trajectories per prompt. A third or fourth student trajectory is generated only for prompts whose first two siblings do not supply a canonically valid preference contrast and only when the pilot demonstrates positive additional pair yield per GPU-hour. Teacher outputs never count as candidate trajectories. Missing cardinality must trigger additional train-reservoir collection with an explicit shortfall; it must never be padded with duplicates, teacher answers, fabricated targets, or silent substitutions.
 
 Important identities:
 

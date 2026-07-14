@@ -100,11 +100,13 @@ GRPO/DAPO reward is primarily exact answer accuracy, with bounded components for
 
 The materialized SearchQA train split is a deterministic source reservoir, not the number of prompts consumed by an optimizer. Every reported training size counts unique, canonically validated prompt/completion rows after student-provenance, no-hint, retrieval-context, and method-specific eligibility gates. Repeated seeds, rejected candidates, raw source rows, and teacher hints do not inflate this count.
 
-The primary data target is 15,000-30,000 verified training prompts. Report nested deterministic ablations at 1,000, 5,000, 10,000, and 30,000 prompts when the verified pool has sufficient cardinality. All ablations use a single frozen ordering and stable ID/hash manifests so each smaller arm is a strict subset of the larger arm. If a requested arm is unavailable, fail with the measured eligible count and collect more train-reservoir examples; never pad, duplicate, fabricate, or silently relabel data.
+The primary data target is 15,000-20,000 verified training prompts. Report nested deterministic ablations at 1,000, 5,000, 10,000, and 15,000 prompts, with an optional 20,000-prompt arm when the verified pool has sufficient cardinality. All ablations use a single frozen ordering and stable ID/hash manifests so each smaller arm is a strict subset of the larger arm. If a requested arm is unavailable, fail with the measured eligible count and collect more train-reservoir examples; never pad, duplicate, fabricate, or silently relabel data.
+
+Generate two student no-hint siblings per prompt by default. After the 4,096-prompt pilot is canonically audited, measure valid preference contrasts and future no-hint gain per GPU-hour. Generate a third or fourth student sibling only for prompts whose first two siblings lack a usable success/failure contrast and only if the measured marginal yield justifies the added compute. Teacher hints and teacher outputs are privileged interventions, never chosen or rejected candidates and never counted toward trajectory totals.
 
 Freeze one 1,000-prompt model-selection validation set before DPO hyperparameter selection. It must be trajectory-disjoint from every training arm and remain fixed across SFT, DPO, GRPO, and DAPO comparisons. The full official validation split remains a final promotion evaluation, and the 43,228-example official test remains untouched until all methods and settings are frozen.
 
-The active 4,096-example teacher collection is an initial verified-preference collection, not a claim that the 15,000-30,000-prompt primary target has been reached. Its audit determines preference yield per source example and therefore the measured scale-up required for the final data package.
+The active 4,096-example teacher collection is an initial verified-preference collection, not a claim that the 15,000-20,000-prompt primary target has been reached. Its audit determines preference yield per source example, whether two siblings are sufficient, and therefore the measured scale-up required for the final data package.
 
 ## Hardware and throughput strategy
 

@@ -197,8 +197,8 @@
 3. Merge trajectories with exact ID/cache parity and audit preference provenance/context hashes.
 4. Count unique verified query and response preference prompts after every gate. Treat the 151,277-row materialized train split only as a source reservoir; do not report it as optimizer data.
 5. Freeze a trajectory-disjoint 1,000-prompt model-selection validation set and one deterministic training ordering with stable ID and file hashes.
-6. Materialize nested 1,000/5,000/10,000/30,000-prompt training ablations when coverage permits. If an arm is unavailable, fail with its exact shortfall and scale collection from new train-reservoir examples; never duplicate, pad, fabricate, or silently substitute rows.
-7. Target 15,000-30,000 verified prompts for the primary DPO package. Record the active 4,096-example collection as the yield-measurement stage unless its audited prompt cardinality independently satisfies a named arm.
+6. Materialize nested 1,000/5,000/10,000/15,000-prompt training ablations and an optional 20,000-prompt arm when coverage permits. If an arm is unavailable, fail with its exact shortfall and scale collection from new train-reservoir examples; never duplicate, pad, fabricate, or silently substitute rows.
+7. Target 15,000-20,000 verified prompts for the primary DPO package. Record the active 4,096-example collection as the yield-measurement stage unless its audited prompt cardinality independently satisfies a named arm. Start with two student no-hint siblings per prompt; generate a third or fourth only for prompts lacking a valid contrast after two siblings and only when audited marginal pair yield per GPU-hour is positive. Never count teacher hints or teacher outputs as trajectories.
 8. Precompute reference log probabilities once per exact split manifest and reject cross-arm reference reuse when any data hash differs.
 9. Run DPO overfit and 1% pilots, then full four- or eight-GPU DPO selected by the measured equal-batch scaling gate, with regular generation validation, checkpoints, and resume support.
 10. Iterate one measured variable at a time only when fixed 1,000-prompt validation diagnostics identify a concrete failure mode; stop when locked validation no longer improves.
@@ -210,7 +210,7 @@
 - Report: `~/searchqa-dpo/fixed-retrieval-v1/report/`
 
 **Steps:**
-1. Freeze initialization, nested 1,000/5,000/10,000/30,000 prompt manifests, the trajectory-disjoint 1,000-prompt model-selection validation set, prompts, retrieval, sequence length, and token/compute budgets.
+1. Freeze initialization, nested 1,000/5,000/10,000/15,000 prompt manifests plus the optional 20,000 arm, the trajectory-disjoint 1,000-prompt model-selection validation set, prompts, retrieval, sequence length, and token/compute budgets.
 2. Run matched SFT-only, GRPO, and DAPO arms after the primary DPO result is complete.
 3. Evaluate raw base, SFT, DPO, GRPO, and DAPO on validation with answer, retrieval, citation, reasoning, malformed-output, latency, and throughput metrics.
 4. Freeze all choices, then run the untouched test exactly once per promoted method.
