@@ -351,6 +351,8 @@ class TuringRuntimeTest(unittest.TestCase):
         self.assertIn("zero3", text.lower())
         self.assertIn("fused", text.lower())
         self.assertIn("non-reentrant", text.lower())
+        self.assertIn('START_MODEL_SHA256:?START_MODEL_SHA256', text)
+        self.assertIn('--initial-checkpoint-sha256 "$START_MODEL_SHA256"', text)
 
     def test_generation_and_training_consume_a_hashed_frozen_optimization_decision(self):
         for name in ("turing_generate.sh", "turing_train.sh"):
