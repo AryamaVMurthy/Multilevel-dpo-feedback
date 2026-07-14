@@ -925,11 +925,14 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         if args.probe_kind == "training":
             if args.eval_data is None or args.output_dir is None or args.deepspeed_config is None:
                 reject("training_probe_contract_missing", "training probes require --eval-data, --output-dir, and --deepspeed-config")
+            if not isinstance(args.initial_checkpoint_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", args.initial_checkpoint_sha256):
+                reject("training_probe_checkpoint_hash_missing", "training probes require the lowercase SHA-256 of the local start checkpoint model.safetensors")
             command = [
                 sys.executable, "-m", "torch.distributed.run", "--standalone",
                 f"--nproc_per_node={base_result['gpu_hardware']['count']}", "-m", "text_feedback_dpo.cli", f"train-{args.training_method}",
                 "--config", str(args.config), "--train", str(args.data), "--eval", str(args.eval_data),
                 "--output", str(args.output_dir), "--model", args.model, "--model-revision", args.model_revision,
+                "--initial-checkpoint-sha256", args.initial_checkpoint_sha256,
                 "--max-steps", str(args.max_steps), "--max-length", str(args.max_length),
                 "--per-device-train-batch-size", str(args.train_microbatch),
                 "--per-device-eval-batch-size", str(args.per_device_eval_batch_size),
@@ -1661,6 +1664,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--deepspeed-config", type=Path)
     benchmark.add_argument("--model", required=True)
     benchmark.add_argument("--model-revision", required=True)
+    benchmark.add_argument("--initial-checkpoint-sha256")
     benchmark.add_argument("--dataset-source", required=True)
     benchmark.add_argument("--dataset-revision", required=True)
     benchmark.add_argument("--prompt-sha256", required=True)

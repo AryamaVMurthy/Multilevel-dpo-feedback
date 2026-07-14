@@ -22,6 +22,7 @@ allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is r
 : "${CONFIG:?CONFIG must be supplied with --export}"
 : "${MODEL:?MODEL must be supplied with --export}"
 : "${MODEL_REVISION:?MODEL_REVISION must be supplied with --export}"
+: "${START_MODEL_SHA256:?START_MODEL_SHA256 must hash MODEL/model.safetensors}"
 : "${DATA:?DATA must be supplied with --export}"
 : "${TRAIN_EVAL:?TRAIN_EVAL must be supplied for measured training probes}"
 : "${DEEPSPEED_CONFIG:?DEEPSPEED_CONFIG must be supplied for measured training probes}"
@@ -93,6 +94,7 @@ TRAINING_CANDIDATES=()
 
 COMMON_ARGS=(
   --commit-hash "$(git rev-parse HEAD)" --config "$CONFIG" --data "$DATA" --model "$MODEL" --model-revision "$MODEL_REVISION"
+  --initial-checkpoint-sha256 "$START_MODEL_SHA256"
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION"
   --prompt-sha256 "$PROMPT_HASH" --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH"
   --sample-size "$PROBE_SAMPLE_SIZE" --warmup-repeats "$PROBE_WARMUP_REPEATS" --measured-repeats "$PROBE_MEASURED_REPEATS"

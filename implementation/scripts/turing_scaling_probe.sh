@@ -16,7 +16,7 @@ log_event() { local event="$1"; shift; printf 'event=%s timestamp=%s component=%
 fail() { log_event failure reason="$1" fallback_reason="${2:-none}" >&2; exit 2; }
 allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is required}"; if [[ "$raw" =~ ^[0-9]+$ ]]; then printf '%s\n' "$raw"; elif [[ "$raw" =~ ^gpu:([0-9]+)$ ]]; then printf '%s\n' "${BASH_REMATCH[1]}"; else fail "unsupported GPU allocation: $raw" gpu_count_parse_unsupported; fi; }
 
-required=(PROJECT_DIR TRAIN_GPUS TRAINING_METHOD CONFIG TRAIN EVAL MODEL MODEL_REVISION DATASET_SOURCE DATASET_REVISION PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH DEEPSPEED_CONFIG OUTPUT_RESULT PROBE_MAX_STEPS TRAIN_MICROBATCH GRADIENT_ACCUMULATION_STEPS DATALOADER_NUM_WORKERS PER_DEVICE_EVAL_BATCH_SIZE NUM_GENERATIONS RL_GENERATION_BATCH_SIZE MAX_COMPLETION_LENGTH)
+required=(PROJECT_DIR TRAIN_GPUS TRAINING_METHOD CONFIG TRAIN EVAL MODEL MODEL_REVISION START_MODEL_SHA256 DATASET_SOURCE DATASET_REVISION PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH DEEPSPEED_CONFIG OUTPUT_RESULT PROBE_MAX_STEPS TRAIN_MICROBATCH GRADIENT_ACCUMULATION_STEPS DATALOADER_NUM_WORKERS PER_DEVICE_EVAL_BATCH_SIZE NUM_GENERATIONS RL_GENERATION_BATCH_SIZE MAX_COMPLETION_LENGTH)
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || fail "$name must be supplied explicitly" scaling_probe_contract_missing; done
 : "${SLURM_NNODES:?SLURM_NNODES is required}"; [[ "$SLURM_NNODES" == 1 ]] || fail "scaling probe requires one node" multi_node_probe_forbidden
 : "${SLURM_NTASKS:?SLURM_NTASKS is required}"; [[ "$SLURM_NTASKS" == 1 ]] || fail "scaling probe requires one task" multi_task_probe_forbidden
@@ -43,7 +43,7 @@ fi
 log_event scale_measure_start train_gpus="$TRAIN_GPUS" fallback_reason=none
 run_probe_runner benchmark --probe-kind training --probe-name "a100-scale-$TRAIN_GPUS" --result "$OUTPUT_RESULT" \
   --commit-hash "$(git rev-parse HEAD)" --config "$CONFIG" --data "$TRAIN" --eval-data "$EVAL" --output-dir "$PROBE_OUTPUT_DIR" \
-  --deepspeed-config "$DEEPSPEED_CONFIG" --model "$MODEL" --model-revision "$MODEL_REVISION" \
+  --deepspeed-config "$DEEPSPEED_CONFIG" --model "$MODEL" --model-revision "$MODEL_REVISION" --initial-checkpoint-sha256 "$START_MODEL_SHA256" \
   --dataset-source "$DATASET_SOURCE" --dataset-revision "$DATASET_REVISION" --prompt-sha256 "$PROMPT_HASH" \
   --retrieval-sha256 "$RETRIEVAL_HASH" --source-schema-sha256 "$SOURCE_SCHEMA_HASH" --attention-implementation sdpa \
   --max-steps "$PROBE_MAX_STEPS" --max-length 4096 --train-microbatch "$TRAIN_MICROBATCH" \

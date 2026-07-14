@@ -78,6 +78,13 @@ class TuringOptimizationProbeTest(unittest.TestCase):
             self.assertNotIn("use_liger_kernel=true", text, name)
             self.assertNotIn("liger=true", text, name)
 
+    def test_training_probes_bind_local_checkpoint_artifact_hash(self):
+        runner = Path("scripts", "turing_probe_runner.py").read_text(encoding="utf-8")
+        for launcher in ("turing_optimization_probe.sh", "turing_scaling_probe.sh"):
+            text = Path("scripts", launcher).read_text(encoding="utf-8")
+            self.assertIn("START_MODEL_SHA256", text, launcher)
+        self.assertIn("--initial-checkpoint-sha256", runner)
+
 
 if __name__ == "__main__":
     unittest.main()
