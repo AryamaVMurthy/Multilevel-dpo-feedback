@@ -39,6 +39,8 @@ The resumable collector is staged separately on Turing at `~/.config/superpowers
 
 This staged worktree is a recovery path, not a launch-ready substitute for the active lineage. The running Python process and frozen generation optimization decision are both bound to commit `8562a4a9...`; the shared checkout was subsequently moved to `b8505d6b...`, while the already-loaded process continued from its launch identity. The resumable code is commit `b42dfa8...`. A retry must first run and freeze a fresh measured generation decision for the resumable commit, then launch into a new output lineage. Rewriting the old decision, mixing commits, or claiming that the current in-memory work can be resumed is forbidden.
 
+The exact `8562a4a9...` to `b8505d6b...` diff contains teacher subbatch observability and downstream checkpoint, optimization, scaling, and DPO gates; it does not modify the trajectory, evaluator, or preference semantics used to revalidate completed rows. The pending chain may therefore consume producer-commit `8562a4a9...` trajectories under the stricter descendant gates while preserving the producer commit in each shard manifest. The shared checkout must remain at `b8505d6b...` until that chain terminates; all newer collector work stays in the isolated worktree.
+
 ## Dataset state
 
 Pinned source: `kyunghyuncho/search_qa` at revision `06907e45883b7cae435453b65d598447039fde79`.
