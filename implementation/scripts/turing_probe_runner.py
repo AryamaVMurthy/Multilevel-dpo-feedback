@@ -1403,10 +1403,31 @@ def cmd_freeze_scale_decision(args: argparse.Namespace) -> None:
         reject("scale_gpu_counts_invalid", f"scale decision requires exactly one 4-GPU and one 8-GPU result, got {counts}")
     baseline = records[0][1]
     profile = scale_hardware_profile(baseline["gpu_hardware"])
-    parity_config = {key: value for key, value in baseline["config"].items()}
+    parity_config = {
+        key: value for key, value in baseline["config"].items()
+        if key != "gradient_accumulation_steps"
+    }
+    baseline_microbatch = baseline["config"].get("train_microbatch")
+    baseline_accumulation = baseline["config"].get("gradient_accumulation_steps")
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in (baseline_microbatch, baseline_accumulation)):
+        reject("scale_batch_controls_invalid", "scaling results require positive integer microbatch and gradient accumulation")
+    effective_global_batch_size = (
+        baseline["gpu_hardware"]["count"] * baseline_microbatch * baseline_accumulation
+    )
     baseline_eval_loss = float(baseline["finite_metrics"]["eval_loss"])
     for _, result in records[1:]:
-        if result["identities"] != baseline["identities"] or result["package_versions"] != baseline["package_versions"] or result["config"] != parity_config:
+        result_config = {
+            key: value for key, value in result["config"].items()
+            if key != "gradient_accumulation_steps"
+        }
+        result_microbatch = result["config"].get("train_microbatch")
+        result_accumulation = result["config"].get("gradient_accumulation_steps")
+        if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in (result_microbatch, result_accumulation)):
+            reject("scale_batch_controls_invalid", "scaling results require positive integer microbatch and gradient accumulation")
+        result_effective_batch = result["gpu_hardware"]["count"] * result_microbatch * result_accumulation
+        if result_effective_batch != effective_global_batch_size:
+            reject("scale_effective_batch_mismatch", "scaling runs must preserve the effective global batch size")
+        if result["identities"] != baseline["identities"] or result["package_versions"] != baseline["package_versions"] or result_config != parity_config:
             reject("scale_identity_parity_mismatch", "scaling runs differ in model/data/config/package/control identity")
         if scale_hardware_profile(result["gpu_hardware"]) != profile:
             reject("scale_hardware_profile_mismatch", "scaling runs differ in GPU model, memory, or compute capability")
@@ -1427,6 +1448,7 @@ def cmd_freeze_scale_decision(args: argparse.Namespace) -> None:
         "selected_train_gpus": selected["gpu_hardware"]["count"],
         "selected_global_examples_per_second": selected["global_examples_per_second"],
         "selected_global_tokens_per_second": selected["global_tokens_per_second"],
+        "effective_global_batch_size": effective_global_batch_size,
         "loss_relative_tolerance": args.loss_relative_tolerance, "hardware_profile": profile,
         "selected_gpu_hardware": selected["gpu_hardware"], "identities": selected["identities"],
         "package_versions": selected["package_versions"], "training_controls": selected["config"],

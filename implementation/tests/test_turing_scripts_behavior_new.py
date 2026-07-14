@@ -538,8 +538,12 @@ def test_optional_packages_may_be_missing_only_when_feature_disabled(tmp_path: P
 def test_scale_decision_intentionally_compares_four_and_eight_identical_a100s(tmp_path: Path):
     four = tmp_path / "four.json"
     eight = tmp_path / "eight.json"
-    four.write_text(json.dumps(valid_training_probe(throughput=100.0, gpu_count=4)), encoding="utf-8")
-    eight.write_text(json.dumps(valid_training_probe(throughput=90.0, gpu_count=8)), encoding="utf-8")
+    four_payload = valid_training_probe(throughput=100.0, gpu_count=4)
+    eight_payload = valid_training_probe(throughput=90.0, gpu_count=8)
+    four_payload["config"]["gradient_accumulation_steps"] = 2
+    eight_payload["config"]["gradient_accumulation_steps"] = 1
+    four.write_text(json.dumps(four_payload), encoding="utf-8")
+    eight.write_text(json.dumps(eight_payload), encoding="utf-8")
     decision = tmp_path / "scale.json"
     result = subprocess.run([
         sys.executable, str(PROBE_RUNNER), "freeze-scale-decision", "--result", str(four),
@@ -552,9 +556,35 @@ def test_scale_decision_intentionally_compares_four_and_eight_identical_a100s(tm
     assert payload["compared_gpu_counts"] == [4, 8]
 
 
+def test_scale_decision_accepts_accumulation_that_preserves_global_batch(tmp_path: Path):
+    four_payload = valid_training_probe(throughput=100.0, gpu_count=4)
+    eight_payload = valid_training_probe(throughput=120.0, gpu_count=8)
+    four_payload["config"]["train_microbatch"] = 1
+    four_payload["config"]["gradient_accumulation_steps"] = 2
+    eight_payload["config"]["train_microbatch"] = 1
+    eight_payload["config"]["gradient_accumulation_steps"] = 1
+    four = tmp_path / "four.json"
+    eight = tmp_path / "eight.json"
+    four.write_text(json.dumps(four_payload), encoding="utf-8")
+    eight.write_text(json.dumps(eight_payload), encoding="utf-8")
+    decision = tmp_path / "scale.json"
+
+    result = subprocess.run([
+        sys.executable, str(PROBE_RUNNER), "freeze-scale-decision", "--result", str(four),
+        "--result", str(eight), "--output", str(decision),
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(decision.read_text(encoding="utf-8"))
+    assert payload["selected_train_gpus"] == 8
+    assert payload["effective_global_batch_size"] == 8
+
+
 def test_scale_decision_rejects_non_a100_or_non_count_hardware_drift(tmp_path: Path):
     four = valid_training_probe(throughput=100.0, gpu_count=4)
     eight = valid_training_probe(throughput=120.0, gpu_count=8)
+    four["config"]["gradient_accumulation_steps"] = 2
+    eight["config"]["gradient_accumulation_steps"] = 1
     for device in eight["gpu_hardware"]["devices"]:
         device["total_memory_bytes"] -= 1
     paths = []
