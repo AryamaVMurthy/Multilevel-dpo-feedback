@@ -14,6 +14,26 @@ The raw student was not ready for preference-data collection at scale: the origi
 
 The overfit checkpoint is a material protocol improvement on the untouched 32-row validation sample: all 32 queries and all 32 responses are nonempty, parse-valid, cited three-line outputs, with zero truncations. Canonical retrieval recall@8 is 25/32 and canonical exact-answer correctness is 18/32. Manual review found one additional semantically accepted alias (`Launch and Arrival` against gold `takeoff & landing (or launch & arrival)`), which is reported separately and is not silently converted into training supervision or a changed canonical score.
 
+## Live Turing rollout snapshot
+
+**Observed:** 2026-07-14 04:57 UTC (10:27 IST)
+**Active checkout:** `~/searchqa-dpo/fixed-retrieval-v1`
+**Active rollout output:** `/scratch/node10/node10/aryama.murthy/searchqa-dpo/teacher-dpo-v1/full-r4`
+
+The current full teacher-guided collection uses four concurrent two-GPU jobs:
+
+| Job | Input rows | State | Finalized trajectories |
+|---:|---:|---|---:|
+| 13949 | 1,000 | RUNNING | 0 |
+| 13950 | 1,060 | RUNNING | 0 |
+| 13951 | 994 | RUNNING | 0 |
+| 13952 | 1,042 | RUNNING | 0 |
+| **Total** | **4,096** | **RUNNING** | **0 / 4,096** |
+
+Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. The old collector writes each shard atomically at completion and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
+
+Downstream jobs 13954 (audit), 13955 (preferences), 13956 (preparation), 13957 (DPO), 13958–13959 (scale), 13960 (freeze), and 13962 (final CPU-only gate) are submitted with explicit `afterok` dependencies and are currently pending. DPO has not started. The resumable checkpoint collector is implemented and locally verified on the development branch for the next controlled launch; it is not being mixed into the active run.
+
 ## Dataset state
 
 Pinned source: `kyunghyuncho/search_qa` at revision `06907e45883b7cae435453b65d598447039fde79`.
