@@ -343,6 +343,7 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 args.func(args)
 
             self.assertIn('"event": "teacher_prompt_budget"', stderr.getvalue())
+            self.assertIn('"event": "teacher_subbatch_complete"', stderr.getvalue())
             self.assertIn('"max_total_tokens": 4096', stderr.getvalue())
             self.assertIn('"event": "teacher_output_contract"', stderr.getvalue())
             self.assertIn('"malformed_thinking_indices": []', stderr.getvalue())

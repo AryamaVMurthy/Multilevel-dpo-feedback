@@ -909,10 +909,19 @@ def cmd_collect(args: argparse.Namespace) -> None:
             fallback_reason=args.teacher_fallback_reason,
             attention_implementation=args.attention_implementation, device=args.teacher_device,
         )
-        def batched_generate(model, tokenizer, prompts, *, batch_size, **kwargs):
+        def batched_generate(model, tokenizer, prompts, *, batch_size, stage="teacher_generation", **kwargs):
             outputs = []
             for start in range(0, len(prompts), batch_size):
-                outputs.extend(generate_batch(model, tokenizer, prompts[start : start + batch_size], **kwargs))
+                chunk = prompts[start : start + batch_size]
+                outputs.extend(generate_batch(model, tokenizer, chunk, **kwargs))
+                print(json.dumps({
+                    "event": "teacher_subbatch_complete",
+                    "stage": stage,
+                    "completed": start + len(chunk),
+                    "total": len(prompts),
+                    "batch_size": len(chunk),
+                    "max_new_tokens": kwargs.get("max_new_tokens"),
+                }, sort_keys=True), file=sys.stderr, flush=True)
             return outputs
 
         def generate_stage(prompts, *, max_new_tokens, temperature, instruction, scratchpad_instruction):
@@ -1146,7 +1155,7 @@ Inspect the responsible region.
                 }, sort_keys=True), file=sys.stderr, flush=True)
                 raw_outputs = batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
-                    batch_size=args.teacher_batch_size,
+                    batch_size=args.teacher_batch_size, stage="explicit_nonthinking_recovery",
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                     forbidden_token_sequences=forbidden_token_sequences,
@@ -1177,7 +1186,7 @@ Inspect the responsible region.
                 }, sort_keys=True), file=sys.stderr, flush=True)
                 raw_outputs = batched_generate(
                     teacher, teacher_tokenizer, active_prompts,
-                    batch_size=args.teacher_batch_size,
+                    batch_size=args.teacher_batch_size, stage="explicit_nonthinking_recovery_retry",
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                     forbidden_token_sequences=forbidden_token_sequences,
@@ -1192,7 +1201,7 @@ Inspect the responsible region.
                     retry_max_new_tokens=args.teacher_retry_max_new_tokens,
                     generate=lambda active_prompts, max_new_tokens: batched_generate(
                         teacher, teacher_tokenizer, active_prompts,
-                        batch_size=args.teacher_batch_size,
+                        batch_size=args.teacher_batch_size, stage="teacher_thinking",
                         max_new_tokens=max_new_tokens,
                         temperature=kwargs["temperature"], top_p=kwargs["top_p"],
                     ),
