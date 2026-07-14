@@ -770,6 +770,7 @@ def test_parallel_collection_wrapper_freezes_devices_from_each_allocation():
     assert "probe-hardware" in script
     assert "freeze-collection-decision" in script
     assert "COLLECTION_DECISION_SHA256" in script
+    assert "SHARD_INPUT_SHA256=\"$(sha256sum \"$DATA\"" in script
     assert "turing_collect.sh" in script
 
 

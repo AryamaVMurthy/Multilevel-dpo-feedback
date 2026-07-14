@@ -17,6 +17,7 @@ log_event() { local event="$1"; shift; printf 'event=%s timestamp=%s component=%
 fail() { log_event failure reason="$1" fallback_reason="${2:-none}" >&2; exit 2; }
 
 : "${PROJECT_DIR:?PROJECT_DIR must be supplied with --export}"
+: "${DATA:?DATA must be supplied with --export}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
 : "${STUDENT_MODEL:?STUDENT_MODEL must be supplied with --export}"
 : "${STUDENT_REVISION:?STUDENT_REVISION must be supplied with --export}"
@@ -28,6 +29,13 @@ cd "$PROJECT_DIR"
 [[ -f pyproject.toml && -x scripts/turing_probe_runner.py ]] || fail "PROJECT_DIR lacks the pinned probe runner" invalid_project_root
 export PATH="$HOME/.local/bin:$PATH" PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_BUILDS=1 UV_CONCURRENT_INSTALLS=1 UV_LINK_MODE=copy
+
+[[ -s "$DATA" ]] || fail "collection input shard is missing or empty: $DATA" collection_input_missing
+SHARD_INPUT_SHA256="$(sha256sum "$DATA" | awk '{print $1}')" \
+  || fail "could not hash collection input shard: $DATA" collection_input_hash_failed
+[[ "$SHARD_INPUT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || fail "collection input shard hash is not a lowercase SHA-256: $SHARD_INPUT_SHA256" collection_input_hash_invalid
+log_event runtime_shard_input_identity data="$DATA" shard_input_sha256="$SHARD_INPUT_SHA256" fallback_reason=none
 
 CURRENT_HARDWARE="${CURRENT_HARDWARE:-$OUTPUT.hardware.json}"
 COLLECTION_DECISION="${COLLECTION_DECISION:-$OUTPUT.collection-decision.json}"
