@@ -1,0 +1,29 @@
+{
+  "completion_contract": "student-generated-no-hint-v1",
+  "context_invariants": [
+    "chosen_and_rejected_share_the_exact_prompt",
+    "response_pairs_share_the_exact_retrieval_context",
+    "chosen_and_rejected_are_student_generated",
+    "chosen_and_rejected_are_generated_without_teacher_hints",
+    "chosen_has_strictly_greater_verified_future_sibling_gain"
+  ],
+  "max_length": 4096,
+  "metadata_fields": [
+    "pair_type",
+    "example_id",
+    "provenance",
+    "no_hint",
+    "policy_hash",
+    "query_prompt_hash",
+    "response_prompt_hash",
+    "retrieval_context_hash",
+    "chosen_future_sibling_gain",
+    "rejected_future_sibling_gain"
+  ],
+  "pair_types": [
+    "query",
+    "response"
+  ],
+  "prompt_version": "fixed-retrieval-cited-answer-prefix-v2",
+  "schema_version": 1
+}
