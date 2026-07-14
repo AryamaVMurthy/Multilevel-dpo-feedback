@@ -1074,6 +1074,8 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
         "SFT_TRAIN": ("base", "base-revision", sft_train, sft_eval, "sft"),
         "GRPO_TRAIN": ("rl-start", "rl-revision", rl_data, rl_eval, "grpo"),
         "DAPO_TRAIN": ("rl-start", "rl-revision", rl_data, rl_eval, "dapo"),
+        "BASE_GENERATION": ("base", "base-revision", val_data, None, None),
+        "DPO_GENERATION": (str(output_root / "dpo/final"), "dpo-output-revision", val_data, None, None),
         "SFT_GENERATION": (str(output_root / "sft/final"), "sft-output-revision", val_data, None, None),
         "GRPO_GENERATION": (str(output_root / "grpo/final"), "grpo-output-revision", val_data, None, None),
         "DAPO_GENERATION": (str(output_root / "dapo/final"), "dapo-output-revision", val_data, None, None),
@@ -1110,11 +1112,12 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
     for item in fake_bin.iterdir():
         item.chmod(0o755)
     env.update({
-        "HOME": str(tmp_path / "home"), "PATH": f"{fake_bin}:{os.environ['PATH']}", "HF_CACHE_ROOT": str(tmp_path / "hf"), "TURING_ACCOUNT": "account",
-        "PROJECT_DIR": str(ROOT), "CONFIG": str(config), "BASE_MODEL": "base", "BASE_REVISION": "base-revision",
+            "HOME": str(tmp_path / "home"), "PATH": f"{fake_bin}:{os.environ['PATH']}", "HF_CACHE_ROOT": str(tmp_path / "hf"), "TURING_ACCOUNT": "account",
+            "PROJECT_DIR": str(ROOT), "CONFIG": str(config), "BASE_MODEL": "base", "BASE_REVISION": "base-revision",
+            "DPO_MODEL": str(output_root / "dpo/final"), "DPO_OUTPUT_REVISION": "dpo-output-revision",
         "RL_START_MODEL": "rl-start", "RL_START_REVISION": "rl-revision", "SFT_TRAIN": str(sft_train),
         "SFT_EVAL": str(sft_eval), "RL_DATA": str(rl_data), "RL_EVAL": str(rl_eval), "VAL_DATA": str(val_data), "OUTPUT_ROOT": str(output_root),
-        "TRAIN_GPUS": "4", "DATASET_SOURCE": "source", "DATASET_REVISION": "dataset-revision", "PROMPT_HASH": "prompt",
+            "TRAIN_GPUS": "4", "DATASET_SOURCE": "source", "DATASET_REVISION": "dataset-revision", "PROMPT_VERSION": "fixed-retrieval-cited-answer-prefix-v2", "PROMPT_HASH": "prompt",
         "RETRIEVAL_HASH": "retrieval", "SOURCE_SCHEMA_HASH": "schema", "POLICY_HASH": "policy", "LEARNING_RATE": "1e-6",
         "EPOCHS": "1", "SAVE_STEPS": "10", "EVAL_STEPS": "10", "SFT_OUTPUT_REVISION": "sft-output-revision",
         "GRPO_OUTPUT_REVISION": "grpo-output-revision", "DAPO_OUTPUT_REVISION": "dapo-output-revision",
@@ -1126,6 +1129,23 @@ def test_comparisons_reaches_launch_only_after_all_decisions_and_smokes_validate
     assert result.returncode == 91, result.stderr
     assert "event=launch_contract_validated" in result.stdout
     assert "mocked-training-launch" in result.stderr
+
+
+def test_comparisons_include_frozen_base_and_primary_dpo_arms():
+    text = (SCRIPTS / "turing_comparisons.sh").read_text(encoding="utf-8")
+    for name in (
+        "BASE_GENERATION_DECISION",
+        "BASE_GENERATION_DECISION_SHA256",
+        "DPO_MODEL",
+        "DPO_OUTPUT_REVISION",
+        "DPO_GENERATION_DECISION",
+        "DPO_GENERATION_DECISION_SHA256",
+    ):
+        assert name in text
+    for label in ("base-validation", "dpo-validation"):
+        assert label in text
+    assert '"base-validation=' in text
+    assert '"dpo-validation=' in text
 
 
 def test_build_preferences_fails_without_explicit_canonical_data(tmp_path: Path):
