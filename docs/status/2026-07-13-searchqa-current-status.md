@@ -17,6 +17,18 @@ The raw student was not ready for preference-data collection at scale: the origi
 
 The overfit checkpoint is a material protocol improvement on the untouched 32-row validation sample: all 32 queries and all 32 responses are nonempty, parse-valid, cited three-line outputs, with zero truncations. Canonical retrieval recall@8 is 25/32 and canonical exact-answer correctness is 18/32. Manual review found one additional semantically accepted alias (`Launch and Arrival` against gold `takeoff & landing (or launch & arrival)`), which is reported separately and is not silently converted into training supervision or a changed canonical score.
 
+## Latest verified update: 2026-07-14 19:55 IST
+
+The frozen trajectory-disjoint 1,000-example model-selection validation set is materialized at `splits/model-selection-v1/validation-1000.jsonl` with SHA-256 `033c204e7ecfd117cc6c5ca79f43034228072360e9babe40d425a657428847b3`. It has zero ID overlap with the 4,096-example teacher pilot or the earlier SFT train/eval source trajectories and remains excluded from all optimizer data.
+
+The untouched `Qwen/Qwen3-4B-Base` direct-mode baseline completed on all 1,000 rows. Answer-capability exact match is `0.286`, protocol exact match is `0.147`, valid-format rate is `0.427`, nonempty rate is `0.802`, and retrieval recall@8 is `0.596`. Its prediction artifact SHA-256 is `dcfdfc88f7e0978e1bc7638444815ba8343ac665c9f7ac928406b552a4b23e5b`.
+
+The corrected checkpoint-50 evaluation completed on the same frozen 1,000 rows using the active `fixed-retrieval-cited-answer-prefix-v2` prompt. Answer-capability exact match is `0.555`, protocol exact match is `0.553`, valid-format rate is `0.975`, nonempty rate is `0.984`, and retrieval recall@8 is `0.733`. The remaining major weakness is grounding: lexical cited-answer support is `0.497` and unsupported-source rate is `0.478`. The checkpoint-50 prediction and metric SHA-256 values are `d43bfff8c406491e5c59f16352c38342c401c4a6c83bf5a98a68189da0698a35` and `a727420608aa5e796d183fe65f8f0cdf02182bc309098b46ab8abfd768286676` respectively. Manual inspection confirms substantive three-line answers, reasoning, and source IDs; failures are predominantly wrong answers or weakly grounded citations rather than empty output.
+
+An earlier 32-row diagnostic used the obsolete v1 response prompt and therefore cannot be used to diagnose checkpoint collapse. The active rollout lineage, corrected 1,000-row evaluation, and later-checkpoint scan all use the v2 `Response:\nAnswer:` scaffold. The local prompt/generation/SFT focused suite passes, and the complete local suite currently passes 346 tests plus 171 subtests with 14 expected upstream deprecation warnings.
+
+The original shard-2 recovery completed 994 trajectories. It contains 584 resolved trajectories, including 172 successful hinted student continuations and 37 strict student-only preference rows. The other three original jobs failed only at the response-preference invariant and were replaced by checkpoint-resumable jobs 14008, 14009, and 14010 from recovery commit `40391891343f7277073a1da45eec883b6f16f9ff`. At 19:50 IST their primary teacher-thinking stages were at 464/598, 464/646, and 328/613 respectively, with no current OOM or traceback. DPO has not started; checkpoint selection, final trajectory merge/audit, preference construction, reference log-probability computation, save/resume smoke, and full DPO remain pending.
+
 ## Live Turing rollout snapshot
 
 **Observed:** 2026-07-14 07:56 UTC (13:26 IST)
