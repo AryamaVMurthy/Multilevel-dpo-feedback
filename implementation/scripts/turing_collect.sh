@@ -36,6 +36,7 @@ manifest = {
     "fallback_reason": os.environ["ATTENTION_FALLBACK_REASON"], "shard": {k: os.environ[k] for k in ("SHARD_INDEX", "SHARD_COUNT", "SHARD_SEED", "SHARD_INPUT_SHA256", "MERGE_ID")},
     "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
     "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
+    "prompt": {"generation_version": os.environ["PROMPT_VERSION"], "sft_version": os.environ["SFT_PROMPT_VERSION"]},
     "collection": {"teacher_device": os.environ["TEACHER_DEVICE"], "student_device": os.environ["STUDENT_DEVICE"], "device_decision": {"path": os.environ["COLLECTION_DECISION"], "sha256": os.environ["COLLECTION_DECISION_SHA256"]}, "teacher_quantization": os.environ["TEACHER_QUANTIZATION"], "teacher_temperature": os.environ["TEACHER_TEMPERATURE"], "teacher_top_p": os.environ["TEACHER_TOP_P"], "sibling_count": os.environ["SIBLING_COUNT"], "sibling_seeds": os.environ["SIBLING_SEEDS"].split(), "max_length": 4096},
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle: json.dump(manifest, handle, sort_keys=True, indent=2); handle.write("\n")
@@ -53,6 +54,7 @@ PY
 : "${DATASET_REVISION:?DATASET_REVISION must be supplied with --export}"
 : "${DATASET_SOURCE:?DATASET_SOURCE must be supplied with --export}"
 : "${PROMPT_VERSION:?PROMPT_VERSION must be supplied with --export}"
+: "${SFT_PROMPT_VERSION:?SFT_PROMPT_VERSION must identify the prompt boundary used to train the student}"
 : "${PROMPT_HASH:?PROMPT_HASH must be supplied with --export}"
 : "${RETRIEVAL_HASH:?RETRIEVAL_HASH must be supplied with --export}"
 : "${SOURCE_SCHEMA_HASH:?SOURCE_SCHEMA_HASH must be supplied with --export}"
@@ -83,6 +85,7 @@ PY
 : "${SIBLING_SEEDS:?SIBLING_SEEDS must be a space-separated deterministic list}"
 [[ "$POLICY_HASH" =~ ^[0-9a-f]{64}$ ]] || fail "POLICY_HASH must be a lowercase SHA-256; got '$POLICY_HASH'" policy_hash_invalid
 [[ "$DECISION_DATASET_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "DECISION_DATASET_SHA256 must be a lowercase SHA-256; got '$DECISION_DATASET_SHA256'" decision_dataset_sha256_invalid
+[[ "$PROMPT_VERSION" == "$SFT_PROMPT_VERSION" ]] || fail "generation prompt version '$PROMPT_VERSION' differs from the SFT training prompt version '$SFT_PROMPT_VERSION'" prompt_training_mismatch
 
 : "${SLURM_NNODES:?SLURM_NNODES is required inside the allocation}"
 if [[ "$SLURM_NNODES" != "1" ]]; then fail "collection requires one node; got $SLURM_NNODES" "multi_node_collection_forbidden"; fi
@@ -139,7 +142,7 @@ print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transf
 PY
 )"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH DECISION_DATASET_SHA256 PROMPT_HASH RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
+export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH DECISION_DATASET_SHA256 PROMPT_HASH SFT_PROMPT_VERSION RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" shard_index="$SHARD_INDEX" shard_count="$SHARD_COUNT" merge_id="$MERGE_ID" allocated_gpus="$ALLOCATED_GPU_COUNT"
 if ! nvidia-smi --query-gpu=uuid --format=csv,noheader,nounits >/dev/null; then
   fail "nvidia-smi telemetry identity query failed" gpu_telemetry_query_failed

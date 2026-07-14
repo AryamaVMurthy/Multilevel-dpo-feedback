@@ -746,6 +746,8 @@ def test_prompt_preflight_and_collection_contracts_are_explicit():
     assert "probe-hardware" in collection
     assert "current-hardware" in collection
     assert "uuid" in collection
+    assert "SFT_PROMPT_VERSION" in collection
+    assert "prompt_training_mismatch" in collection
 
 
 def test_generation_baseline_refresh_is_a_tracked_fail_fast_slurm_entrypoint():
@@ -765,7 +767,7 @@ def test_collection_rejects_non_sha_policy_hash_before_allocation_checks(tmp_pat
         "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "DATA": str(tmp_path / "data.jsonl"),
         "OUTPUT": str(tmp_path / "out.jsonl"), "STUDENT_MODEL": "student", "STUDENT_REVISION": "student-rev",
         "TEACHER_MODEL": "teacher", "TEACHER_REVISION": "teacher-rev", "DATASET_REVISION": "data-rev",
-        "DATASET_SOURCE": "source", "PROMPT_VERSION": "prompt-v1", "PROMPT_HASH": "a" * 64,
+        "DATASET_SOURCE": "source", "PROMPT_VERSION": "prompt-v1", "SFT_PROMPT_VERSION": "prompt-v1", "PROMPT_HASH": "a" * 64,
         "RETRIEVAL_HASH": "b" * 64, "SOURCE_SCHEMA_HASH": "c" * 64, "SEED": "7", "SHARD_INDEX": "0",
         "SHARD_COUNT": "1", "SHARD_SEED": "7", "MERGE_ID": "merge-v1", "SHARD_INPUT_SHA256": "d" * 64,
         "TRAJECTORY_CACHE": str(tmp_path / "cache.jsonl"), "POLICY_HASH": "student-searchqa-v1",
@@ -782,6 +784,31 @@ def test_collection_rejects_non_sha_policy_hash_before_allocation_checks(tmp_pat
 
     assert result.returncode == 2
     assert "policy_hash_invalid" in result.stderr
+    assert "SLURM_NNODES" not in result.stderr
+
+
+def test_collection_rejects_prompt_boundary_mismatch_before_allocation_checks(tmp_path: Path):
+    required = {
+        "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "DATA": str(tmp_path / "data.jsonl"),
+        "OUTPUT": str(tmp_path / "out.jsonl"), "STUDENT_MODEL": "student", "STUDENT_REVISION": "student-rev",
+        "TEACHER_MODEL": "teacher", "TEACHER_REVISION": "teacher-rev", "DATASET_REVISION": "data-rev",
+        "DATASET_SOURCE": "source", "PROMPT_VERSION": "fixed-retrieval-cited-v1",
+        "SFT_PROMPT_VERSION": "fixed-retrieval-cited-answer-prefix-v2", "PROMPT_HASH": "a" * 64,
+        "RETRIEVAL_HASH": "b" * 64, "SOURCE_SCHEMA_HASH": "c" * 64, "SEED": "7", "SHARD_INDEX": "0",
+        "SHARD_COUNT": "1", "SHARD_SEED": "7", "MERGE_ID": "merge-v1", "SHARD_INPUT_SHA256": "d" * 64,
+        "TRAJECTORY_CACHE": str(tmp_path / "cache.jsonl"), "POLICY_HASH": "a" * 64,
+        "POLICY_VERSION": "student-searchqa-v1", "OPTIMIZATION_DECISION": str(tmp_path / "generation.json"),
+        "OPTIMIZATION_DECISION_SHA256": "e" * 64, "COLLECTION_DECISION": str(tmp_path / "collection.json"),
+        "COLLECTION_DECISION_SHA256": "f" * 64, "DECISION_DATASET_SHA256": "1" * 64,
+        "TEACHER_BATCH_SIZE": "1", "TEACHER_MAX_NEW_TOKENS": "32", "TEACHER_RETRY_MAX_NEW_TOKENS": "64",
+        "TEACHER_TEMPERATURE": "0", "TEACHER_TOP_P": "1", "TEACHER_THINKING": "true",
+        "TEACHER_QUANTIZATION": "4bit", "TEACHER_FALLBACK_REASON": "none", "MAX_INTERVENTIONS": "1",
+        "SIBLING_COUNT": "1", "SIBLING_SEEDS": "11",
+    }
+    result = run_script("turing_collect.sh", required)
+
+    assert result.returncode == 2
+    assert "prompt_training_mismatch" in result.stderr
     assert "SLURM_NNODES" not in result.stderr
 
 
