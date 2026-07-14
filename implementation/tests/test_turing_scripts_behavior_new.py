@@ -769,6 +769,7 @@ def test_parallel_collection_wrapper_freezes_devices_from_each_allocation():
     script_path = SCRIPTS / "turing_collect_runtime_decision.sh"
     assert script_path.exists()
     script = script_path.read_text(encoding="utf-8")
+    assert "#SBATCH --time=24:00:00" in script
     assert "set -euo pipefail" in script
     assert "probe-hardware" in script
     assert "freeze-collection-decision" in script
