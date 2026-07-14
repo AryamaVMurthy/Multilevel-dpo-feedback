@@ -2,21 +2,21 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed remote commit:** `dc763063d663f6c19f15f26e857b979ef0209a5f`
+**Last observed active rollout commit:** `b8505d6b3339eaffb73d51867003e26045fd058a`
 
-**Current local implementation commit:** `dc763063d663f6c19f15f26e857b979ef0209a5f`
+**Resumable-collector implementation base:** `b42dfa83ca824cd6554989aecbd6a0b96d90939a`
 
 ## Executive status
 
 The fixed-retrieval SearchQA pipeline, strict cited-response evaluator, batched generation path, minimal-hint trajectory code, student-only SFT/DPO data gates, Turing launch contracts, and hardware probes exist and pass the local test suite. The pinned Qwen3-4B-Base student and Qwen3-32B 4-bit teacher both fit their assigned A100-40GB GPUs.
 
-The raw student was not ready for preference-data collection at scale: the original audited validation preflight produced zero fully correct protocol responses. The controlled v2 scaffold plus explicit minimum-generation contract removed empty-output collapse and supplied enough canonically verified, student-generated, no-hint targets for an SFT overfit gate. After the 20-step save/resume gate, eight parallel A100 workers generated 8,192 checkpoint-20 candidates for 4,096 train-only examples. Canonical validation produced 4,783 verified SFT rows and 1,680 complete query/response trajectory pairs. Four-GPU full Qwen3-4B BF16 ZeRO-3 SFT is now running as Slurm job `13836`; DPO, GRPO, and DAPO have not started.
+The raw student was not ready for preference-data collection at scale: the original audited validation preflight produced zero fully correct protocol responses. The controlled v2 scaffold plus explicit minimum-generation contract removed empty-output collapse and supplied enough canonically verified, student-generated, no-hint targets for an SFT overfit gate. After the 20-step save/resume gate, eight parallel A100 workers generated 8,192 checkpoint-20 candidates for 4,096 train-only examples. Canonical validation produced 4,783 verified SFT rows and 1,680 complete query/response trajectory pairs. The four-GPU full Qwen3-4B BF16 ZeRO-3 SFT run completed all 356 optimizer steps; checkpoint 50 is the frozen student used by the active teacher-guided collection. DPO, GRPO, and DAPO have not started.
 
 The overfit checkpoint is a material protocol improvement on the untouched 32-row validation sample: all 32 queries and all 32 responses are nonempty, parse-valid, cited three-line outputs, with zero truncations. Canonical retrieval recall@8 is 25/32 and canonical exact-answer correctness is 18/32. Manual review found one additional semantically accepted alias (`Launch and Arrival` against gold `takeoff & landing (or launch & arrival)`), which is reported separately and is not silently converted into training supervision or a changed canonical score.
 
 ## Live Turing rollout snapshot
 
-**Observed:** 2026-07-14 04:57 UTC (10:27 IST)
+**Observed:** 2026-07-14 05:28 UTC (10:58 IST)
 **Active checkout:** `~/searchqa-dpo/fixed-retrieval-v1`
 **Active rollout output:** `/scratch/node10/node10/aryama.murthy/searchqa-dpo/teacher-dpo-v1/full-r4`
 
@@ -30,9 +30,13 @@ The current full teacher-guided collection uses four concurrent two-GPU jobs:
 | 13952 | 1,042 | RUNNING | 0 |
 | **Total** | **4,096** | **RUNNING** | **0 / 4,096** |
 
-Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. The old collector writes each shard atomically at completion and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
+Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. At the observation time all four jobs had run for about 3 hours 33 minutes. Their 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The old collector writes each shard atomically at completion and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
 
-Downstream jobs 13954 (audit), 13955 (preferences), 13956 (preparation), 13957 (DPO), 13958–13959 (scale), 13960 (freeze), and 13962 (final CPU-only gate) are submitted with explicit `afterok` dependencies and are currently pending. DPO has not started. The resumable checkpoint collector is implemented and locally verified on the development branch for the next controlled launch; it is not being mixed into the active run.
+Downstream jobs 13954 (merge and trajectory audit), 13955 (preferences), 13956 (DPO split and reference log-probabilities), 13957 (optimization probe), 13958–13959 (four/eight-GPU scaling probes), 13960 (scale-decision freeze), and 13962 (DPO after the frozen gate) are submitted with explicit `afterok` dependencies and are currently pending. DPO has not started.
+
+The resumable collector is staged separately on Turing at `~/.config/superpowers/worktrees/fixed-retrieval-v1/collector-resume-v2`, exact commit `b42dfa83ca824cd6554989aecbd6a0b96d90939a`. Its full compute-node verification passed: 343 tests, 14 expected upstream warnings, and 171 subtests. Turing's login node cannot import the current PyTorch environment (`libtorch_cpu.so: failed to map segment from shared object`) and OpenBLAS exhausts its constrained mapping/thread budget unless thread pools are bounded; therefore verification was run inside the existing node10 Slurm allocation with explicit numerical-library thread limits.
+
+This staged worktree is a recovery path, not a launch-ready substitute for the active lineage. The current generation optimization decision is bound to commit `b8505d6b...`; the resumable code is commit `b42dfa8...`. A retry must first run and freeze a fresh measured generation decision for the resumable commit, then launch into a new output lineage. Rewriting the old decision, mixing commits, or claiming that the current in-memory work can be resumed is forbidden.
 
 ## Dataset state
 
@@ -180,7 +184,7 @@ This proves model fit and basic hint parsing only. It does not prove that 32 rea
 
 ## Verification state
 
-- Local verification: 323 unit tests and 171 subtests passed. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. Expected upstream Torch deprecation warnings remain.
+- Verification: 343 unit tests and 171 subtests passed locally and in the isolated Turing recovery worktree. Ruff, Python compile checks, Slurm shell syntax checks, and Git whitespace checks pass. Fourteen expected upstream Torch deprecation warnings remain.
 - Ruff: passed.
 - Python compile checks: passed.
 - All Slurm shell launchers: `bash -n` passed.
