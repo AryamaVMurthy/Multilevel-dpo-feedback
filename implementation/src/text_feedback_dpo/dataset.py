@@ -617,6 +617,194 @@ def split_paired_sft_rows(
     return train, evaluation, report
 
 
+def split_balanced_dpo_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    train_per_task: int,
+    eval_per_task: int,
+    seed: int,
+) -> tuple[list[dict], list[dict], dict]:
+    """Select exact balanced DPO subsets whose examples never cross splits.
+
+    Preference rows are selected without replacement.  Example IDs are assigned as
+    whole groups before rows are selected, so a query and response preference from
+    the same example can never leak between train and evaluation.
+    """
+    for label, value in (("train_per_task", train_per_task), ("eval_per_task", eval_per_task)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"balanced DPO {label} must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("balanced DPO seed must be an integer")
+
+    grouped: dict[str, dict[str, list[dict]]] = {}
+    validated_rows: list[dict] = []
+    seen_ids: set[str] = set()
+    task_counts = {"query": 0, "response": 0}
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"balanced DPO row {index} must be an object")
+        row_id = row.get("id")
+        if not isinstance(row_id, str) or not row_id.strip() or row_id in seen_ids:
+            raise ValueError(f"balanced DPO row {index} requires a unique non-empty id")
+        metadata = row.get("metadata")
+        if not isinstance(metadata, Mapping):
+            raise ValueError(f"balanced DPO row {row_id} requires metadata")
+        pair_type = metadata.get("pair_type")
+        if pair_type not in {"query", "response"}:
+            raise ValueError(f"balanced DPO row {row_id} metadata.pair_type must be query or response")
+        example_id = metadata.get("example_id")
+        if not isinstance(example_id, str) or not example_id.strip():
+            raise ValueError(f"balanced DPO row {row_id} metadata.example_id must be a non-empty string")
+        copied = dict(row)
+        validated_rows.append(copied)
+        seen_ids.add(row_id)
+        task_counts[pair_type] += 1
+        grouped.setdefault(example_id, {"query": [], "response": []})[pair_type].append(copied)
+
+    required_total = train_per_task + eval_per_task
+    for task in ("query", "response"):
+        if task_counts[task] < required_total:
+            raise ValueError(
+                f"balanced DPO requires {required_total} rows for each task "
+                f"({task} has {task_counts[task]})"
+            )
+
+    def row_key(row: Mapping[str, object]) -> tuple[str, str]:
+        row_id = str(row["id"])
+        return hashlib.sha256(f"{seed}\0{row_id}".encode("utf-8")).hexdigest(), row_id
+
+    def example_key(example_id: str) -> tuple[str, str]:
+        return hashlib.sha256(f"{seed}\0{example_id}".encode("utf-8")).hexdigest(), example_id
+
+    # Choose the eval examples with a deterministic bounded-capacity subset search.
+    # The selected eval capacity must leave enough rows for both train tasks.
+    ordered_examples = sorted(grouped, key=example_key)
+    capacities = {
+        example_id: (
+            len(grouped[example_id]["query"]),
+            len(grouped[example_id]["response"]),
+        )
+        for example_id in ordered_examples
+    }
+    lower = (eval_per_task, eval_per_task)
+    upper = (task_counts["query"] - train_per_task, task_counts["response"] - train_per_task)
+    suffix = [(0, 0)] * (len(ordered_examples) + 1)
+    for index in range(len(ordered_examples) - 1, -1, -1):
+        query_count, response_count = capacities[ordered_examples[index]]
+        remaining_query, remaining_response = suffix[index + 1]
+        suffix[index] = (query_count + remaining_query, response_count + remaining_response)
+
+    states: dict[tuple[int, int], tuple[str, ...]] = {(0, 0): ()}
+    for index, example_id in enumerate(ordered_examples):
+        query_count, response_count = capacities[example_id]
+        next_states: dict[tuple[int, int], tuple[str, ...]] = {}
+        for (current_query, current_response), selected_ids in states.items():
+            options = (
+                (current_query + query_count, current_response + response_count, selected_ids + (example_id,)),
+                (current_query, current_response, selected_ids),
+            )
+            for next_query, next_response, next_ids in options:
+                if next_query > upper[0] or next_response > upper[1]:
+                    continue
+                remaining_query, remaining_response = suffix[index + 1]
+                if next_query + remaining_query < lower[0] or next_response + remaining_response < lower[1]:
+                    continue
+                next_states.setdefault((next_query, next_response), next_ids)
+        states = next_states
+
+    valid_assignments = [
+        selected_ids
+        for (query_count, response_count), selected_ids in states.items()
+        if lower[0] <= query_count <= upper[0] and lower[1] <= response_count <= upper[1]
+    ]
+    if not valid_assignments:
+        raise ValueError(
+            "balanced DPO cannot make train/eval example-disjoint selections with "
+            f"{train_per_task} train and {eval_per_task} eval rows per task"
+        )
+    eval_example_ids = min(
+        valid_assignments,
+        key=lambda selected_ids: (
+            hashlib.sha256(json.dumps(selected_ids, separators=(",", ":")).encode("utf-8")).hexdigest(),
+            selected_ids,
+        ),
+    )
+    eval_examples = set(eval_example_ids)
+
+    def select_rows(example_ids: Iterable[str], task: str, count: int) -> list[dict]:
+        candidates = [
+            row
+            for example_id in example_ids
+            for row in grouped[example_id][task]
+        ]
+        candidates.sort(key=row_key)
+        if len(candidates) < count:
+            raise ValueError(
+                "balanced DPO cannot make train/eval example-disjoint selections "
+                f"with {count} {task} rows from the assigned examples"
+            )
+        return candidates[:count]
+
+    eval_by_task = {
+        task: select_rows(eval_examples, task, eval_per_task)
+        for task in ("query", "response")
+    }
+    train_by_task = {
+        task: select_rows((example_id for example_id in grouped if example_id not in eval_examples), task, train_per_task)
+        for task in ("query", "response")
+    }
+
+    def interleave(by_task: Mapping[str, list[dict]]) -> list[dict]:
+        output: list[dict] = []
+        for index in range(max(len(by_task["query"]), len(by_task["response"]))):
+            for task in ("query", "response"):
+                if index < len(by_task[task]):
+                    output.append(by_task[task][index])
+        return output
+
+    train = interleave(train_by_task)
+    evaluation = interleave(eval_by_task)
+    train_example_ids = {str(row["metadata"]["example_id"]) for row in train}
+    eval_example_ids_selected = {str(row["metadata"]["example_id"]) for row in evaluation}
+    example_overlap = train_example_ids & eval_example_ids_selected
+    train_row_ids = {str(row["id"]) for row in train}
+    eval_row_ids = {str(row["id"]) for row in evaluation}
+
+    def hash_ids(ids: set[str]) -> str:
+        return hashlib.sha256(
+            json.dumps(sorted(ids), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    report = {
+        "input_rows": len(validated_rows),
+        "input_rows_sha256": dataset_fingerprint(sorted(validated_rows, key=lambda row: str(row["id"]))),
+        "input_examples": len(grouped),
+        "train_per_task": train_per_task,
+        "eval_per_task": eval_per_task,
+        "train_rows": len(train),
+        "eval_rows": len(evaluation),
+        "train_task_counts": {task: len(train_by_task[task]) for task in ("query", "response")},
+        "eval_task_counts": {task: len(eval_by_task[task]) for task in ("query", "response")},
+        "train_rows_sha256": dataset_fingerprint(train),
+        "eval_rows_sha256": dataset_fingerprint(evaluation),
+        "train_example_count": len(train_example_ids),
+        "eval_example_count": len(eval_example_ids_selected),
+        "train_example_ids_sha256": hash_ids(train_example_ids),
+        "eval_example_ids_sha256": hash_ids(eval_example_ids_selected),
+        "task_counts": {
+            "train": {task: len(train_by_task[task]) for task in ("query", "response")},
+            "eval": {task: len(eval_by_task[task]) for task in ("query", "response")},
+        },
+        "example_overlap": len(example_overlap),
+        "example_overlap_count": len(example_overlap),
+        "example_overlap_ids_sha256": hash_ids(example_overlap),
+        "row_id_overlap_count": len(train_row_ids & eval_row_ids),
+        "seed": seed,
+        "selection_policy": "sha256(seed\\0,example_id)-bounded-capacity-dp-v1",
+    }
+    return train, evaluation, report
+
+
 def build_sft_rows_from_bootstrap(
     bootstrap_rows: list[dict],
     *,

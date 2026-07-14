@@ -16,6 +16,7 @@ from text_feedback_dpo.dataset import (
     load_searchqa_split_with_stats,
     stream_searchqa_split_with_stats,
     stream_stats_report,
+    split_balanced_dpo_rows,
     select_balanced_sft_rows,
     write_jsonl,
 )
@@ -281,6 +282,28 @@ def cmd_split_paired_sft(args: argparse.Namespace) -> None:
     write_jsonl(evaluation, args.eval)
     report["train_file_sha256"] = _sha256_file(args.train)
     report["eval_file_sha256"] = _sha256_file(args.eval)
+    write_json(args.report, report)
+
+
+def cmd_split_balanced_dpo(args: argparse.Namespace) -> None:
+    rows = read_jsonl(args.input)
+    train, evaluation, report = split_balanced_dpo_rows(
+        rows,
+        train_per_task=args.train_per_task,
+        eval_per_task=args.eval_per_task,
+        seed=args.seed,
+    )
+    report.update({
+        "command": "split-balanced-dpo",
+        "input_file_sha256": _sha256_file(args.input),
+    })
+    report["input_sha256"] = report["input_file_sha256"]
+    write_jsonl(train, args.train)
+    write_jsonl(evaluation, args.eval)
+    report["train_file_sha256"] = _sha256_file(args.train)
+    report["eval_file_sha256"] = _sha256_file(args.eval)
+    report["train_sha256"] = report["train_file_sha256"]
+    report["eval_sha256"] = report["eval_file_sha256"]
     write_json(args.report, report)
 
 
@@ -1571,6 +1594,18 @@ def build_parser() -> argparse.ArgumentParser:
     paired_sft.add_argument("--min-train-pairs", required=True, type=int)
     paired_sft.add_argument("--seed", required=True, type=int)
     paired_sft.set_defaults(func=cmd_split_paired_sft)
+    balanced_dpo = sub.add_parser(
+        "split-balanced-dpo",
+        help="create deterministic query/response-balanced example-disjoint DPO train/eval data",
+    )
+    balanced_dpo.add_argument("--input", required=True, type=Path)
+    balanced_dpo.add_argument("--train", required=True, type=Path)
+    balanced_dpo.add_argument("--eval", required=True, type=Path)
+    balanced_dpo.add_argument("--report", required=True, type=Path)
+    balanced_dpo.add_argument("--train-per-task", required=True, type=int)
+    balanced_dpo.add_argument("--eval-per-task", required=True, type=int)
+    balanced_dpo.add_argument("--seed", required=True, type=int)
+    balanced_dpo.set_defaults(func=cmd_split_balanced_dpo)
     reproduction = sub.add_parser(
         "evaluate-sft-reproduction",
         help="generate and exactly compare all verified SFT completions from a checkpoint",
