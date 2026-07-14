@@ -16,6 +16,78 @@ def _completion(value: object, *, field: str) -> str:
     return f" {value}"
 
 
+def build_direct_correction_preference_row(
+    trajectory: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Build one explicit initial-wrong versus post-feedback-correct response pair.
+
+    This is intentionally separate from the causally-ranked no-hint sibling builder:
+    the chosen response was generated after teacher feedback, but both candidates are
+    optimized under the byte-identical original no-hint response prompt.
+    """
+    attempts = trajectory.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        raise ValueError("direct correction trajectory requires non-empty attempts")
+    initial = attempts[0]
+    if not isinstance(initial, Mapping):
+        raise ValueError("direct correction initial attempt must be a mapping")
+    if initial.get("correct") is not False:
+        return None
+    initial_artifact = initial.get("artifact")
+    if not isinstance(initial_artifact, Mapping):
+        raise ValueError("direct correction initial attempt requires an artifact")
+    if initial_artifact.get("provenance") != "student" or initial_artifact.get("no_hint") is not True:
+        raise ValueError("direct correction rejected response must be a no-hint student output")
+
+    chosen_artifact = trajectory.get("chosen")
+    if trajectory.get("resolved") is not True or not isinstance(chosen_artifact, Mapping):
+        return None
+    if chosen_artifact.get("provenance") != "student":
+        raise ValueError("direct correction chosen response must be student-generated")
+    chosen_score = chosen_artifact.get("cited_score")
+    if not isinstance(chosen_score, Mapping) or chosen_score.get("correct") is not True:
+        raise ValueError("direct correction chosen response must have a verified correct score")
+
+    prompt = initial_artifact.get("response_prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or "Hints:" in prompt:
+        raise ValueError("direct correction pair requires the original no-hint response prompt")
+    prompt_hash = initial_artifact.get("response_prompt_hash")
+    if prompt_hash != _hash(prompt):
+        raise ValueError("direct correction original response prompt hash mismatch")
+    chosen = _completion(chosen_artifact.get("raw_response"), field="chosen raw_response")
+    rejected = _completion(initial_artifact.get("raw_response"), field="rejected raw_response")
+    if chosen == rejected:
+        raise ValueError("direct correction chosen and rejected responses are identical")
+
+    interventions = trajectory.get("interventions")
+    if not isinstance(interventions, list) or not interventions:
+        raise ValueError("direct correction pair requires persisted teacher feedback")
+    metadata = {
+        "example_id": trajectory.get("id"),
+        "pair_type": "direct_response_correction",
+        "prompt_context": "original_no_hint_response_prompt",
+        "chosen_provenance": "student_after_teacher_feedback",
+        "rejected_provenance": "student_initial_no_hint",
+        "teacher_output_role": "hint_only_not_candidate",
+        "intervention_count": len(interventions),
+        "policy_hash": initial_artifact.get("policy_hash"),
+        "query_prompt_hash": initial_artifact.get("query_prompt_hash"),
+        "response_prompt_hash": prompt_hash,
+        "retrieval_context_hash": initial_artifact.get("retrieval_context_hash"),
+        "evaluator_version": chosen_artifact.get("evaluator_version"),
+    }
+    supervision = {"prompt": prompt, "chosen": chosen, "rejected": rejected, "metadata": metadata}
+    return {
+        "id": f"{trajectory.get('id')}::direct_response_correction",
+        "prompt": prompt,
+        "chosen": chosen,
+        "rejected": rejected,
+        "metadata": metadata,
+        "canonical_hashes": {field: _hash(value) for field, value in supervision.items()},
+        "supervision_hash": _hash(supervision),
+    }
+
+
 def _student_no_hint(item: Mapping[str, object]) -> None:
     if item.get("provenance") != "student":
         raise ValueError("preference completion provenance must be student")

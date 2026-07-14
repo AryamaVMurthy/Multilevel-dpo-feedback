@@ -869,6 +869,73 @@ def cmd_build_preferences(args: argparse.Namespace) -> None:
     write_jsonl(preference_rows, args.output)
 
 
+def cmd_build_direct_correction_preferences(args: argparse.Namespace) -> None:
+    from text_feedback_dpo.preferences import build_direct_correction_preference_row
+
+    trajectories = read_unique_jsonl(args.trajectories, label="direct correction trajectory")
+    rows = []
+    exclusions = {"initially_correct": 0, "unresolved": 0}
+    for trajectory in trajectories:
+        attempts = trajectory.get("attempts")
+        if isinstance(attempts, list) and attempts and isinstance(attempts[0], dict):
+            if attempts[0].get("correct") is not False:
+                exclusions["initially_correct"] += 1
+                continue
+        row = build_direct_correction_preference_row(trajectory)
+        if row is None:
+            exclusions["unresolved"] += 1
+            continue
+        rows.append(row)
+    if not rows:
+        args.output.unlink(missing_ok=True)
+        raise ValueError("no valid direct correction preference rows were produced")
+    write_jsonl(rows, args.output)
+    write_json(args.report, {
+        "command": "build-direct-correction-preferences",
+        "input_rows": len(trajectories),
+        "input_sha256": _sha256_file(args.trajectories),
+        "output_rows": len(rows),
+        "output_sha256": _sha256_file(args.output),
+        "exclusions": exclusions,
+        "pair_definition": {
+            "prompt": "original_no_hint_response_prompt",
+            "chosen": "verified_correct_student_response_after_teacher_feedback",
+            "rejected": "initial_incorrect_student_response",
+            "teacher_output": "hint_only_not_candidate",
+        },
+    })
+
+
+def cmd_split_direct_dpo(args: argparse.Namespace) -> None:
+    rows = read_unique_jsonl(args.input, label="direct DPO input")
+    if args.eval_rows <= 0 or args.min_train_rows <= 0:
+        raise ValueError("direct DPO split sizes must be positive")
+    if len(rows) < args.eval_rows + args.min_train_rows:
+        raise ValueError(
+            f"direct DPO input has {len(rows)} rows but requires at least "
+            f"{args.eval_rows + args.min_train_rows}"
+        )
+    ordered = sorted(
+        rows,
+        key=lambda row: hashlib.sha256(f"{args.seed}:{row['id']}".encode()).hexdigest(),
+    )
+    evaluation = ordered[: args.eval_rows]
+    train = ordered[args.eval_rows :]
+    write_jsonl(train, args.train)
+    write_jsonl(evaluation, args.eval)
+    write_json(args.report, {
+        "command": "split-direct-dpo",
+        "seed": args.seed,
+        "selection_policy": "sha256(seed,id),without_replacement",
+        "input_rows": len(rows),
+        "train_rows": len(train),
+        "eval_rows": len(evaluation),
+        "input_sha256": _sha256_file(args.input),
+        "train_sha256": _sha256_file(args.train),
+        "eval_sha256": _sha256_file(args.eval),
+    })
+
+
 def cmd_collect(args: argparse.Namespace) -> None:
     from text_feedback_dpo.batch_generation import (
         EVALUATOR_VERSION,
@@ -1563,6 +1630,20 @@ def build_parser() -> argparse.ArgumentParser:
     preferences.add_argument("--trajectories", required=True, type=Path)
     preferences.add_argument("--output", required=True, type=Path)
     preferences.set_defaults(func=cmd_build_preferences)
+    direct_preferences = sub.add_parser("build-direct-correction-preferences")
+    direct_preferences.add_argument("--trajectories", required=True, type=Path)
+    direct_preferences.add_argument("--output", required=True, type=Path)
+    direct_preferences.add_argument("--report", required=True, type=Path)
+    direct_preferences.set_defaults(func=cmd_build_direct_correction_preferences)
+    direct_split = sub.add_parser("split-direct-dpo")
+    direct_split.add_argument("--input", required=True, type=Path)
+    direct_split.add_argument("--train", required=True, type=Path)
+    direct_split.add_argument("--eval", required=True, type=Path)
+    direct_split.add_argument("--report", required=True, type=Path)
+    direct_split.add_argument("--eval-rows", required=True, type=int)
+    direct_split.add_argument("--min-train-rows", required=True, type=int)
+    direct_split.add_argument("--seed", required=True, type=int)
+    direct_split.set_defaults(func=cmd_split_direct_dpo)
     sft_data = sub.add_parser("build-sft-data")
     sft_data.add_argument("--config", required=True, type=Path)
     sft_data.add_argument("--data", required=True, type=Path)
