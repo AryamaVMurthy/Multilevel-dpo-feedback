@@ -301,6 +301,7 @@ class TuringRuntimeTest(unittest.TestCase):
 
     def test_collection_uses_distinct_frozen_devices_in_single_allocation_with_deterministic_shard_identity(self):
         text = Path("scripts/turing_collect.sh").read_text(encoding="utf-8")
+        self.assertIn("#SBATCH --time=24:00:00", text)
         self.assertIn("#SBATCH --gres=gpu:2", text)
         self.assertIn('SLURM_NNODES" != "1"', text)
         self.assertIn('SLURM_NTASKS" != "1"', text)
