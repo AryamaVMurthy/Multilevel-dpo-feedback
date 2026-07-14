@@ -82,6 +82,26 @@ def _record_exclusion(
     counts[exclusion_reason] = int(counts.get(exclusion_reason, 0)) + 1
 
 
+def _record_candidate_exclusion(
+    trajectory: Mapping[str, object], *, kind: str, reason: str,
+    candidate: Mapping[str, object],
+) -> None:
+    if not isinstance(trajectory, dict):
+        raise ValueError("preference exclusion accounting requires a mutable trajectory mapping")
+    exclusions = trajectory.setdefault("preference_exclusions", [])
+    counts = trajectory.setdefault("preference_exclusion_counts", {})
+    if not isinstance(exclusions, list) or not isinstance(counts, dict):
+        raise ValueError("preference exclusion accounting fields have invalid types")
+    exclusion_reason = f"{reason}_{kind}_candidate"
+    exclusions.append({
+        "pair_type": kind,
+        "reason": exclusion_reason,
+        "seed": candidate.get("seed"),
+        "error_code": candidate.get("error_code"),
+    })
+    counts[exclusion_reason] = int(counts.get(exclusion_reason, 0)) + 1
+
+
 def _ranked_pairs(
     candidates: list[Mapping[str, object]],
     *,
@@ -200,6 +220,25 @@ def _response_context(candidate: Mapping[str, object]) -> tuple[tuple[str, str, 
     return key, context
 
 
+def _response_stage_unavailable(candidate: Mapping[str, object]) -> bool:
+    error_code = candidate.get("error_code")
+    score = candidate.get("cited_score")
+    return bool(
+        isinstance(error_code, str)
+        and error_code.startswith("query_")
+        and candidate.get("raw_response") is None
+        and candidate.get("response_prompt") is None
+        and candidate.get("response_prompt_hash") is None
+        and candidate.get("canonical_ranked_search_results") == []
+        and candidate.get("ranked_search_results") == []
+        and candidate.get("verified_no_hint_success") is False
+        and _gain(candidate) == 0.0
+        and isinstance(score, Mapping)
+        and score.get("correct") is False
+        and score.get("error_code") == error_code
+    )
+
+
 def build_response_preference_rows(trajectory: Mapping[str, object]) -> list[dict[str, object]]:
     """Rank responses only within byte-identical canonical retrieval contexts."""
     if not _preference_eligible(trajectory):
@@ -229,6 +268,11 @@ def build_response_preference_rows(trajectory: Mapping[str, object]) -> list[dic
             raise ValueError("response preference candidate contains an unverified success or forged verification")
         if _gain(sibling) != float(canonical_success):
             raise ValueError("response preference sibling has inconsistent verification and gain")
+        if _response_stage_unavailable(sibling):
+            _record_candidate_exclusion(
+                trajectory, kind="response", reason="response_stage_unavailable", candidate=sibling
+            )
+            continue
         key, context = _response_context(sibling)
         if key in groups and groups[key][0] != context:
             raise ValueError("response preference candidates have same hashes but different prompt bytes or retrieval records")

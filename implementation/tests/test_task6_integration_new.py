@@ -185,6 +185,40 @@ class Task6PreferenceContextTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unverified success"):
             build_response_preference_rows(trajectory)
 
+    def test_response_pairs_exclude_verified_query_stage_failure_without_aborting_query_pairs(self):
+        chosen = self._candidate(active_artifact(response=correct_response()), gain=1.0, verified=True, seed=101)
+        query_failure = self._candidate(
+            active_artifact(response=wrong_response(), query="Ada <xml"),
+            gain=0.0,
+            verified=False,
+            seed=102,
+        )
+        trajectory = {
+            "id": "q1", "training_eligible": True, "preference_eligible": True,
+            "query_prompt": chosen["query_prompt"], "query_prompt_hash": chosen["query_prompt_hash"],
+            "policy_hash": "policy-v1", "no_hint_siblings": [chosen, query_failure],
+            "preference_exclusions": [], "preference_exclusion_counts": {},
+        }
+
+        query_rows = build_query_preference_rows(trajectory)
+        response_rows = build_response_preference_rows(trajectory)
+
+        self.assertEqual(len(query_rows), 1)
+        self.assertEqual(response_rows, [])
+        self.assertEqual(
+            trajectory["preference_exclusion_counts"],
+            {"response_stage_unavailable_response_candidate": 1},
+        )
+        self.assertEqual(
+            trajectory["preference_exclusions"],
+            [{
+                "pair_type": "response",
+                "reason": "response_stage_unavailable_response_candidate",
+                "seed": 102,
+                "error_code": "query_invalid_format",
+            }],
+        )
+
     def test_equal_gain_identical_completion_is_counted_before_gain_filter(self):
         chosen = self._candidate(active_artifact(response=correct_response()), gain=1.0, verified=True, seed=101)
         duplicate = self._candidate(active_artifact(response=correct_response()), gain=1.0, verified=True, seed=102)
