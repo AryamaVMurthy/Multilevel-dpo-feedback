@@ -77,5 +77,5 @@ uv run --frozen python "$PROBE_RUNNER" freeze-collection-decision \
 
 COLLECTION_DECISION_SHA256="$(sha256sum "$COLLECTION_DECISION" | awk '{print $1}')"
 log_event runtime_collection_decision_frozen hardware="$CURRENT_HARDWARE" decision="$COLLECTION_DECISION" decision_sha256="$COLLECTION_DECISION_SHA256" teacher_device_index="$TEACHER_DEVICE_INDEX" student_device_index="$STUDENT_DEVICE_INDEX" fallback_reason=none
-export CURRENT_HARDWARE COLLECTION_DECISION COLLECTION_DECISION_SHA256
+export CURRENT_HARDWARE COLLECTION_DECISION COLLECTION_DECISION_SHA256 SHARD_INPUT_SHA256
 exec bash "$PROJECT_DIR/scripts/turing_collect.sh"
