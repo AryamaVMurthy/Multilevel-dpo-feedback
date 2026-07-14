@@ -6,6 +6,7 @@
 **Current detached shared-checkout HEAD:** `b8505d6b3339eaffb73d51867003e26045fd058a`
 
 **Resumable-collector implementation base:** `b42dfa83ca824cd6554989aecbd6a0b96d90939a`
+**Current staged recovery candidate:** `98c56df5bb83c4392a4e7905bfce0cb78f655121`
 
 ## Executive status
 
@@ -17,7 +18,7 @@ The overfit checkpoint is a material protocol improvement on the untouched 32-ro
 
 ## Live Turing rollout snapshot
 
-**Observed:** 2026-07-14 06:12 UTC (11:42 IST)
+**Observed:** 2026-07-14 06:43 UTC (12:13 IST)
 **Active checkout:** `~/searchqa-dpo/fixed-retrieval-v1`
 **Active rollout output:** `/scratch/node10/node10/aryama.murthy/searchqa-dpo/teacher-dpo-v1/full-r4`
 
@@ -31,13 +32,15 @@ The current full teacher-guided collection uses four concurrent two-GPU jobs:
 | 13952 | 1,042 | RUNNING | 0 |
 | **Total** | **4,096** | **RUNNING** | **0 / 4,096** |
 
-Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. On job 13949 the active teacher used approximately 39.0/40.96 GiB while the resident student used approximately 11.5 GiB and remained idle during the teacher call. At the observation time all four jobs had run for about 4 hours 17 minutes and were inside the second teacher-feedback call. Their 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The old collector writes each shard atomically and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
+Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. On job 13949 the active teacher used approximately 39.0/40.96 GiB while the resident student used approximately 11.5 GiB and remained idle during the teacher call. At the observation time all four jobs had run for about 4 hours 48 minutes and were inside the second teacher-feedback call. Their 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The old collector writes each shard atomically and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
 
 Downstream jobs 13954 (merge and trajectory audit), 13955 (preferences), 13956 (DPO split and reference log-probabilities), 13957 (optimization probe), 13958–13959 (four/eight-GPU scaling probes), 13960 (scale-decision freeze), and 13962 (DPO after the frozen gate) are submitted with explicit `afterok` dependencies and are currently pending. The pending DPO launcher job 13962 has been extended to a 24-hour wall limit so its synchronous smoke and full-run waits cannot be cut off by the former two-hour limit. DPO has not started.
 
-The resumable collector is staged separately on Turing at `~/.config/superpowers/worktrees/fixed-retrieval-v1/collector-resume-v2`, exact commit `b42dfa83ca824cd6554989aecbd6a0b96d90939a`. Its full compute-node verification passed: 343 tests, 14 expected upstream warnings, and 171 subtests. Turing's login node cannot import the current PyTorch environment (`libtorch_cpu.so: failed to map segment from shared object`) and OpenBLAS exhausts its constrained mapping/thread budget unless thread pools are bounded; therefore verification was run inside the existing node10 Slurm allocation with explicit numerical-library thread limits.
+The resumable collector is staged separately on Turing at `~/.config/superpowers/worktrees/fixed-retrieval-v1/collector-resume-v2`, currently at exact commit `98c56df5bb83c4392a4e7905bfce0cb78f655121` on resumable base `b42dfa83ca824cd6554989aecbd6a0b96d90939a`. Local full verification passed 345 tests, 14 expected upstream warnings, and 171 subtests; focused compute-node verification of the latest candidate passed 57 tests and 8 subtests plus Ruff and shell syntax. The latest candidate adds per-call teacher-contract diagnostics, deterministic per-intervention teacher seeding, and explicit manifest-bound teacher temperature/top-p/top-k controls. It does not retroactively alter the active producer lineage. Turing's login node cannot import the current PyTorch environment (`libtorch_cpu.so: failed to map segment from shared object`) and OpenBLAS exhausts its constrained mapping/thread budget unless thread pools are bounded; therefore verification was run inside the existing node10 Slurm allocation with explicit numerical-library thread limits.
 
-This staged worktree is a recovery path, not a launch-ready substitute for the active lineage. The running Python process and frozen generation optimization decision are both bound to commit `8562a4a9...`; the shared checkout was subsequently moved to `b8505d6b...`, while the already-loaded process continued from its launch identity. The resumable code is commit `b42dfa8...`. A retry must first run and freeze a fresh measured generation decision for the resumable commit, then launch into a new output lineage. Rewriting the old decision, mixing commits, or claiming that the current in-memory work can be resumed is forbidden.
+The active producer uses greedy teacher decoding (`temperature=0`, `top_p=1`). Qwen3's documented thinking-mode sampling configuration (`temperature=0.6`, `top_p=0.95`, `top_k=20`) is staged only as a matched A/B candidate because the first teacher round required 1,078 retries out of 2,439 outputs and 447 explicit recoveries. It must be compared on identical prompts, model revision, token caps, batch size, evaluator, and seed rule before promotion; no decoding change is silently assumed to improve quality.
+
+This staged worktree is a recovery path, not a launch-ready substitute for the active lineage. The running Python process and frozen generation optimization decision are both bound to commit `8562a4a9...`; the shared checkout was subsequently moved to `b8505d6b...`, while the already-loaded process continued from its launch identity. Resumability was introduced at base commit `b42dfa8...`; the current staged candidate is `98c56df...`. A retry must first run and freeze a fresh measured generation decision for the exact recovery commit and decoding candidate, then launch into a new output lineage. Rewriting the old decision, mixing commits, or claiming that the current in-memory work can be resumed is forbidden.
 
 The exact `8562a4a9...` to `b8505d6b...` diff contains teacher subbatch observability and downstream checkpoint, optimization, scaling, and DPO gates; it does not modify the trajectory, evaluator, or preference semantics used to revalidate completed rows. The pending chain may therefore consume producer-commit `8562a4a9...` trajectories under the stricter descendant gates while preserving the producer commit in each shard manifest. The shared checkout must remain at `b8505d6b...` until that chain terminates; all newer collector work stays in the isolated worktree.
 
