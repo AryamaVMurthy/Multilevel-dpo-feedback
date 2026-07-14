@@ -3,7 +3,8 @@ from __future__ import annotations
 import random
 import re
 import unicodedata
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,35 @@ class StudentGeneration:
 class GeneratedText:
     text: str
     truncated: bool
+
+
+def summarize_teacher_validation_failures(
+    failures_by_index: Mapping[int, Sequence[str]],
+) -> dict[str, object]:
+    """Summarize answer-free feedback failures without logging model text."""
+    kind_counts: Counter[str] = Counter()
+    sequence_counts: Counter[str] = Counter()
+    max_failures_per_row = 0
+    for index, kinds in failures_by_index.items():
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("teacher validation failure indices must be nonnegative integers")
+        if not isinstance(kinds, Sequence) or isinstance(kinds, (str, bytes)) or not kinds:
+            raise ValueError("each teacher validation failure row requires a nonempty kind sequence")
+        normalized_kinds = []
+        for kind in kinds:
+            if not isinstance(kind, str) or not kind.strip():
+                raise ValueError("teacher validation failure kinds must be nonempty strings")
+            normalized_kinds.append(kind)
+        kind_counts.update(normalized_kinds)
+        sequence_counts["->".join(normalized_kinds)] += 1
+        max_failures_per_row = max(max_failures_per_row, len(normalized_kinds))
+    return {
+        "affected_row_count": len(failures_by_index),
+        "validation_attempt_failure_count": sum(kind_counts.values()),
+        "failure_kind_counts": dict(sorted(kind_counts.items())),
+        "failure_sequence_counts": dict(sorted(sequence_counts.items())),
+        "max_failures_per_row": max_failures_per_row,
+    }
 
 
 def build_forbidden_token_sequences(tokenizer, answers: list[str]) -> list[list[int]]:

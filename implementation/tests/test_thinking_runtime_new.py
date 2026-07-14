@@ -8,6 +8,7 @@ from text_feedback_dpo.runtime import (
     extract_qwen_final_content,
     generate_student_batch,
     render_teacher_prompts,
+    summarize_teacher_validation_failures,
     validate_teacher_identity,
 )
 
@@ -22,6 +23,30 @@ class FakeTeacherTokenizer:
 
 
 class ThinkingRuntimeTest(unittest.TestCase):
+    def test_teacher_validation_summary_reports_failure_kinds_and_retry_sequences(self):
+        summary = summarize_teacher_validation_failures({
+            7: ["gold_token_leak", "gold_token_leak"],
+            2: ["feedback_format"],
+            9: ["feedback_format", "gold_leak", "feedback_contract"],
+        })
+
+        self.assertEqual(summary, {
+            "affected_row_count": 3,
+            "validation_attempt_failure_count": 6,
+            "failure_kind_counts": {
+                "feedback_contract": 1,
+                "feedback_format": 2,
+                "gold_leak": 1,
+                "gold_token_leak": 2,
+            },
+            "failure_sequence_counts": {
+                "feedback_format": 1,
+                "feedback_format->gold_leak->feedback_contract": 1,
+                "gold_token_leak->gold_token_leak": 1,
+            },
+            "max_failures_per_row": 3,
+        })
+
     def test_teacher_retries_only_budget_exhausted_rows_with_explicit_larger_cap(self):
         calls = []
 

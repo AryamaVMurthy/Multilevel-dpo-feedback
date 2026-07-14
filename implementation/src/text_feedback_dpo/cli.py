@@ -881,6 +881,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         render_teacher_prompts,
         extract_qwen_final_content,
         set_generation_seed,
+        summarize_teacher_validation_failures,
         validate_teacher_identity,
     )
     from text_feedback_dpo.searchqa import SOURCE_SCHEMA, SOURCE_SCHEMA_VERSION
@@ -1044,6 +1045,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             return True
 
         def teacher_batch(prompts, **kwargs):
+            teacher_validation_failures.clear()
             gold_answers = kwargs.get("gold_answers")
             if not isinstance(gold_answers, list) or len(gold_answers) != len(prompts):
                 raise ValueError("teacher gold-answer validator parity mismatch")
@@ -1248,6 +1250,9 @@ Inspect the responsible region.
                 "event": "teacher_output_contract",
                 "output_count": len(final_outputs),
                 **output_report,
+                "validation_failure_summary": summarize_teacher_validation_failures(
+                    teacher_validation_failures
+                ),
                 "fallback_reason": output_report.get("fallback_reason", "none"),
             }, sort_keys=True), file=sys.stderr, flush=True)
             return final_outputs

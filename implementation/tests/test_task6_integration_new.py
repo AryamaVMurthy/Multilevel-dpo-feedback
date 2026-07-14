@@ -307,7 +307,7 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 "--sibling-count", "2", "--sibling-seeds", "101", "102",
                 "--teacher-quantization", "4bit", "--attention-implementation", "sdpa",
                 "--student-device", "cuda:1", "--teacher-device", "cuda:0",
-                "--trajectory-cache", str(cache), "--max-interventions", "1",
+                "--trajectory-cache", str(cache), "--max-interventions", "2",
             ])
             current_seed = {"value": None}
             teacher_calls = []
@@ -320,7 +320,10 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 student_stage_calls.append((current_seed["value"], len(prompts), prompts[0].endswith("Search query:")))
                 if prompts[0].endswith("Search query:"):
                     return [GeneratedText("Ada algorithm", False) for _ in prompts]
-                success = "Hints:" in prompts[0] or current_seed["value"] == 101
+                success = (
+                    prompts[0].count("Focus on the associated person.") >= 2
+                    or current_seed["value"] == 101
+                )
                 response = correct_response() if success else wrong_response()
                 return [GeneratedText(response, False) for _ in prompts]
 
@@ -328,6 +331,8 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 teacher_calls.append((prompts, kwargs))
                 if kwargs["max_new_tokens"] == 1:
                     return ["probe" for _ in prompts]
+                if kwargs["max_new_tokens"] == 1024:
+                    return ["not-json" for _ in prompts]
                 return ['{"hint":"Focus on the associated person."}' for _ in prompts]
 
             stderr = io.StringIO()
@@ -347,6 +352,19 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             self.assertIn('"max_total_tokens": 4096', stderr.getvalue())
             self.assertIn('"event": "teacher_output_contract"', stderr.getvalue())
             self.assertIn('"malformed_thinking_indices": []', stderr.getvalue())
+            contract_events = [
+                event for event in map(json.loads, stderr.getvalue().splitlines())
+                if event.get("event") == "teacher_output_contract"
+            ]
+            self.assertEqual(len(contract_events), 2)
+            for contract_event in contract_events:
+                self.assertEqual(contract_event["validation_failure_summary"], {
+                    "affected_row_count": 2,
+                    "validation_attempt_failure_count": 2,
+                    "failure_kind_counts": {"feedback_format": 2},
+                    "failure_sequence_counts": {"feedback_format": 2},
+                    "max_failures_per_row": 1,
+                })
 
             output_rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["id"] for row in output_rows], ["q1", "q2"])
@@ -356,11 +374,11 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             self.assertTrue(row["preference_eligible"])
             self.assertEqual(row["sibling_verification"]["seeds"], [101, 102])
             self.assertEqual(row["sibling_verification"]["sibling_count"], 2)
-            self.assertEqual(len(row["ranked_interventions"]), 1)
+            self.assertEqual(len(row["ranked_interventions"]), 2)
             self.assertTrue(any(item["metadata"]["pair_type"] == "response" for item in row["preference_rows"]))
             self.assertEqual(row["preference_exclusion_counts"], {"identical_query_completion": 1})
             self.assertEqual(row["preference_exclusions"][0]["reason"], "identical_query_completion")
-            self.assertEqual(len(teacher_calls), 1)
+            self.assertEqual(len(teacher_calls), 4)
             self.assertEqual(row["attempts"][0]["artifact"]["provenance"], "student")
             self.assertTrue(row["attempts"][0]["artifact"]["ranked_search_results"])
             manifest = json.loads(cache.with_suffix(".manifest.json").read_text(encoding="utf-8"))
