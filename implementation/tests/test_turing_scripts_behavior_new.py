@@ -1148,6 +1148,26 @@ def test_comparisons_include_frozen_base_and_primary_dpo_arms():
     assert '"dpo-validation=' in text
 
 
+def test_dpo_continuation_gates_full_training_on_real_checkpoint_smoke():
+    text = (SCRIPTS / "turing_dpo_after_freeze.sh").read_text(encoding="utf-8")
+    for name in (
+        "SCALE_DECISION",
+        "SCALE_DECISION_SHA256",
+        "REF_LOG_PROBS",
+        "EVAL_REF_LOG_PROBS",
+        "REFERENCE_CHECKPOINT_HASH",
+        "PROMPT_CONTEXT_SCHEMA",
+        "CHECKPOINT_SMOKE_MANIFEST",
+        "CHECKPOINT_SMOKE_MANIFEST_SHA256",
+        "sbatch --wait",
+        "turing_checkpoint_smoke.sh",
+        "turing_train.sh",
+        "validate-scale-decision",
+    ):
+        assert name in text
+    assert text.index("turing_checkpoint_smoke.sh") < text.index("turing_train.sh")
+
+
 def test_build_preferences_fails_without_explicit_canonical_data(tmp_path: Path):
     result = run_script("turing_build_preferences.sh", {
         "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "TRAJECTORIES": str(tmp_path / "trajectories.jsonl"),
