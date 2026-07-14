@@ -762,6 +762,17 @@ def test_generation_baseline_refresh_is_a_tracked_fail_fast_slurm_entrypoint():
     assert "fallback_reason" in script
 
 
+def test_parallel_collection_wrapper_freezes_devices_from_each_allocation():
+    script_path = SCRIPTS / "turing_collect_runtime_decision.sh"
+    assert script_path.exists()
+    script = script_path.read_text(encoding="utf-8")
+    assert "set -euo pipefail" in script
+    assert "probe-hardware" in script
+    assert "freeze-collection-decision" in script
+    assert "COLLECTION_DECISION_SHA256" in script
+    assert "turing_collect.sh" in script
+
+
 def test_collection_rejects_non_sha_policy_hash_before_allocation_checks(tmp_path: Path):
     required = {
         "TURING_ACCOUNT": "account", "PROJECT_DIR": str(ROOT), "DATA": str(tmp_path / "data.jsonl"),
