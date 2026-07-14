@@ -1,6 +1,7 @@
 # SearchQA Minimal-Intervention Research Status
 
-**Snapshot date:** 2026-07-13 (Asia/Kolkata)  
+**Snapshot date:** 2026-07-14 (Asia/Kolkata)
+
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
 **Active rollout process commit:** `8562a4a9d8485cee7f1bb5af5dbd0e6ddbb4f5ed`
 **Current detached shared-checkout HEAD:** `b8505d6b3339eaffb73d51867003e26045fd058a`
@@ -18,7 +19,7 @@ The overfit checkpoint is a material protocol improvement on the untouched 32-ro
 
 ## Live Turing rollout snapshot
 
-**Observed:** 2026-07-14 06:43 UTC (12:13 IST)
+**Observed:** 2026-07-14 07:56 UTC (13:26 IST)
 **Active checkout:** `~/searchqa-dpo/fixed-retrieval-v1`
 **Active rollout output:** `/scratch/node10/node10/aryama.murthy/searchqa-dpo/teacher-dpo-v1/full-r4`
 
@@ -32,7 +33,11 @@ The current full teacher-guided collection uses four concurrent two-GPU jobs:
 | 13952 | 1,042 | RUNNING | 0 |
 | **Total** | **4,096** | **RUNNING** | **0 / 4,096** |
 
-Teacher GPU telemetry is active at approximately 99% utilization with no OOM or process failure. On job 13949 the active teacher used approximately 39.0/40.96 GiB while the resident student used approximately 11.5 GiB and remained idle during the teacher call. At the observation time all four jobs had run for about 4 hours 48 minutes and were inside the second teacher-feedback call. Their 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The old collector writes each shard atomically and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
+All four jobs completed their second teacher-feedback calls and are inside the third call. The third-call prompt counts are 467, 488, 464, and 495 for shards 0 through 3 respectively, or 1,914 unresolved prompts in total. The first teacher call processed 2,439 outputs, used 1,078 long retries (44.2%), and required 447 explicit answer-redacted generic-hint recoveries (18.3%). The second call processed 2,074 outputs, used 1,380 long retries (66.5%), and required 468 explicit recoveries (22.6%). The increased retry rate is the dominant throughput cost and is recorded rather than silently hidden.
+
+At the observation time every teacher GPU was at 99-100% utilization, approximately 310-350 W, and 46-66 degrees Celsius with no OOM, traceback, or process failure. Slurm assigned physical GPU pairs 0-1, 2-3, 4-5, and 6-7 to jobs 13949 through 13952. Inside each allocation the pair is remapped to local `cuda:0,1`: local `cuda:0` holds the quantized Qwen3-32B teacher and local `cuda:1` holds the Qwen3-4B student. Teacher and student generation are sequential within a shard, so the resident student is idle during a teacher call and the teacher is idle during a student call; four independent shards supply cross-job parallelism.
+
+The four jobs had run for about 6 hours at the observation time. After the third teacher call, the collector still must run student attempt 3, the fourth and final teacher call, student attempt 4, and two no-hint sibling trajectories for each hinted success before validating and atomically writing each shard. The measured projection is approximately 17:50-19:00 IST, while the immutable 12-hour limits expire at approximately 19:25 IST on 2026-07-14. The margin is therefore tight. The old collector writes each shard atomically and does not persist per-example progress, so `0` finalized files is not evidence that zero model generations have occurred; an exact in-memory completion count is unavailable. The current jobs were launched from the pre-checkpoint collector and must not be modified in place.
 
 Downstream jobs 13954 (merge and trajectory audit), 13955 (preferences), 13956 (DPO split and reference log-probabilities), 13957 (optimization probe), 13958–13959 (four/eight-GPU scaling probes), 13960 (scale-decision freeze), and 13962 (DPO after the frozen gate) are submitted with explicit `afterok` dependencies and are currently pending. The pending DPO launcher job 13962 has been extended to a 24-hour wall limit so its synchronous smoke and full-run waits cannot be cut off by the former two-hour limit. DPO has not started.
 
