@@ -2,7 +2,8 @@
 
 **Snapshot date:** 2026-07-13 (Asia/Kolkata)  
 **Turing checkout:** `~/searchqa-dpo/fixed-retrieval-v1`  
-**Last observed active rollout commit:** `b8505d6b3339eaffb73d51867003e26045fd058a`
+**Active rollout process commit:** `8562a4a9d8485cee7f1bb5af5dbd0e6ddbb4f5ed`
+**Current detached shared-checkout HEAD:** `b8505d6b3339eaffb73d51867003e26045fd058a`
 
 **Resumable-collector implementation base:** `b42dfa83ca824cd6554989aecbd6a0b96d90939a`
 
@@ -36,7 +37,7 @@ Downstream jobs 13954 (merge and trajectory audit), 13955 (preferences), 13956 (
 
 The resumable collector is staged separately on Turing at `~/.config/superpowers/worktrees/fixed-retrieval-v1/collector-resume-v2`, exact commit `b42dfa83ca824cd6554989aecbd6a0b96d90939a`. Its full compute-node verification passed: 343 tests, 14 expected upstream warnings, and 171 subtests. Turing's login node cannot import the current PyTorch environment (`libtorch_cpu.so: failed to map segment from shared object`) and OpenBLAS exhausts its constrained mapping/thread budget unless thread pools are bounded; therefore verification was run inside the existing node10 Slurm allocation with explicit numerical-library thread limits.
 
-This staged worktree is a recovery path, not a launch-ready substitute for the active lineage. The current generation optimization decision is bound to commit `b8505d6b...`; the resumable code is commit `b42dfa8...`. A retry must first run and freeze a fresh measured generation decision for the resumable commit, then launch into a new output lineage. Rewriting the old decision, mixing commits, or claiming that the current in-memory work can be resumed is forbidden.
+This staged worktree is a recovery path, not a launch-ready substitute for the active lineage. The running Python process and frozen generation optimization decision are both bound to commit `8562a4a9...`; the shared checkout was subsequently moved to `b8505d6b...`, while the already-loaded process continued from its launch identity. The resumable code is commit `b42dfa8...`. A retry must first run and freeze a fresh measured generation decision for the resumable commit, then launch into a new output lineage. Rewriting the old decision, mixing commits, or claiming that the current in-memory work can be resumed is forbidden.
 
 ## Dataset state
 
