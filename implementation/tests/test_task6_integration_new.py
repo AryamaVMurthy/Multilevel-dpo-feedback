@@ -307,6 +307,7 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 "--sibling-count", "2", "--sibling-seeds", "101", "102",
                 "--teacher-quantization", "4bit", "--attention-implementation", "sdpa",
                 "--student-device", "cuda:1", "--teacher-device", "cuda:0",
+                "--teacher-temperature", "0.6", "--teacher-top-p", "0.95", "--teacher-top-k", "20",
                 "--trajectory-cache", str(cache), "--max-interventions", "2",
             ])
             current_seed = {"value": None}
@@ -357,6 +358,11 @@ class Task6CollectionAndCliTest(unittest.TestCase):
                 if event.get("event") == "teacher_output_contract"
             ]
             self.assertEqual(len(contract_events), 2)
+            budget_events = [
+                event for event in map(json.loads, stderr.getvalue().splitlines())
+                if event.get("event") == "teacher_prompt_budget"
+            ]
+            self.assertEqual([event["seed"] for event in budget_events], [7, 8])
             for contract_event in contract_events:
                 self.assertEqual(contract_event["validation_failure_summary"], {
                     "affected_row_count": 2,
@@ -388,6 +394,13 @@ class Task6CollectionAndCliTest(unittest.TestCase):
             ):
                 self.assertIn(key, manifest)
             self.assertEqual(manifest["sibling_seeds"], [101, 102])
+            self.assertEqual(manifest["decoding"]["teacher_temperature"], 0.6)
+            self.assertEqual(manifest["decoding"]["teacher_top_p"], 0.95)
+            self.assertEqual(manifest["decoding"]["teacher_top_k"], 20)
+            self.assertEqual(
+                manifest["decoding"]["teacher_seed_rule"],
+                "collection_seed_plus_attempt_index",
+            )
             sibling_query_calls = [call for call in student_stage_calls if call[0] in {101, 102} and call[2]]
             self.assertEqual(sibling_query_calls, [(101, 2, True), (102, 2, True)])
 

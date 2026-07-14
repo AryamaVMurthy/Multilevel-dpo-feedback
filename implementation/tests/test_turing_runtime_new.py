@@ -423,6 +423,9 @@ class TuringRuntimeTest(unittest.TestCase):
             self.assertNotRegex(text, re.compile(r"(?:echo|printf)\s+['\"]<[^\n]*>", re.MULTILINE), name)
             self.assertIn("PROTOCOL", text, name)
             self.assertIn("fallback_reason", text, name)
+        offline = Path("scripts/turing_offline_reuse_check.sh").read_text(encoding="utf-8")
+        for flag in ("--policy-version", "--teacher-temperature", "--teacher-top-p", "--teacher-top-k"):
+            self.assertIn(flag, offline)
 
     def test_protocol_audit_scripts_have_single_node_headers(self):
         for name in ("turing_evaluate.sh", "turing_prompt_preflight.sh"):

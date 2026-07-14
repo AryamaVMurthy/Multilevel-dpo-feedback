@@ -23,6 +23,7 @@ allocated_gpu_count() { local raw="${SLURM_GPUS_ON_NODE:?SLURM_GPUS_ON_NODE is r
 : "${CACHE:?CACHE must be supplied with --export}"
 : "${OUTPUT:?OUTPUT must be supplied with --export}"
 : "${POLICY_HASH:?POLICY_HASH must be supplied with --export}"
+: "${POLICY_VERSION:?POLICY_VERSION must be supplied with --export}"
 : "${STUDENT_MODEL:?STUDENT_MODEL must be supplied with --export}"
 : "${STUDENT_REVISION:?STUDENT_REVISION must be supplied with --export}"
 : "${TEACHER_MODEL:?TEACHER_MODEL must be supplied with --export}"
@@ -54,12 +55,16 @@ uv run --frozen python -m text_feedback_dpo.cli collect \
   --student-revision "$STUDENT_REVISION" \
   --teacher-model "$TEACHER_MODEL" \
   --teacher-revision "$TEACHER_REVISION" \
-  --dataset-revision "$DATASET_REVISION" --prompt-version "$PROMPT_VERSION" --seed "$SEED" \
+  --dataset-revision "$DATASET_REVISION" --prompt-version "$PROMPT_VERSION" \
+  --policy-version "$POLICY_VERSION" --seed "$SEED" \
   --teacher-quantization 4bit \
   --attention-implementation "${ATTENTION_IMPLEMENTATION:-sdpa}" \
   --student-device cuda:1 --teacher-device cuda:0 \
   --trajectory-cache "$CACHE" --policy-hash "$POLICY_HASH" \
-  --max-interventions 4 --student-batch-size 1 --teacher-batch-size 1 --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" --teacher-thinking
+  --max-interventions 4 --student-batch-size 1 --teacher-batch-size 1 --student-thinking-mode "${STUDENT_THINKING_MODE:-direct}" \
+  --teacher-temperature "${TEACHER_TEMPERATURE:?TEACHER_TEMPERATURE must be supplied}" \
+  --teacher-top-p "${TEACHER_TOP_P:?TEACHER_TOP_P must be supplied}" \
+  --teacher-top-k "${TEACHER_TOP_K:?TEACHER_TOP_K must be supplied}" --teacher-thinking
 
 cmp -s "$CACHE" "$OUTPUT" || {
   log_event failure reason="offline trajectory replay differs from the cache" fallback_reason=cache_parity_mismatch >&2

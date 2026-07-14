@@ -155,9 +155,10 @@
 2. Remove XML-formatted shell logging and emit JSONL/plain key-value observability.
 3. Require `--nodes=1` for local `torchrun`, derive `nproc_per_node` from allocated GPUs, and fail on allocation mismatch.
 4. Add measured SDPA/FlashAttention2, static-cache, compile, packing, worker-count, and batch-size probes; accept optimizations only when outputs match and throughput improves.
-5. Use four GPUs for full training and two-GPU student/teacher shard workers for trajectory collection; permit parallel independent shards with deterministic merge checks.
-6. Record versions, commit, config, Slurm state, node, GPU telemetry, throughput, peak memory, checkpoints, and explicit fallback reasons.
-7. Run shell syntax, focused/full pytest, Ruff, compileall, and `git diff --check`; commit `perf: optimize cited SearchQA training on Turing`.
+5. Add a matched teacher-decoding probe comparing the frozen greedy lineage with Qwen3's documented thinking-mode sampling candidate (`temperature=0.6`, `top_p=0.95`, `top_k=20`). Bind decoding and the per-attempt seed rule into cache/run manifests; select by valid answer-free hint and DPO-pair yield per GPU-hour, not raw tokens per second.
+6. Use four GPUs for full training and two-GPU student/teacher shard workers for trajectory collection; permit parallel independent shards with deterministic merge checks.
+7. Record versions, commit, config, Slurm state, node, GPU telemetry, throughput, peak memory, checkpoints, and explicit fallback reasons.
+8. Run shell syntax, focused/full pytest, Ruff, compileall, and `git diff --check`; commit `perf: optimize cited SearchQA training on Turing`.
 
 ### Task 9: Run local and Turing preflights
 

@@ -115,6 +115,9 @@ def collect_dataset_batchwise(
     teacher_generate_batch: Callable[..., list[str]],
     max_interventions: int,
     teacher_max_new_tokens: int = 1024,
+    teacher_temperature: float = 0.0,
+    teacher_top_p: float = 1.0,
+    teacher_top_k: int | None = None,
     sibling_generate_batch: Callable[..., list[object]] | None = None,
     sibling_seeds: Sequence[int] = (),
     student_seed: int,
@@ -125,6 +128,14 @@ def collect_dataset_batchwise(
         raise ValueError("max_interventions must be a nonnegative integer")
     if isinstance(teacher_max_new_tokens, bool) or not isinstance(teacher_max_new_tokens, int) or teacher_max_new_tokens <= 0:
         raise ValueError("teacher_max_new_tokens must be a positive integer")
+    if not isinstance(teacher_temperature, (int, float)) or teacher_temperature < 0:
+        raise ValueError("teacher_temperature must be nonnegative")
+    if not isinstance(teacher_top_p, (int, float)) or not 0 < teacher_top_p <= 1:
+        raise ValueError("teacher_top_p must be in (0, 1]")
+    if teacher_top_k is not None and (
+        isinstance(teacher_top_k, bool) or not isinstance(teacher_top_k, int) or teacher_top_k <= 0
+    ):
+        raise ValueError("teacher_top_k must be a positive integer when supplied")
     if isinstance(student_seed, bool) or not isinstance(student_seed, int) or student_seed < 0:
         raise ValueError("student_seed must be a nonnegative integer")
     ids = _validate_ids(examples)
@@ -215,7 +226,11 @@ def collect_dataset_batchwise(
         feedback_rows = teacher_generate_batch(
             teacher_prompts,
             gold_answers=[states[example_id]["example"]["gold_answer"] for example_id in failed_ids],
-            max_new_tokens=teacher_max_new_tokens, temperature=0.0, top_p=1.0,
+            max_new_tokens=teacher_max_new_tokens,
+            temperature=float(teacher_temperature),
+            top_p=float(teacher_top_p),
+            top_k=teacher_top_k,
+            seed=student_seed + attempt_index,
         )
         if not isinstance(feedback_rows, list) or len(feedback_rows) != len(failed_ids):
             raise ValueError(f"teacher batch cardinality mismatch at attempt {attempt_index}")

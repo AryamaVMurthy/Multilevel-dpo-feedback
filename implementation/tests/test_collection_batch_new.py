@@ -123,6 +123,7 @@ class CollectionBatchTest(unittest.TestCase):
             self.assertIn("deterministic_diagnostics", prompts[0])
             self.assertEqual(_kwargs["max_new_tokens"], 1024)
             self.assertEqual(_kwargs["gold_answers"], ["Ada"])
+            self.assertEqual(_kwargs["seed"], 7)
             return ['{"hint":"Recheck the associated person."}']
 
         def siblings(requests, **kwargs):

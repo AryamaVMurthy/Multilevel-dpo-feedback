@@ -143,6 +143,9 @@ class CLITest(unittest.TestCase):
         self.assertEqual(collected.response_max_new_tokens, 256)
         self.assertEqual(collected.teacher_max_new_tokens, 1024)
         self.assertEqual(collected.teacher_retry_max_new_tokens, 2048)
+        self.assertEqual(collected.teacher_temperature, 0.6)
+        self.assertEqual(collected.teacher_top_p, 0.95)
+        self.assertEqual(collected.teacher_top_k, 20)
         self.assertEqual(collected.student_batch_size, 32)
         self.assertEqual(collected.teacher_batch_size, 8)
         self.assertEqual(collected.dataset_revision, "data-rev")
@@ -452,7 +455,7 @@ class CLITest(unittest.TestCase):
         if command == "merge-predictions":
             return ["--shard-dir", "shards", "--output", "merged.jsonl", "--shards", "4"]
         if command == "collect":
-            return ["--data", "x.jsonl", "--output", "y.jsonl", "--student-model", "Qwen/Qwen3-4B-Base", "--teacher-model", "Qwen/Qwen3-32B", "--student-revision", "student-rev", "--teacher-revision", "teacher-rev", "--dataset-revision", "data-rev", "--prompt-version", "fixed-retrieval-cited-v1", "--policy-version", "sft-v1", "--seed", "7", "--teacher-quantization", "4bit", "--attention-implementation", "sdpa", "--student-device", "cuda:1", "--teacher-device", "cuda:0", "--trajectory-cache", "cache.jsonl", "--policy-hash", "p1", "--sibling-count", "2", "--sibling-seeds", "101", "102"]
+            return ["--data", "x.jsonl", "--output", "y.jsonl", "--student-model", "Qwen/Qwen3-4B-Base", "--teacher-model", "Qwen/Qwen3-32B", "--student-revision", "student-rev", "--teacher-revision", "teacher-rev", "--dataset-revision", "data-rev", "--prompt-version", "fixed-retrieval-cited-v1", "--policy-version", "sft-v1", "--seed", "7", "--teacher-quantization", "4bit", "--attention-implementation", "sdpa", "--student-device", "cuda:1", "--teacher-device", "cuda:0", "--teacher-temperature", "0.6", "--teacher-top-p", "0.95", "--teacher-top-k", "20", "--trajectory-cache", "cache.jsonl", "--policy-hash", "p1", "--sibling-count", "2", "--sibling-seeds", "101", "102"]
         if command == "build-preferences":
             return ["--data", "data.jsonl", "--trajectories", "x.jsonl", "--output", "y.jsonl"]
         if command == "build-sft-data":

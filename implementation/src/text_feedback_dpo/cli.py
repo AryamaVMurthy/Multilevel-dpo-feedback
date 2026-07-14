@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -899,6 +900,12 @@ def cmd_collect(args: argparse.Namespace) -> None:
         raise ValueError("teacher_max_new_tokens must be between 1 and 4095")
     if not args.teacher_max_new_tokens < args.teacher_retry_max_new_tokens < 4096:
         raise ValueError("teacher_retry_max_new_tokens must be larger than primary and below 4096")
+    if not math.isfinite(args.teacher_temperature) or args.teacher_temperature < 0:
+        raise ValueError("teacher_temperature must be finite and nonnegative")
+    if not math.isfinite(args.teacher_top_p) or not 0 < args.teacher_top_p <= 1:
+        raise ValueError("teacher_top_p must be finite and in (0, 1]")
+    if args.teacher_top_k <= 0:
+        raise ValueError("teacher_top_k must be positive")
     teacher_identity = validate_teacher_identity(
         args.teacher_model,
         revision=args.teacher_revision,
@@ -1046,6 +1053,10 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
         def teacher_batch(prompts, **kwargs):
             teacher_validation_failures.clear()
+            teacher_seed = kwargs.get("seed")
+            if isinstance(teacher_seed, bool) or not isinstance(teacher_seed, int) or teacher_seed < 0:
+                raise ValueError("teacher generation requires a nonnegative integer seed")
+            set_generation_seed(teacher_seed)
             gold_answers = kwargs.get("gold_answers")
             if not isinstance(gold_answers, list) or len(gold_answers) != len(prompts):
                 raise ValueError("teacher gold-answer validator parity mismatch")
@@ -1065,6 +1076,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 "max_total_tokens": 4096,
                 "forbidden_sequence_count": len(forbidden_token_sequences),
                 "forbidden_sequence_scope": "explicit_recovery_only",
+                "seed": teacher_seed,
                 "budget_ok": max(prompt_token_counts) <= max_input_tokens,
             }, sort_keys=True), file=sys.stderr, flush=True)
             if max(prompt_token_counts) > max_input_tokens:
@@ -1172,6 +1184,7 @@ Inspect the responsible region.
                     batch_size=args.teacher_batch_size, stage="explicit_nonthinking_recovery",
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                    top_k=kwargs["top_k"],
                     forbidden_token_sequences=forbidden_token_sequences,
                 )
                 return adapt_recovery_outputs(raw_outputs, indices=indices, stage="first")
@@ -1203,6 +1216,7 @@ Inspect the responsible region.
                     batch_size=args.teacher_batch_size, stage="explicit_nonthinking_recovery_retry",
                     max_new_tokens=legal_max_new_tokens,
                     temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                    top_k=kwargs["top_k"],
                     forbidden_token_sequences=forbidden_token_sequences,
                 )
                 return adapt_recovery_outputs(raw_outputs, indices=indices, stage="retry")
@@ -1218,6 +1232,7 @@ Inspect the responsible region.
                         batch_size=args.teacher_batch_size, stage="teacher_thinking",
                         max_new_tokens=max_new_tokens,
                         temperature=kwargs["temperature"], top_p=kwargs["top_p"],
+                        top_k=kwargs["top_k"],
                     ),
                     token_count=lambda text: len(
                         teacher_tokenizer.encode(text, add_special_tokens=False)
@@ -1263,6 +1278,9 @@ Inspect the responsible region.
             teacher_generate_batch=teacher_batch,
             max_interventions=args.max_interventions,
             teacher_max_new_tokens=args.teacher_max_new_tokens,
+            teacher_temperature=args.teacher_temperature,
+            teacher_top_p=args.teacher_top_p,
+            teacher_top_k=args.teacher_top_k,
             sibling_generate_batch=sibling_batch,
             sibling_seeds=args.sibling_seeds,
             student_seed=args.seed,
@@ -1314,8 +1332,10 @@ Inspect the responsible region.
             "student_top_p": args.student_top_p,
             "teacher_max_new_tokens": args.teacher_max_new_tokens,
             "teacher_retry_max_new_tokens": args.teacher_retry_max_new_tokens,
-            "teacher_temperature": 0.0,
-            "teacher_top_p": 1.0,
+            "teacher_temperature": args.teacher_temperature,
+            "teacher_top_p": args.teacher_top_p,
+            "teacher_top_k": args.teacher_top_k,
+            "teacher_seed_rule": "collection_seed_plus_attempt_index",
             "student_batch_size": args.student_batch_size,
             "teacher_batch_size": args.teacher_batch_size,
         },
@@ -1638,6 +1658,9 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--student-top-p", type=float, default=0.9)
     collect.add_argument("--teacher-max-new-tokens", type=int, default=1024)
     collect.add_argument("--teacher-retry-max-new-tokens", type=int, default=2048)
+    collect.add_argument("--teacher-temperature", required=True, type=float)
+    collect.add_argument("--teacher-top-p", required=True, type=float)
+    collect.add_argument("--teacher-top-k", required=True, type=int)
     collect.add_argument("--teacher-thinking", action=argparse.BooleanOptionalAction, default=True)
     collect.add_argument("--trajectory-cache", required=True, type=Path)
     collect.add_argument("--policy-hash", required=True)

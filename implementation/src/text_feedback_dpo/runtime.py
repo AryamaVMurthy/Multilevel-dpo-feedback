@@ -485,6 +485,7 @@ def generate_batch_records(
     min_new_tokens: int = 0,
     temperature: float,
     top_p: float,
+    top_k: int | None = None,
     forbidden_token_sequences: list[list[int]] | None = None,
     context_budget: int = TOTAL_CONTEXT_TOKENS,
 ) -> list[GeneratedText]:
@@ -496,6 +497,10 @@ def generate_batch_records(
         raise ValueError("max_new_tokens must be between 1 and 4096")
     if min_new_tokens < 0 or min_new_tokens > max_new_tokens:
         raise ValueError("min_new_tokens must be between 0 and max_new_tokens")
+    if top_k is not None and (
+        isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0
+    ):
+        raise ValueError("top_k must be a positive integer when supplied")
     if forbidden_token_sequences is not None:
         if any(
             not isinstance(sequence, list)
@@ -534,6 +539,8 @@ def generate_batch_records(
     }
     if temperature > 0:
         kwargs.update(temperature=temperature, top_p=top_p)
+        if top_k is not None:
+            kwargs["top_k"] = top_k
     if forbidden_token_sequences:
         kwargs["bad_words_ids"] = forbidden_token_sequences
     output_ids = model.generate(**encoded, **kwargs)
@@ -549,6 +556,7 @@ def generate_batch(
     max_new_tokens: int,
     temperature: float,
     top_p: float,
+    top_k: int | None = None,
     forbidden_token_sequences: list[list[int]] | None = None,
 ) -> list[str]:
     return [
@@ -556,6 +564,7 @@ def generate_batch(
         for record in generate_batch_records(
             model, tokenizer, prompts, max_new_tokens=max_new_tokens,
             temperature=temperature, top_p=top_p,
+            top_k=top_k,
             forbidden_token_sequences=forbidden_token_sequences,
         )
     ]

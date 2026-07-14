@@ -355,6 +355,51 @@ class ThinkingRuntimeTest(unittest.TestCase):
         self.assertEqual(model.kwargs["min_new_tokens"], 2)
         self.assertEqual(records[0].text, "10 11")
 
+    def test_generation_forwards_explicit_sampling_top_k(self):
+        from text_feedback_dpo.runtime import generate_batch_records
+
+        class Encoded(dict):
+            def __init__(self):
+                input_ids = type("Ids", (), {"shape": (1, 1)})()
+                super().__init__(input_ids=input_ids, attention_mask=[[1]])
+                self.input_ids = input_ids
+
+            def to(self, _device):
+                return self
+
+        class Tokenizer:
+            pad_token_id = 0
+            eos_token_id = 2
+
+            def __call__(self, _prompts, **_kwargs):
+                return Encoded()
+
+            @staticmethod
+            def decode(ids, **_kwargs):
+                return " ".join(str(item) for item in ids)
+
+        class Model:
+            device = "cpu"
+
+            def generate(self, **kwargs):
+                self.kwargs = kwargs
+                return [[99, 10, 2]]
+
+        model = Model()
+        generate_batch_records(
+            model,
+            Tokenizer(),
+            ["prompt"],
+            max_new_tokens=32,
+            temperature=0.6,
+            top_p=0.95,
+            top_k=20,
+        )
+        self.assertTrue(model.kwargs["do_sample"])
+        self.assertEqual(model.kwargs["temperature"], 0.6)
+        self.assertEqual(model.kwargs["top_p"], 0.95)
+        self.assertEqual(model.kwargs["top_k"], 20)
+
     def test_generation_forwards_explicit_forbidden_token_sequences(self):
         from text_feedback_dpo.runtime import generate_batch_records
 

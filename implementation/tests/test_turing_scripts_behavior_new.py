@@ -748,6 +748,9 @@ def test_prompt_preflight_and_collection_contracts_are_explicit():
     assert "uuid" in collection
     assert "SFT_PROMPT_VERSION" in collection
     assert "prompt_training_mismatch" in collection
+    for field in ("teacher-temperature", "teacher-top-p", "teacher-top-k"):
+        assert f'--{field} "$TEACHER_' in collection
+    assert "pins teacher temperature=0" not in collection
 
 
 def test_generation_baseline_refresh_is_a_tracked_fail_fast_slurm_entrypoint():
@@ -789,7 +792,7 @@ def test_collection_rejects_non_sha_policy_hash_before_allocation_checks(tmp_pat
         "COLLECTION_DECISION_SHA256": "f" * 64, "DECISION_DATASET_SHA256": "g" * 64,
         "TEACHER_BATCH_SIZE": "1", "TEACHER_MAX_NEW_TOKENS": "32",
         "TEACHER_RETRY_MAX_NEW_TOKENS": "64",
-        "TEACHER_TEMPERATURE": "0", "TEACHER_TOP_P": "1", "TEACHER_THINKING": "true",
+        "TEACHER_TEMPERATURE": "0.6", "TEACHER_TOP_P": "0.95", "TEACHER_TOP_K": "20", "TEACHER_THINKING": "true",
         "TEACHER_QUANTIZATION": "4bit", "TEACHER_FALLBACK_REASON": "none", "MAX_INTERVENTIONS": "1",
         "SIBLING_COUNT": "1", "SIBLING_SEEDS": "11",
     }
@@ -814,7 +817,7 @@ def test_collection_rejects_prompt_boundary_mismatch_before_allocation_checks(tm
         "OPTIMIZATION_DECISION_SHA256": "e" * 64, "COLLECTION_DECISION": str(tmp_path / "collection.json"),
         "COLLECTION_DECISION_SHA256": "f" * 64, "DECISION_DATASET_SHA256": "1" * 64,
         "TEACHER_BATCH_SIZE": "1", "TEACHER_MAX_NEW_TOKENS": "32", "TEACHER_RETRY_MAX_NEW_TOKENS": "64",
-        "TEACHER_TEMPERATURE": "0", "TEACHER_TOP_P": "1", "TEACHER_THINKING": "true",
+        "TEACHER_TEMPERATURE": "0.6", "TEACHER_TOP_P": "0.95", "TEACHER_TOP_K": "20", "TEACHER_THINKING": "true",
         "TEACHER_QUANTIZATION": "4bit", "TEACHER_FALLBACK_REASON": "none", "MAX_INTERVENTIONS": "1",
         "SIBLING_COUNT": "1", "SIBLING_SEEDS": "11",
     }

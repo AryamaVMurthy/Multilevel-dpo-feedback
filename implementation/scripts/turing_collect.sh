@@ -37,7 +37,7 @@ manifest = {
     "dataset": {"source": os.environ["DATASET_SOURCE"], "revision": os.environ["DATASET_REVISION"]},
     "optimization_decision": {"path": os.environ["OPTIMIZATION_DECISION"], "sha256": os.environ["OPTIMIZATION_DECISION_SHA256"]},
     "prompt": {"generation_version": os.environ["PROMPT_VERSION"], "sft_version": os.environ["SFT_PROMPT_VERSION"]},
-    "collection": {"teacher_device": os.environ["TEACHER_DEVICE"], "student_device": os.environ["STUDENT_DEVICE"], "device_decision": {"path": os.environ["COLLECTION_DECISION"], "sha256": os.environ["COLLECTION_DECISION_SHA256"]}, "teacher_quantization": os.environ["TEACHER_QUANTIZATION"], "teacher_temperature": os.environ["TEACHER_TEMPERATURE"], "teacher_top_p": os.environ["TEACHER_TOP_P"], "sibling_count": os.environ["SIBLING_COUNT"], "sibling_seeds": os.environ["SIBLING_SEEDS"].split(), "max_length": 4096},
+    "collection": {"teacher_device": os.environ["TEACHER_DEVICE"], "student_device": os.environ["STUDENT_DEVICE"], "device_decision": {"path": os.environ["COLLECTION_DECISION"], "sha256": os.environ["COLLECTION_DECISION_SHA256"]}, "teacher_quantization": os.environ["TEACHER_QUANTIZATION"], "teacher_temperature": os.environ["TEACHER_TEMPERATURE"], "teacher_top_p": os.environ["TEACHER_TOP_P"], "teacher_top_k": os.environ["TEACHER_TOP_K"], "teacher_seed_base": os.environ["SHARD_SEED"], "teacher_seed_rule": "shard_seed_plus_attempt_index", "sibling_count": os.environ["SIBLING_COUNT"], "sibling_seeds": os.environ["SIBLING_SEEDS"].split(), "max_length": 4096},
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle: json.dump(manifest, handle, sort_keys=True, indent=2); handle.write("\n")
 PY
@@ -77,6 +77,7 @@ PY
 : "${TEACHER_RETRY_MAX_NEW_TOKENS:?TEACHER_RETRY_MAX_NEW_TOKENS must be supplied}"
 : "${TEACHER_TEMPERATURE:?TEACHER_TEMPERATURE must be supplied}"
 : "${TEACHER_TOP_P:?TEACHER_TOP_P must be supplied}"
+: "${TEACHER_TOP_K:?TEACHER_TOP_K must be supplied}"
 : "${TEACHER_THINKING:?TEACHER_THINKING must be true or false}"
 : "${TEACHER_QUANTIZATION:?TEACHER_QUANTIZATION must be 4bit or bf16}"
 : "${TEACHER_FALLBACK_REASON:?TEACHER_FALLBACK_REASON must be explicit, use none when absent}"
@@ -130,8 +131,7 @@ IFS=$'\t' read -r ATTENTION_IMPLEMENTATION QUERY_BATCH_SIZE RESPONSE_BATCH_SIZE 
 [[ "$QUERY_BATCH_SIZE" == "$RESPONSE_BATCH_SIZE" ]] || fail "collect CLI has one student batch control; query=$QUERY_BATCH_SIZE response=$RESPONSE_BATCH_SIZE" task5_collect_batch_controls_incomplete
 [[ "$QUERY_TEMPERATURE" == "$RESPONSE_TEMPERATURE" ]] || fail "collect CLI has one student temperature control; query=$QUERY_TEMPERATURE response=$RESPONSE_TEMPERATURE" task5_collect_temperature_controls_incomplete
 [[ "$TOP_K" == 8 && "$BM25_K1" == 1.2 && "$BM25_B" == 0.75 ]] || fail "collect CLI has no retrieval controls; decision must match pinned top_k=8 k1=1.2 b=0.75" task5_collect_retrieval_cli_missing
-[[ "$TEACHER_TEMPERATURE" == 0 || "$TEACHER_TEMPERATURE" == 0.0 ]] || fail "collect CLI pins teacher temperature=0 and exposes no override" task5_teacher_decoding_cli_missing
-[[ "$TEACHER_TOP_P" == 1 || "$TEACHER_TOP_P" == 1.0 ]] || fail "collect CLI pins teacher top_p=1 and exposes no override" task5_teacher_decoding_cli_missing
+[[ "$TEACHER_TOP_K" =~ ^[1-9][0-9]*$ ]] || fail "TEACHER_TOP_K must be a positive integer" teacher_top_k_invalid
 [[ "$TEACHER_THINKING" == true || "$TEACHER_THINKING" == false ]] || fail "TEACHER_THINKING must be true or false" teacher_thinking_invalid
 [[ "$TEACHER_QUANTIZATION" == 4bit || "$TEACHER_QUANTIZATION" == bf16 ]] || fail "TEACHER_QUANTIZATION must be 4bit or bf16" teacher_quantization_invalid
 read -r -a SIBLING_SEED_ARGS <<< "$SIBLING_SEEDS"
@@ -142,7 +142,7 @@ print(";".join(f"{n}={importlib.metadata.version(n)}" for n in ("torch", "transf
 PY
 )"
 MANIFEST_STARTED_AT="$(date -u +%FT%TZ)"
-export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH DECISION_DATASET_SHA256 PROMPT_HASH SFT_PROMPT_VERSION RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P SIBLING_COUNT SIBLING_SEEDS
+export ATTENTION_FALLBACK_REASON COMMIT_HASH CONFIG_HASH MODEL_HASH DATASET_HASH DECISION_DATASET_SHA256 PROMPT_HASH SFT_PROMPT_VERSION RETRIEVAL_HASH SOURCE_SCHEMA_HASH PACKAGE_VERSIONS GPU_TELEMETRY ARTIFACT_PATHS MANIFEST_STARTED_AT RUN_MANIFEST SHARD_INDEX SHARD_COUNT SHARD_SEED SHARD_INPUT_SHA256 MERGE_ID DATASET_SOURCE DATASET_REVISION OPTIMIZATION_DECISION OPTIMIZATION_DECISION_SHA256 COLLECTION_DECISION COLLECTION_DECISION_SHA256 TEACHER_DEVICE STUDENT_DEVICE TEACHER_QUANTIZATION TEACHER_TEMPERATURE TEACHER_TOP_P TEACHER_TOP_K SIBLING_COUNT SIBLING_SEEDS
 log_event runtime attention_implementation="$ATTENTION_IMPLEMENTATION" fallback_reason="$ATTENTION_FALLBACK_REASON" shard_index="$SHARD_INDEX" shard_count="$SHARD_COUNT" merge_id="$MERGE_ID" allocated_gpus="$ALLOCATED_GPU_COUNT"
 if ! nvidia-smi --query-gpu=uuid --format=csv,noheader,nounits >/dev/null; then
   fail "nvidia-smi telemetry identity query failed" gpu_telemetry_query_failed
@@ -164,6 +164,7 @@ COLLECT_ARGS=(
   --query-max-new-tokens "$QUERY_MAX_NEW_TOKENS" --response-max-new-tokens "$RESPONSE_MAX_NEW_TOKENS"
   --student-temperature "$QUERY_TEMPERATURE" --student-top-p "$TOP_P"
   --teacher-max-new-tokens "$TEACHER_MAX_NEW_TOKENS" --teacher-retry-max-new-tokens "$TEACHER_RETRY_MAX_NEW_TOKENS"
+  --teacher-temperature "$TEACHER_TEMPERATURE" --teacher-top-p "$TEACHER_TOP_P" --teacher-top-k "$TEACHER_TOP_K"
   --sibling-count "$SIBLING_COUNT" --sibling-seeds "${SIBLING_SEED_ARGS[@]}"
 )
 if [[ "$TEACHER_THINKING" == true ]]; then COLLECT_ARGS+=(--teacher-thinking); else COLLECT_ARGS+=(--no-teacher-thinking); fi
