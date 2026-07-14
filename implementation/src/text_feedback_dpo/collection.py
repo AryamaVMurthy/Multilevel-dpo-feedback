@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -117,6 +118,8 @@ def collect_dataset_batchwise(
     sibling_generate_batch: Callable[..., list[object]] | None = None,
     sibling_seeds: Sequence[int] = (),
     student_seed: int,
+    checkpoint_callback: Callable[[dict[str, object]], None] | None = None,
+    resume_checkpoint: Mapping[str, object] | None = None,
 ) -> list[dict]:
     if not isinstance(max_interventions, int) or max_interventions < 0:
         raise ValueError("max_interventions must be a nonnegative integer")
@@ -136,7 +139,33 @@ def collect_dataset_batchwise(
         for example_id, example in zip(ids, examples, strict=True)
     }
     active = ids[:]
-    for attempt_index in range(max_interventions + 1):
+    start_attempt_index = 0
+    if resume_checkpoint is not None:
+        if resume_checkpoint.get("schema_version") != 1:
+            raise ValueError("collection checkpoint schema_version must be 1")
+        checkpoint_states = resume_checkpoint.get("states")
+        checkpoint_ids = resume_checkpoint.get("active_ids")
+        next_attempt_index = resume_checkpoint.get("next_attempt_index")
+        if not isinstance(checkpoint_states, Mapping) or set(checkpoint_states) != set(ids):
+            raise ValueError("collection checkpoint state ids do not match input examples")
+        if not isinstance(checkpoint_ids, list) or any(example_id not in ids for example_id in checkpoint_ids):
+            raise ValueError("collection checkpoint active_ids are invalid")
+        if isinstance(next_attempt_index, bool) or not isinstance(next_attempt_index, int) or not 0 <= next_attempt_index <= max_interventions + 1:
+            raise ValueError("collection checkpoint next_attempt_index is invalid")
+        states = deepcopy(dict(checkpoint_states))
+        active = list(checkpoint_ids)
+        start_attempt_index = next_attempt_index
+
+    def checkpoint(next_attempt_index: int, active_ids: list[str]) -> None:
+        if checkpoint_callback is not None:
+            checkpoint_callback({
+                "schema_version": 1,
+                "next_attempt_index": next_attempt_index,
+                "active_ids": list(active_ids),
+                "states": deepcopy(states),
+            })
+
+    for attempt_index in range(start_attempt_index, max_interventions + 1):
         requests = [{
             "id": example_id,
             "example": states[example_id]["example"],
@@ -181,6 +210,7 @@ def collect_dataset_batchwise(
                     escalation_level=len(state["interventions"]) + 1,
                 ))
         if not failed_ids:
+            checkpoint(attempt_index + 1, [])
             break
         feedback_rows = teacher_generate_batch(
             teacher_prompts,
@@ -208,6 +238,7 @@ def collect_dataset_batchwise(
             ))
             state["hints"].append(feedback.hint)
         active = failed_ids
+        checkpoint(attempt_index + 1, active)
     resolved_after_hint = [example_id for example_id in ids if states[example_id]["resolved"] and states[example_id]["interventions"]]
     if resolved_after_hint:
         if sibling_generate_batch is not None:

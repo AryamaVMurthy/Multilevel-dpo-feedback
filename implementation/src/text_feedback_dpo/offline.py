@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Callable
 
@@ -213,6 +214,47 @@ def _write_cache(cache_path: Path, rows: list[dict], manifest: dict) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text("".join(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
     _manifest_path(cache_path).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def write_collection_checkpoint(*, path: Path, cache_hash: str, checkpoint: Mapping[str, object]) -> None:
+    if not isinstance(cache_hash, str) or len(cache_hash) != 64 or any(char not in "0123456789abcdef" for char in cache_hash):
+        raise ValueError("collection checkpoint cache_hash must be a SHA-256 hex string")
+    if not isinstance(checkpoint, Mapping):
+        raise ValueError("collection checkpoint must be a mapping")
+    if checkpoint.get("schema_version") != 1:
+        raise ValueError("collection checkpoint schema_version must be 1")
+    payload = {"cache_hash": cache_hash, **dict(checkpoint)}
+    encoded = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(encoded, encoding="utf-8")
+    temporary.replace(path)
+
+
+def load_collection_checkpoint(
+    path: Path, *, cache_hash: str, expected_ids: Sequence[str]
+) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read collection checkpoint {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("collection checkpoint must be a JSON object")
+    if payload.get("cache_hash") != cache_hash:
+        raise ValueError("collection checkpoint cache_hash mismatch")
+    checkpoint = {key: value for key, value in payload.items() if key != "cache_hash"}
+    if checkpoint.get("schema_version") != 1:
+        raise ValueError("collection checkpoint schema_version must be 1")
+    expected = {str(example_id) for example_id in expected_ids}
+    states = checkpoint.get("states")
+    active_ids = checkpoint.get("active_ids")
+    if not isinstance(states, dict) or set(states) != expected:
+        raise ValueError("collection checkpoint state ids do not match input examples")
+    if not isinstance(active_ids, list) or any(str(example_id) not in expected for example_id in active_ids):
+        raise ValueError("collection checkpoint active_ids are invalid")
+    return checkpoint
 
 
 def _read_cache_objects(cache_path: Path) -> list[dict]:

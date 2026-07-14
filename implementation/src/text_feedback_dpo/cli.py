@@ -861,7 +861,12 @@ def cmd_collect(args: argparse.Namespace) -> None:
         adapt_plain_recovery_hint,
         parse_feedback,
     )
-    from text_feedback_dpo.offline import build_cache_manifest, load_or_build_trajectories
+    from text_feedback_dpo.offline import (
+        build_cache_manifest,
+        load_collection_checkpoint,
+        load_or_build_trajectories,
+        write_collection_checkpoint,
+    )
     from text_feedback_dpo.prompts import prompt_builder_identity
     from text_feedback_dpo.runtime import (
         RuntimeErrorExplicit,
@@ -900,7 +905,14 @@ def cmd_collect(args: argparse.Namespace) -> None:
         fallback_reason=args.teacher_fallback_reason,
     )
 
+    progress_path = args.trajectory_cache.with_name(f"{args.trajectory_cache.name}.progress.json")
+
     def generate_trajectories(pending):
+        checkpoint = load_collection_checkpoint(
+            progress_path,
+            cache_hash=cache_manifest["cache_hash"],
+            expected_ids=[str(example["id"]) for example in pending],
+        )
         student_tokenizer = load_tokenizer(args.student_model, revision=args.student_revision)
         student = load_student(args.student_model, revision=args.student_revision, attention_implementation=args.attention_implementation, device=args.student_device)
         teacher_tokenizer = load_tokenizer(args.teacher_model, revision=args.teacher_revision)
@@ -1249,6 +1261,10 @@ Inspect the responsible region.
             sibling_generate_batch=sibling_batch,
             sibling_seeds=args.sibling_seeds,
             student_seed=args.seed,
+            checkpoint_callback=lambda snapshot: write_collection_checkpoint(
+                path=progress_path, cache_hash=cache_manifest["cache_hash"], checkpoint=snapshot
+            ),
+            resume_checkpoint=checkpoint,
         )
 
     source_identity = {"identity": SOURCE_SCHEMA, "version": SOURCE_SCHEMA_VERSION}
@@ -1306,6 +1322,7 @@ Inspect the responsible region.
     )
     rows = load_or_build_trajectories(examples=examples, cache_path=args.trajectory_cache, cache_manifest=cache_manifest, generate=generate_trajectories)
     write_jsonl(rows, args.output)
+    progress_path.unlink(missing_ok=True)
     manifest = {
         "command": "collect", "max_length": 4096, "rows": len(rows),
         "cache_identity": cache_manifest, "teacher_identity": teacher_identity,

@@ -32,6 +32,48 @@ def _artifact(*, hints=(), query="writer", correct=False):
 
 
 class CollectionBatchTest(unittest.TestCase):
+    def test_collection_checkpoints_after_round_and_resumes_without_replaying_teacher(self):
+        student_calls = []
+        teacher_calls = []
+        checkpoints = []
+
+        def student(requests, **_kwargs):
+            student_calls.append(requests)
+            return [_artifact(hints=requests[0]["hints"], correct=bool(requests[0]["hints"]))]
+
+        def teacher(prompts, **_kwargs):
+            teacher_calls.append(prompts)
+            return ['{"hint":"Recheck the associated person."}']
+
+        collect_dataset_batchwise(
+            examples=[_example()], student_generate_batch=student, teacher_generate_batch=teacher,
+            max_interventions=1, sibling_generate_batch=None, sibling_seeds=(101, 102),
+            student_seed=7, checkpoint_callback=checkpoints.append,
+        )
+        self.assertEqual(len(checkpoints), 2)
+        checkpoint = checkpoints[0]
+        self.assertEqual(checkpoint["schema_version"], 1)
+        self.assertEqual(checkpoint["next_attempt_index"], 1)
+        self.assertEqual(checkpoint["active_ids"], ["q1"])
+        self.assertEqual(len(checkpoint["states"]["q1"]["interventions"]), 1)
+
+        resumed_student_calls = []
+        resumed_teacher_calls = []
+        rows = collect_dataset_batchwise(
+            examples=[_example()],
+            student_generate_batch=lambda requests, **_kwargs: (
+                resumed_student_calls.append(requests) or [_artifact(hints=requests[0]["hints"], correct=True)]
+            ),
+            teacher_generate_batch=lambda prompts, **_kwargs: (
+                resumed_teacher_calls.append(prompts) or []
+            ),
+            max_interventions=1, sibling_generate_batch=None, sibling_seeds=(101, 102),
+            student_seed=7, resume_checkpoint=checkpoint,
+        )
+        self.assertEqual(len(resumed_student_calls), 1)
+        self.assertEqual(resumed_teacher_calls, [])
+        self.assertTrue(rows[0]["resolved"])
+
     def test_malformed_canonical_source_fails_before_any_model_call(self):
         malformed = _example()
         malformed["sources"][0]["source_id"] = "not-canonical"

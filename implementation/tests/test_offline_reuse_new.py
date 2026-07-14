@@ -7,9 +7,11 @@ from tempfile import TemporaryDirectory
 
 from text_feedback_dpo.offline import (
     build_cache_manifest,
+    load_collection_checkpoint,
     load_or_build_rollouts,
     load_or_build_trajectories,
     student_policy_identity,
+    write_collection_checkpoint,
 )
 from text_feedback_dpo.batch_generation import SCAFFOLD_PROMPT_VERSION, run_fixed_retrieval_pipeline
 from text_feedback_dpo.runtime import GeneratedText
@@ -102,6 +104,23 @@ def active_trajectory():
         "response_prompt_hash": artifact["response_prompt_hash"], "evaluator_version": artifact["evaluator_version"],
     }
 class OfflineReuseTest(unittest.TestCase):
+    def test_collection_checkpoint_round_trip_and_identity_mismatch_fail_fast(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trajectory-cache.progress.json"
+            checkpoint = {
+                "schema_version": 1,
+                "next_attempt_index": 1,
+                "active_ids": ["1"],
+                "states": {"1": {"id": "1", "attempts": [], "interventions": []}},
+            }
+            write_collection_checkpoint(path=path, cache_hash="a" * 64, checkpoint=checkpoint)
+            self.assertEqual(
+                load_collection_checkpoint(path, cache_hash="a" * 64, expected_ids=["1"]),
+                checkpoint,
+            )
+            with self.assertRaisesRegex(ValueError, "cache_hash"):
+                load_collection_checkpoint(path, cache_hash="b" * 64, expected_ids=["1"])
+
     def test_cache_manifest_accepts_the_selected_scaffold_prompt_identity(self):
         scaffold_hash = _hash({
             "identity": SCAFFOLD_PROMPT_VERSION, "builders": prompt_builder_identity(),
