@@ -4,6 +4,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from text_feedback_dpo.io import iter_jsonl
 from text_feedback_dpo.training import (
     MAX_SEQUENCE_LENGTH,
     build_method_config,
@@ -41,6 +42,20 @@ def _load_dataset(path: Path):
     if not path.exists():
         raise FileNotFoundError(f"training dataset does not exist: {path}")
     return load_dataset("json", data_files=str(path), split="train")
+
+
+def _load_exact_jsonl_rows(path: Path) -> list[dict]:
+    """Load identity-bound DPO rows before Arrow can pad sparse nested structs."""
+    rows = list(iter_jsonl(path))
+    seen_ids: set[str] = set()
+    for index, row in enumerate(rows):
+        row_id = row.get("id")
+        if not isinstance(row_id, str) or not row_id.strip():
+            raise ValueError(f"DPO JSONL row {index} requires a non-empty string id")
+        if row_id in seen_ids:
+            raise ValueError(f"DPO JSONL contains duplicate id: {row_id}")
+        seen_ids.add(row_id)
+    return rows
 
 
 def _common_args(config: dict, output_dir: Path) -> dict:
@@ -507,7 +522,7 @@ def run_dpo(*, model_id: str, train_path: Path, eval_path: Path, output_dir: Pat
     tokenizer = _tokenizer(config, model_id)
     datasets = {}
     for name, source_path in (("train", train_path), ("eval", eval_path)):
-        raw_rows = [dict(row) for row in _load_dataset(source_path)]
+        raw_rows = _load_exact_jsonl_rows(source_path)
         validate_prompt_completion_lengths(raw_rows, tokenizer, method="dpo")
         expected = build_reference_manifest(
             model=model_id, model_revision=config["model_revision"],

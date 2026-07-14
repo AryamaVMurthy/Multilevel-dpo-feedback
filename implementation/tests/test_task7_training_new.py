@@ -150,7 +150,7 @@ class Task7TrainingTest(unittest.TestCase):
         }
         with patch("text_feedback_dpo.trainers.require_bf16_hardware"), patch(
             "text_feedback_dpo.trainers._tokenizer", return_value=_Tokenizer()
-        ), patch("text_feedback_dpo.trainers._load_dataset", side_effect=[dpo_rows, dpo_rows]), patch(
+        ), patch("text_feedback_dpo.trainers._load_exact_jsonl_rows", side_effect=[dpo_rows, dpo_rows]), patch(
             "text_feedback_dpo.trainers.load_precomputed_reference_log_probs",
             side_effect=[persisted, persisted],
         ), patch("datasets.Dataset.from_list", side_effect=lambda rows: rows), patch("trl.DPOTrainer", Trainer):
@@ -179,6 +179,30 @@ class Task7TrainingTest(unittest.TestCase):
             self.assertTrue(constructor["args"].bf16)
             self.assertFalse(constructor["args"].fp16)
             self.assertIsNone(constructor["peft_config"])
+
+    def test_dpo_reference_identity_uses_exact_jsonl_rows_before_arrow_normalization(self):
+        from text_feedback_dpo.trainers import _load_exact_jsonl_rows
+
+        rows = [
+            {
+                "id": "query-row", "prompt": "query", "chosen": " good", "rejected": " bad",
+                "metadata": {"pair_type": "query", "canonical_context": {"query_prompt_hash": "q"}},
+            },
+            {
+                "id": "response-row", "prompt": "response", "chosen": " good", "rejected": " bad",
+                "metadata": {
+                    "pair_type": "response",
+                    "canonical_context": {"query_prompt_hash": "q", "response_prompt_hash": "r"},
+                },
+            },
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.jsonl"
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            loaded = _load_exact_jsonl_rows(path)
+
+        self.assertEqual(loaded, rows)
+        self.assertNotIn("response_prompt_hash", loaded[0]["metadata"]["canonical_context"])
 
     def test_bf16_runtime_gate_rejects_cpu_and_unsupported_cuda_without_fallback(self):
         from text_feedback_dpo.trainers import require_bf16_hardware
