@@ -96,6 +96,16 @@ Run order:
 
 GRPO/DAPO reward is primarily exact answer accuracy, with bounded components for F1, retrieval recall, valid citations, citation support, and concise grounded reasoning. Malformed or fabricated citations receive explicit negative reward; verbosity never earns reward. Reward components and rates are logged separately to detect reward hacking.
 
+## Experimental cardinality contract
+
+The materialized SearchQA train split is a deterministic source reservoir, not the number of prompts consumed by an optimizer. Every reported training size counts unique, canonically validated prompt/completion rows after student-provenance, no-hint, retrieval-context, and method-specific eligibility gates. Repeated seeds, rejected candidates, raw source rows, and teacher hints do not inflate this count.
+
+The primary data target is 15,000-30,000 verified training prompts. Report nested deterministic ablations at 1,000, 5,000, 10,000, and 30,000 prompts when the verified pool has sufficient cardinality. All ablations use a single frozen ordering and stable ID/hash manifests so each smaller arm is a strict subset of the larger arm. If a requested arm is unavailable, fail with the measured eligible count and collect more train-reservoir examples; never pad, duplicate, fabricate, or silently relabel data.
+
+Freeze one 1,000-prompt model-selection validation set before DPO hyperparameter selection. It must be trajectory-disjoint from every training arm and remain fixed across SFT, DPO, GRPO, and DAPO comparisons. The full official validation split remains a final promotion evaluation, and the 43,228-example official test remains untouched until all methods and settings are frozen.
+
+The active 4,096-example teacher collection is an initial verified-preference collection, not a claim that the 15,000-30,000-prompt primary target has been reached. Its audit determines preference yield per source example and therefore the measured scale-up required for the final data package.
+
 ## Hardware and throughput strategy
 
 - Baseline and evaluation: one model per GPU, multiple prompts per generation batch, deterministic hash sharding, one process per Slurm allocation, and exact ID merge checks.

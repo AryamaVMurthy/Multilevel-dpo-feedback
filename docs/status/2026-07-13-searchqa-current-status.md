@@ -51,6 +51,8 @@ Pinned source: `kyunghyuncho/search_qa` at revision `06907e45883b7cae435453b65d5
 | Validation | 21,613 | 21,611 | Ready; 2 rows explicitly dropped for no usable evidence |
 | Test | 43,228 | Not materialized | Intentionally untouched for final reporting |
 
+The 151,277 materialized train rows are a source reservoir, not the current optimizer dataset. The completed full SFT used 2,848 training prompts and 512 held-out prompts. The active teacher collection covers 4,096 source examples; its final number of verified DPO prompts is unknown until canonical audit. The final experimental package counts only unique verified prompt rows and targets 15,000-30,000 primary training prompts, deterministic nested 1,000/5,000/10,000/30,000 prompt ablations, and a trajectory-disjoint fixed 1,000-prompt model-selection validation set. Missing cardinality must trigger additional train-reservoir collection with an explicit shortfall; it must never be padded with duplicates, teacher answers, fabricated targets, or silent substitutions.
+
 Important identities:
 
 - Train JSONL SHA-256: `6d5d679ffbca04051f63d802c8f709e3f3503a39201f6f219c712cb7af38da8c`
